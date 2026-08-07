@@ -1,15 +1,26 @@
 #!/bin/bash
 source /opt/ros/jazzy/setup.bash
 
-echo "Select ROS 2 Launch Mode:"
-echo "1) Pure ROS 2 (RViz2 + Joint Sliders GUI)"
-echo "2) Gazebo Sim inside ROS 2 (Physics + Topic Bridge)"
-read -p "Enter choice [1 or 2]: " choice
+pkill -9 -f rviz2; pkill -9 -f joint_state_publisher; pkill -9 -f robot_state_publisher; pkill -9 -f arm_simulator
 
-if [ "$choice" == "2" ]; then
-    echo "Launching Gazebo Sim in ROS 2..."
+echo "================================================="
+echo "       ROS 2 Robot Arm Control Center            "
+echo "================================================="
+echo "1) 🤖 Automated Motion Simulator (Sinusoidal Input)"
+echo "2) 🎛️ Manual Joint Control (RViz2 Sliders GUI)"
+echo "3) 🌐 Gazebo Physics Simulation (Gazebo Sim + Bridge)"
+read -p "Enter choice [1, 2, or 3]: " choice
+
+if [ "$choice" == "1" ]; then
+    echo "🤖 Starting Automated Motion Simulator..."
+    ros2 launch /home/sabo/Documents/learn_/Hardware/urdf/unnamed/display_ros2.launch.py simulate:=true
+elif [ "$choice" == "2" ]; then
+    echo "🎛️ Starting Manual Joint Control GUI..."
+    ros2 launch /home/sabo/Documents/learn_/Hardware/urdf/unnamed/display_ros2.launch.py simulate:=false
+elif [ "$choice" == "3" ]; then
+    echo "🌐 Starting Gazebo Physics Simulation..."
     ros2 launch /home/sabo/Documents/learn_/Hardware/urdf/unnamed/gazebo_ros2.launch.py
 else
-    echo "Launching RViz2 with Joint Sliders in ROS 2..."
-    ros2 launch /home/sabo/Documents/learn_/Hardware/urdf/unnamed/display_ros2.launch.py
+    echo "Invalid choice. Starting default Automated Simulation..."
+    ros2 launch /home/sabo/Documents/learn_/Hardware/urdf/unnamed/display_ros2.launch.py simulate:=true
 fi
