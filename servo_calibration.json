@@ -21,10 +21,10 @@
     "home_deg": 180.0
   },
   "turntable_link_joint_dup_2": {
-    "servo_min_deg": 0.0,
+    "servo_min_deg": 52.7,
     "servo_max_deg": 84.0,
     "trim_deg": 0.0,
     "invert": false,
-    "home_deg": 39.1
+    "home_deg": 52.7
   }
 }

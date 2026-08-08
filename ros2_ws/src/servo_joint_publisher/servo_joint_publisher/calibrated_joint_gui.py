@@ -327,6 +327,17 @@ class CalibratedJointPublisherGUI(QMainWindow):
         """)
         btn_center.clicked.connect(self.center_all)
 
+        self.btn_comm_mode = QPushButton("📡 Comm: WiFi")
+        self.btn_comm_mode.setCheckable(True)
+        self.btn_comm_mode.setChecked(False) # False = WiFi, True = Serial
+        self.btn_comm_mode.setToolTip("Toggle ESP32 control mode between Wi-Fi UDP and USB Serial")
+        self.btn_comm_mode.setStyleSheet("""
+            QPushButton { background-color: #0284c7; color: white; font-weight: bold; border-radius: 4px; padding: 6px 10px; }
+            QPushButton:hover { background-color: #0369a1; }
+            QPushButton:checked { background-color: #d97706; }
+        """)
+        self.btn_comm_mode.clicked.connect(self.toggle_comm_mode)
+
         btn_save = QPushButton("💾 Save Config")
         btn_save.setStyleSheet("""
             QPushButton { background-color: #16a34a; color: white; font-weight: bold; border-radius: 4px; padding: 6px 10px; }
@@ -338,6 +349,7 @@ class CalibratedJointPublisherGUI(QMainWindow):
         top_bar1.addWidget(btn_home)
         top_bar1.addWidget(btn_set_home)
         top_bar1.addWidget(btn_center)
+        top_bar1.addWidget(self.btn_comm_mode)
         top_bar1.addStretch()
         top_bar1.addWidget(btn_save)
         control_layout.addLayout(top_bar1)
@@ -688,6 +700,17 @@ class CalibratedJointPublisherGUI(QMainWindow):
             QMessageBox.information(self, "Success", f"Homing & Safety Calibration saved to:\n{CALIB_FILE_PATH}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save calibration:\n{e}")
+
+    def toggle_comm_mode(self, checked):
+        mode_str = "SERIAL" if checked else "WIFI"
+        if checked:
+            self.btn_comm_mode.setText("📟 Comm: Serial")
+        else:
+            self.btn_comm_mode.setText("📡 Comm: WiFi")
+
+        cmd = f"MODE:{mode_str}"
+        self.ros_node.publish_calibration(cmd)
+        self.log_to_console(f"📡 Transmitted {cmd} to ESP32 via ROS topic")
 
     def go_to_home_pose_smooth(self):
         """Initiate smooth, slow homing transition from any joint position over 2.0 seconds."""

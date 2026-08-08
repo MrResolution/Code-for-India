@@ -137,15 +137,48 @@ class ServoSerialCommander(Node):
 
     def publish_status(self, is_conn, details=""):
         msg = StringMsg()
+        mode_label = f"Wi-Fi UDP ({self.esp32_ip}:{self.udp_port})" if self.use_wifi else f"USB Serial ({self.port})"
         if is_conn:
-            msg.data = f"STATUS:CONNECTED:🟢 Connected to ESP32 ({self.esp32_ip}:{self.udp_port})"
+            msg.data = f"STATUS:CONNECTED:🟢 Connected to ESP32 via {mode_label}"
         else:
-            msg.data = f"STATUS:DISCONNECTED:🔴 ESP32 Disconnected / Offline ({details})"
+            msg.data = f"STATUS:DISCONNECTED:🔴 ESP32 Disconnected / Offline via {mode_label} ({details})"
         self.status_pub.publish(msg)
 
     def calibration_callback(self, msg: StringMsg):
-        """Handle live calibration limit updates from GUI."""
+        """Handle live calibration limit updates & mode toggles from GUI."""
         text = msg.data.strip()
+        if text.startswith('MODE:'):
+            mode = text[5:].strip().upper()
+            self.get_logger().info(f"🔄 Commander Mode Switch Request: MODE:{mode}")
+
+            # Send MODE command over BOTH channels so ESP32 gets it regardless of state
+            cmd = text + "\n"
+            if self.udp_sock:
+                try:
+                    self.udp_sock.sendto(cmd.encode('utf-8'), (self.esp32_ip, self.udp_port))
+                except Exception:
+                    pass
+
+            if self.serial_conn is None or not self.serial_conn.is_open:
+                self.connect_serial()
+            if self.serial_conn and self.serial_conn.is_open:
+                with self.comm_lock:
+                    try:
+                        self.serial_conn.write(cmd.encode('utf-8'))
+                    except Exception:
+                        pass
+
+            # Switch commander active transport mode
+            if mode == 'SERIAL':
+                self.use_wifi = False
+                self.connect_serial()
+                self.get_logger().info("🔌 Commander actively switched to USB Serial mode.")
+            elif mode == 'WIFI':
+                self.use_wifi = True
+                self.init_wifi_socket()
+                self.get_logger().info("📶 Commander actively switched to Wi-Fi UDP mode.")
+            return
+
         if text.startswith('CALIB:'):
             self.write_raw_data(text + "\n")
             try:
@@ -181,9 +214,12 @@ class ServoSerialCommander(Node):
                 self.serial_conn.read(self.serial_conn.in_waiting)
             self.get_logger().info(f"✅ Connected to ESP32 on {self.port}")
         except (serial.SerialException, OSError) as e:
-            self.get_logger().warn(
-                f"⚠️ Could not open serial port {self.port}: {e}. Retrying dynamically..."
-            )
+            now = time.time()
+            if not hasattr(self, '_last_serial_warn_t') or (now - self._last_serial_warn_t > 5.0):
+                self._last_serial_warn_t = now
+                self.get_logger().warn(
+                    f"⚠️ Could not open serial port {self.port}: {e}. Retrying dynamically..."
+                )
             self.serial_conn = None
 
     def send_all_calibrations(self):
@@ -202,7 +238,10 @@ class ServoSerialCommander(Node):
             try:
                 self.udp_sock.sendto(data_str.encode('utf-8'), (self.esp32_ip, self.udp_port))
             except Exception as e:
-                self.get_logger().error(f"UDP send error: {e}")
+                now = time.time()
+                if not hasattr(self, '_last_udp_err_t') or (now - self._last_udp_err_t > 5.0):
+                    self._last_udp_err_t = now
+                    self.get_logger().warn(f"UDP send error (Wi-Fi unreachable): {e}")
         else:
             if self.serial_conn is None or not self.serial_conn.is_open:
                 self.connect_serial()
@@ -212,7 +251,10 @@ class ServoSerialCommander(Node):
                 try:
                     self.serial_conn.write(data_str.encode('utf-8'))
                 except (serial.SerialException, OSError) as e:
-                    self.get_logger().error(f"Serial write error: {e}")
+                    now = time.time()
+                    if not hasattr(self, '_last_serial_err_t') or (now - self._last_serial_err_t > 5.0):
+                        self._last_serial_err_t = now
+                        self.get_logger().warn(f"Serial write error: {e}")
                     if self.serial_conn:
                         try:
                             self.serial_conn.close()
