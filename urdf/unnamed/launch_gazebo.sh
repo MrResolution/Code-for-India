@@ -1,7 +1,7 @@
 #!/bin/bash
 source /opt/ros/jazzy/setup.bash
 
-URDF_PATH="/home/sabo/Documents/learn_/Hardware/urdf/unnamed/urdf/unnamed_gazebo.urdf"
+URDF_PATH="/home/chakradhar/Documents/Hardware/urdf/unnamed/urdf/unnamed_gazebo.urdf"
 
 if command -v gz &> /dev/null; then
     echo "Launching model in Gazebo..."

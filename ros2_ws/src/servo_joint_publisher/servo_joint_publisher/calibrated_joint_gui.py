@@ -40,8 +40,8 @@ from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import String as StringMsg
 
-CALIB_FILE_PATH = "/home/sabo/Documents/learn_/Hardware/servo_calibration.json"
-URDF_PATH = "/home/sabo/Documents/learn_/Hardware/urdf/unnamed/urdf/unnamed_gazebo.urdf"
+CALIB_FILE_PATH = "/home/chakradhar/Documents/Hardware/servo_calibration.json"
+URDF_PATH = "/home/chakradhar/Documents/Hardware/urdf/unnamed/urdf/unnamed_gazebo.urdf"
 
 # Default Homing Pose requested by user for the 4 URDF arm joints:
 DEFAULT_HOME_DEGS = {
@@ -694,7 +694,18 @@ class CalibratedJointPublisherGUI(QMainWindow):
         """)
         btn_save.clicked.connect(self.save_calibration)
 
+        self.btn_gesture = QPushButton("✋ Gesture Mode")
+        self.btn_gesture.setCheckable(True)
+        self.btn_gesture.setToolTip("Toggle real-time computer vision body gesture teleoperation (webcam)")
+        self.btn_gesture.setStyleSheet("""
+            QPushButton { background-color: #8b5cf6; color: white; font-weight: bold; border-radius: 4px; padding: 6px 10px; }
+            QPushButton:hover { background-color: #7c3aed; }
+            QPushButton:checked { background-color: #10b981; }
+        """)
+        self.btn_gesture.clicked.connect(self.toggle_gesture_mode)
+
         top_bar1.addWidget(self.btn_sim)
+        top_bar1.addWidget(self.btn_gesture)
         top_bar1.addWidget(btn_home)
         top_bar1.addWidget(btn_set_home)
         top_bar1.addWidget(btn_center)
@@ -909,6 +920,10 @@ class CalibratedJointPublisherGUI(QMainWindow):
         self.embedded_rviz_widget = None
         self.init_rviz_embed()
 
+        # Gesture Mode Process State
+        self.gesture_process = None
+        self.is_gesture_mode = False
+
         # Simulation Mode State
         self.is_simulating = False
         self.sim_time_accumulator = 0.0
@@ -966,7 +981,7 @@ class CalibratedJointPublisherGUI(QMainWindow):
 
     def init_rviz_embed(self):
         """Spawn RViz2 as child process and schedule embedding."""
-        rviz_config = "/home/sabo/Documents/learn_/Hardware/urdf/unnamed/robot.rviz"
+        rviz_config = "/home/chakradhar/Documents/Hardware/urdf/unnamed/robot.rviz"
         self.rviz_process = QProcess(self)
 
         env = QProcessEnvironment.systemEnvironment()
@@ -1120,6 +1135,56 @@ class CalibratedJointPublisherGUI(QMainWindow):
         self.ros_node.publish_calibration(cmd)
         self.log_to_console(f"📡 Transmitted {cmd} to ESP32 via ROS topic")
 
+    def update_sliders_from_ros(self, msg: JointState):
+        """Update GUI joint sliders visually when gesture teleop is active."""
+        if not self.is_gesture_mode:
+            return
+        for j_name, w in self.joint_widgets.items():
+            if j_name in msg.name:
+                idx = msg.name.index(j_name)
+                if idx < len(msg.position):
+                    rad_val = msg.position[idx]
+                    r_min, r_max = w.rad_min, w.rad_max
+                    ratio = (rad_val - r_min) / (r_max - r_min) if r_max != r_min else 0.5
+                    deg = max(0.0, min(180.0, ratio * 180.0))
+                    w.slider.blockSignals(True)
+                    w.slider.setValue(int(deg * 10))
+                    w.label_val.setText(f"{deg:.1f}° ({rad_val:.3f} rad)")
+                    w.slider.blockSignals(False)
+
+    def toggle_gesture_mode(self, checked):
+        """Toggle between Manual Joint Sliders and Computer Vision Body Gesture Mode."""
+        self.is_gesture_mode = checked
+        if checked:
+            if self.is_simulating:
+                self.btn_sim.setChecked(False)
+                self.toggle_simulation(False)
+
+            self.btn_gesture.setText("✋ Gesture ACTIVE")
+            self.log_to_console("🖐️ [MODE SWITCH] Activated Body Gesture Teleoperation Mode (Webcam /dev/video0).")
+            self.lbl_conn_badge.setText(" 🖐️ Mode: Body Gesture Teleoperation (Webcam)")
+            self.lbl_conn_badge.setStyleSheet("background-color: #064e3b; color: #34d399; padding: 2px 8px; border-radius: 4px;")
+
+            if self.gesture_process is None:
+                self.gesture_process = QProcess(self)
+            self.gesture_process.start("ros2", ["run", "servo_joint_publisher", "gesture_teleop_node"])
+        else:
+            self.btn_gesture.setText("✋ Gesture Mode")
+            self.log_to_console("🕹️ [MODE SWITCH] Returned to Manual Slider Control Mode.")
+            self.lbl_conn_badge.setText(" 🕹️ Mode: Manual Joint Sliders")
+            self.lbl_conn_badge.setStyleSheet("background-color: #1e3a8a; color: #60a5fa; padding: 2px 8px; border-radius: 4px;")
+
+            if self.gesture_process and self.gesture_process.state() != QProcess.NotRunning:
+                self.gesture_process.kill()
+                self.gesture_process.waitForFinished(1000)
+
+    def closeEvent(self, event):
+        """Clean up gesture teleop child process on dashboard window exit."""
+        if self.gesture_process and self.gesture_process.state() != QProcess.NotRunning:
+            self.gesture_process.kill()
+            self.gesture_process.waitForFinished(1000)
+        super().closeEvent(event)
+
     def go_to_home_pose_smooth(self):
         """Initiate smooth, slow homing transition from any joint position over 2.0 seconds."""
         if self.is_simulating:
@@ -1230,6 +1295,9 @@ class CalibratedJointPublisherGUI(QMainWindow):
         self.log_to_console(f"⚙️ Limit Broadcast: {calib_str}")
 
     def publish_joint_states(self):
+        if self.is_gesture_mode:
+            return  # Yield /joint_states control to gesture_teleop_node to prevent RViz glitching
+
         if self.is_homing:
             self.step_homing()
         elif self.is_simulating:
@@ -1266,7 +1334,18 @@ class CalibratedGUINode(Node):
             self.status_callback,
             10
         )
+        # Subscribe to /joint_states to mirror active gesture pose on GUI sliders
+        self.joint_sub = self.create_subscription(
+            JointState,
+            '/joint_states',
+            self.joint_states_callback,
+            10
+        )
         self.get_logger().info("Calibrated Joint Publisher GUI Node initialized.")
+
+    def joint_states_callback(self, msg: JointState):
+        if self.gui_ref and self.gui_ref.is_gesture_mode:
+            self.gui_ref.update_sliders_from_ros(msg)
 
     def status_callback(self, msg: StringMsg):
         if self.gui_ref:
@@ -1301,6 +1380,10 @@ def main(args=None):
     timer.start(20) # 20 ms = 50 Hz
 
     exit_code = app.exec_()
+
+    if gui.gesture_process and gui.gesture_process.state() != QProcess.NotRunning:
+        gui.gesture_process.kill()
+        gui.gesture_process.waitForFinished(1000)
 
     ros_node.destroy_node()
     rclpy.shutdown()

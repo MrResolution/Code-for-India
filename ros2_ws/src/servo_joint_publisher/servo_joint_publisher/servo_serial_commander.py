@@ -31,7 +31,7 @@ class ServoSerialCommander(Node):
         super().__init__('servo_serial_commander')
 
         # ── ROS 2 Node Parameters ─────────────────────────────────────────
-        self.declare_parameter('use_wifi', True)
+        self.declare_parameter('use_wifi', False)
         self.declare_parameter('esp32_ip', '10.216.192.100') # Assigned Wi-Fi IP on network 'Sabo'
         self.declare_parameter('udp_port', 8888)
         self.declare_parameter('port', '/dev/ttyUSB0')
@@ -217,7 +217,9 @@ class ServoSerialCommander(Node):
             )
             if self.serial_conn.in_waiting > 0:
                 self.serial_conn.read(self.serial_conn.in_waiting)
-            self.get_logger().info(f"✅ Connected to ESP32 on {self.port}")
+            # Switch ESP32 firmware mode to SERIAL
+            self.serial_conn.write(b"MODE:SERIAL\n")
+            self.get_logger().info(f"✅ Connected to ESP32 on {self.port} (Sent MODE:SERIAL)")
         except (serial.SerialException, OSError) as e:
             now = time.time()
             if not hasattr(self, '_last_serial_warn_t') or (now - self._last_serial_warn_t > 5.0):

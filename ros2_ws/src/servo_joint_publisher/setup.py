@@ -24,6 +24,7 @@ setup(
             'servo_simulator = servo_joint_publisher.servo_simulator:main',
             'servo_serial_commander = servo_joint_publisher.servo_serial_commander:main',
             'calibrated_joint_gui = servo_joint_publisher.calibrated_joint_gui:main',
+            'gesture_teleop_node = servo_joint_publisher.gesture_teleop_node:main',
         ],
     },
 )

@@ -49,9 +49,9 @@ def send_comm_mode_to_esp32(mode_str):
             except Exception as e:
                 pass
 
-CALIB_FILE_PATH = "/home/sabo/Documents/learn_/Hardware/servo_calibration.json"
-URDF_PATH = "/home/sabo/Documents/learn_/Hardware/urdf/unnamed/urdf/unnamed_gazebo.urdf"
-MESH_DIR = "/home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl"
+CALIB_FILE_PATH = "/home/chakradhar/Documents/Hardware/servo_calibration.json"
+URDF_PATH = "/home/chakradhar/Documents/Hardware/urdf/unnamed/urdf/unnamed_gazebo.urdf"
+MESH_DIR = "/home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl"
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
 # Shared state between HTTP Server and ROS 2 Node

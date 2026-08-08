@@ -6,7 +6,7 @@ from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PythonExpression
 
 def generate_launch_description():
-    urdf_file = '/home/sabo/Documents/learn_/Hardware/urdf/unnamed/urdf/unnamed_gazebo.urdf'
+    urdf_file = '/home/chakradhar/Documents/Hardware/urdf/unnamed/urdf/unnamed_scaled.urdf'
 
     with open(urdf_file, 'r') as f:
         robot_desc = f.read()
@@ -33,7 +33,7 @@ def generate_launch_description():
 
     # 2. Automated Motion Simulator Node (simulate == 'true')
     arm_simulator_node = ExecuteProcess(
-        cmd=['python3', '/home/sabo/Documents/learn_/Hardware/urdf/unnamed/arm_simulator.py'],
+        cmd=['python3', '/home/chakradhar/Documents/Hardware/urdf/unnamed/arm_simulator.py'],
         output='screen',
         condition=IfCondition(PythonExpression(["'", simulate, "' == 'true'"]))
     )
@@ -53,7 +53,7 @@ def generate_launch_description():
         executable='rviz2',
         name='rviz2',
         output='screen',
-        arguments=['-d', '/home/sabo/Documents/learn_/Hardware/urdf/unnamed/robot.rviz'],
+        arguments=['-d', '/home/chakradhar/Documents/Hardware/urdf/unnamed/robot.rviz'],
         condition=IfCondition(PythonExpression(["'", simulate, "' == 'true'"]))
     )
 

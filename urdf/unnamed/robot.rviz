@@ -9,7 +9,7 @@ Visualization Manager:
       Color: 160; 160; 164
       Enabled: true
       Line Style:
-        Line Width: 0.029999999329447746
+        Line Width: 0.03
         Value: Lines
       Name: Grid
       Normal Cell Count: 0
@@ -24,8 +24,8 @@ Visualization Manager:
     - Alpha: 1
       Class: rviz_default_plugins/RobotModel
       Collision Enabled: false
-      Description File: /home/sabo/Documents/learn_/Hardware/urdf/unnamed/urdf/unnamed_gazebo.urdf
-      Description Source: File
+      Description File: /home/chakradhar/Documents/Hardware/urdf/unnamed/urdf/unnamed_scaled.urdf
+      Description Source: Topic
       Description Topic:
         Depth: 5
         Durability Policy: Transient Local
@@ -35,42 +35,6 @@ Visualization Manager:
       Enabled: true
       Links:
         All Links Enabled: true
-        Elbow_1_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        Elbow_2_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        Expand Joint Details: false
-        Expand Link Details: false
-        Expand Tree: false
-        Link Tree Style: Links in Alphabetic Order
-        Wrist_pitch._link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        basecase1_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        turntable_link:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-          Value: true
-        world:
-          Alpha: 1
-          Show Axes: false
-          Show Trail: false
-      Mass Properties:
-        Inertia: false
-        Mass: false
       Name: RobotModel
       TF Prefix: ""
       Update Interval: 0
@@ -78,24 +42,12 @@ Visualization Manager:
       Visual Enabled: true
     - Class: rviz_default_plugins/TF
       Enabled: false
-      Filter (blacklist): ""
-      Filter (whitelist): ""
-      Frame Timeout: 15
-      Frames:
-        All Enabled: true
-      Marker Scale: 1
       Name: TF
-      Show Arrows: true
-      Show Axes: true
-      Show Names: false
-      Tree:
-        {}
-      Update Interval: 0
       Value: false
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: basecase1_link
+    Fixed Frame: world
     Frame Rate: 30
   Name: root
   Tools:
@@ -107,31 +59,21 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 0.9235152006149292
+      Distance: 0.92
       Enable Stereo Rendering:
-        Stereo Eye Separation: 0.05999999865889549
-        Stereo Focal Distance: 1
-        Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: -0.15735195577144623
-        Y: 0.09432584047317505
-        Z: 0.19262073934078217
-      Focal Shape Fixed Size: true
-      Focal Shape Size: 0.05000000074505806
-      Invert Z Axis: false
+        X: 0.0
+        Y: 0.0
+        Z: 0.15
       Name: Current View
-      Near Clip Distance: 0.009999999776482582
-      Pitch: 0.1900005042552948
+      Pitch: 0.35
       Target Frame: <Fixed Frame>
       Value: Orbit (rviz_default_plugins)
-      Yaw: 1.6100002527236938
+      Yaw: 1.57
     Saved: ~
 Window Geometry:
-  Height: 1012
-  Hide Left Dock: false
-  Hide Right Dock: false
-  QMainWindow State: 000000ff00000000fd00000000000007800000039a00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
-  Width: 1920
-  X: 0
-  Y: 32
+  Height: 800
+  Width: 1000
+  X: 100
+  Y: 100
