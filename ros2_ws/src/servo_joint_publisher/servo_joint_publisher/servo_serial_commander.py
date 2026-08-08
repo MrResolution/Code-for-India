@@ -72,6 +72,11 @@ class ServoSerialCommander(Node):
                 'servo_min_deg': 0.0, 'servo_max_deg': 180.0,
                 'trim_deg': 0.0, 'invert': False, 'pin': 23
             },
+            'wrist_twist_joint': {
+                'rad_min': -3.14159, 'rad_max': 3.14159,
+                'servo_min_deg': 0.0, 'servo_max_deg': 180.0,
+                'trim_deg': 0.0, 'invert': False, 'pin': 27
+            },
         }
 
         mode_str = f"📶 Wi-Fi UDP ({self.esp32_ip}:{self.udp_port})" if self.use_wifi else f"🔌 USB Serial ({self.port})"

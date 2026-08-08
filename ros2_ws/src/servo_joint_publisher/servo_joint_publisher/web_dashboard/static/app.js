@@ -11,6 +11,7 @@ const JOINTS = [
   { id: 'turntable_link_joint_dup_1', name: 'Elbow Pitch 1', min: 30.4, max: 153.1, def: 153.1, rad_min: -2.0, rad_max: 2.0 },
   { id: 'turntable_link_joint_dup_2', name: 'Elbow Pitch 2', min: 0.0, max: 180.0, def: 116.0, rad_min: -2.0, rad_max: 2.0 },
   { id: 'turntable_link_joint_dup_3', name: 'Wrist Pitch', min: 0.0, max: 180.0, def: 90.0, rad_min: -2.0, rad_max: 2.0 },
+  { id: 'wrist_twist_joint', name: 'Wrist Twist', min: 0.0, max: 180.0, def: 90.0, rad_min: -3.14159, rad_max: 3.14159 },
   { id: 'turntable_link_joint_dup_4', name: 'Gripper Linkage', min: 0.0, max: 180.0, def: 90.0, rad_min: -1.0, rad_max: 1.0 }
 ];
 
@@ -23,6 +24,8 @@ let isSimulating = false;
 document.addEventListener('DOMContentLoaded', () => {
   initThreeJS();
   buildJointControls();
+  setupTabs();
+  initQuardBotControls();
   setupEventListeners();
   startStatePolling();
 });
@@ -403,4 +406,206 @@ function startStatePolling() {
         }
       });
   }, 40); // 25 Hz state sync
+}
+
+// ── Tab Management System ────────────────────────────────────────────────
+let activeTab = 'arm';
+
+function setupTabs() {
+  const btnArm = document.getElementById('tab-btn-arm');
+  const btnQuard = document.getElementById('tab-btn-quard');
+  const panelArm = document.getElementById('panel-arm-control');
+  const panelQuard = document.getElementById('panel-quard-control');
+
+  if (btnArm && btnQuard) {
+    btnArm.addEventListener('click', () => {
+      activeTab = 'arm';
+      btnArm.classList.add('active');
+      btnQuard.classList.remove('active');
+      panelArm.classList.add('active');
+      panelQuard.classList.remove('active');
+    });
+
+    btnQuard.addEventListener('click', () => {
+      activeTab = 'quard';
+      btnQuard.classList.add('active');
+      btnArm.classList.remove('active');
+      panelQuard.classList.add('active');
+      panelArm.classList.remove('active');
+      pingQuardBot();
+    });
+  }
+}
+
+// ── Quard Bot Locomotion & PCA9685 Control System ────────────────────────
+const QUARD_CHANNELS = [
+  { ch: 0, name: 'R1 (Right Front Hip)', baseZero: 90 },
+  { ch: 1, name: 'R2 (Right Rear Hip)', baseZero: 0 },
+  { ch: 2, name: 'L1 (Left Front Hip)', baseZero: 0 },
+  { ch: 3, name: 'L2 (Left Rear Hip)', baseZero: 90 },
+  { ch: 4, name: 'R4 (Right Rear Foot)', baseZero: 90 },
+  { ch: 5, name: 'R3 (Right Front Foot)', baseZero: 0 },
+  { ch: 6, name: 'L3 (Left Front Foot)', baseZero: 90 },
+  { ch: 7, name: 'L4 (Left Rear Foot)', baseZero: 0 }
+];
+
+function initQuardBotControls() {
+  buildQuardChannelSliders();
+  setupQuardEventListeners();
+  setupQuardKeyboard();
+  pingQuardBot();
+  setInterval(pingQuardBot, 5000); // 5s periodic heartbeat check
+}
+
+function buildQuardChannelSliders() {
+  const container = document.getElementById('quard-channels-list');
+  if (!container) return;
+  container.innerHTML = '';
+
+  QUARD_CHANNELS.forEach(c => {
+    const card = document.createElement('div');
+    card.className = 'quard-channel-card';
+    card.innerHTML = `
+      <div class="quard-channel-header">
+        <span class="quard-channel-name">⚙️ Ch ${c.ch}: ${c.name}</span>
+        <span class="quard-channel-val" id="readout-quard-ch-${c.ch}">${c.baseZero}°</span>
+      </div>
+      <div class="slider-row">
+        <input type="range" id="slider-quard-ch-${c.ch}" min="0" max="180" value="${c.baseZero}">
+      </div>
+    `;
+    container.appendChild(card);
+
+    const slider = card.querySelector(`#slider-quard-ch-${c.ch}`);
+    slider.addEventListener('input', (e) => {
+      const angle = parseInt(e.target.value);
+      document.getElementById(`readout-quard-ch-${c.ch}`).innerText = `${angle}°`;
+      sendQuardCmd({ ch: c.ch, angle: angle });
+    });
+  });
+}
+
+function setupQuardEventListeners() {
+  // Locomotion D-Pad Buttons
+  const dpadButtons = document.querySelectorAll('.btn-dpad');
+  dpadButtons.forEach(btn => {
+    const cmd = btn.dataset.cmd;
+    btn.addEventListener('click', () => {
+      dpadButtons.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      sendQuardCmd({ mode: cmd });
+    });
+  });
+
+  // Preset Stances Buttons
+  document.querySelectorAll('.btn-preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const preset = btn.dataset.preset;
+      sendQuardCmd({ mode: preset });
+    });
+  });
+
+  // OLED Face Buttons
+  document.querySelectorAll('.btn-face').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.btn-face').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const face = btn.dataset.face;
+      sendQuardCmd({ face: face });
+    });
+  });
+
+  // Set All Servos Slider
+  const sliderAll = document.getElementById('slider-quard-all');
+  if (sliderAll) {
+    sliderAll.addEventListener('input', (e) => {
+      const angle = parseInt(e.target.value);
+      document.getElementById('readout-quard-all').innerText = `${angle}°`;
+      QUARD_CHANNELS.forEach(c => {
+        const slider = document.getElementById(`slider-quard-ch-${c.ch}`);
+        const readout = document.getElementById(`readout-quard-ch-${c.ch}`);
+        if (slider) slider.value = angle;
+        if (readout) readout.innerText = `${angle}°`;
+      });
+      sendQuardCmd({ all: angle });
+    });
+  }
+
+  // Ping Test Button
+  const btnPing = document.getElementById('btn-quard-ping');
+  if (btnPing) {
+    btnPing.addEventListener('click', pingQuardBot);
+  }
+}
+
+// Keyboard WASD / Arrow locomotion controls for Quard Bot
+function setupQuardKeyboard() {
+  window.addEventListener('keydown', (e) => {
+    if (activeTab !== 'quard') return;
+    if (['input', 'select', 'textarea'].includes(document.activeElement.tagName.toLowerCase())) return;
+
+    let mode = null;
+    switch (e.key.toLowerCase()) {
+      case 'w': case 'arrowup':    mode = 'forward'; break;
+      case 's': case 'arrowdown':  mode = 'backward'; break;
+      case 'a': case 'arrowleft':  mode = 'left'; break;
+      case 'd': case 'arrowright': mode = 'right'; break;
+      case ' ':                   mode = 'stand'; break;
+    }
+
+    if (mode) {
+      e.preventDefault();
+      const btn = document.querySelector(`.btn-dpad[data-cmd="${mode}"]`);
+      if (btn) btn.click();
+    }
+  });
+}
+
+function sendQuardCmd(params) {
+  const host = document.getElementById('input-quard-host') ? document.getElementById('input-quard-host').value.trim() : 'http://sesame-robot.local';
+
+  fetch('/api/quardbot/cmd', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ host: host, params: params })
+  })
+  .then(res => res.json())
+  .then(data => {
+    updateQuardStatusPill(data.status === 'ok');
+  })
+  .catch(err => {
+    console.warn('[Dashboard] Quard Bot command error:', err);
+    updateQuardStatusPill(false);
+  });
+}
+
+function pingQuardBot() {
+  const host = document.getElementById('input-quard-host') ? document.getElementById('input-quard-host').value.trim() : 'http://sesame-robot.local';
+
+  fetch('/api/quardbot/ping', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ host: host })
+  })
+  .then(res => res.json())
+  .then(data => {
+    const online = data.online === true;
+    updateQuardStatusPill(online);
+  })
+  .catch(() => updateQuardStatusPill(false));
+}
+
+function updateQuardStatusPill(online) {
+  const pill = document.getElementById('pill-quard-status');
+  const dot = document.getElementById('dot-quardbot');
+  const text = document.getElementById('status-quardbot-text');
+
+  if (pill) {
+    pill.className = online ? 'status-pill status-online' : 'status-pill status-offline';
+    pill.innerText = online ? 'Connected' : 'Offline';
+  }
+  if (dot && text) {
+    dot.parentElement.className = online ? 'node-badge status-online' : 'node-badge status-offline';
+    text.innerText = online ? 'Connected' : 'Disconnected';
+  }
 }

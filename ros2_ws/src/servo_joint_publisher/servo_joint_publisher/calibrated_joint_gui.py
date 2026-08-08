@@ -22,13 +22,17 @@ import math
 import time
 import subprocess
 import xml.etree.ElementTree as ET
+import urllib.request
+import urllib.parse
+import threading
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QSlider, QDoubleSpinBox, QPushButton, QGroupBox,
-    QScrollArea, QMessageBox, QSplitter, QTextEdit, QLineEdit
+    QScrollArea, QMessageBox, QSplitter, QTextEdit, QLineEdit,
+    QTabWidget, QGridLayout
 )
-from PyQt5.QtCore import Qt, QTimer, QProcess, QProcessEnvironment
+from PyQt5.QtCore import Qt, QTimer, QProcess, QProcessEnvironment, pyqtSignal
 from PyQt5.QtGui import QFont, QWindow, QTextCursor
 
 import rclpy
@@ -44,7 +48,8 @@ DEFAULT_HOME_DEGS = {
     'turntable_link_joint_dup': 90.0,  # Base Turntable Yaw
     'turntable_link_joint': 59.0,      # Shoulder Pitch (Dual Servos: GPIO 19 & 21)
     'turntable_link_joint_dup_1': 153.1, # Elbow 1 Pitch
-    'turntable_link_joint_dup_2': 116.0  # Elbow 2 Pitch
+    'turntable_link_joint_dup_2': 116.0, # Elbow 2 Pitch
+    'wrist_twist_joint': 90.0           # Wrist Twist / Roll
 }
 
 
@@ -78,6 +83,8 @@ class CalibratedJointWidget(QGroupBox):
             self.setTitle(f"🦾 Joint: {joint_name} (Elbow 1 Pitch)")
         elif joint_name == 'turntable_link_joint_dup_2':
             self.setTitle(f"🦾 Joint: {joint_name} (Elbow 2 Pitch)")
+        elif joint_name == 'wrist_twist_joint':
+            self.setTitle(f"🦾 Joint: {joint_name} (Wrist Twist / Roll)")
         else:
             self.setTitle(f"🦾 Joint: {joint_name}")
         self.setStyleSheet("""
@@ -267,6 +274,348 @@ class CalibratedJointWidget(QGroupBox):
 
         if self.gui_parent:
             self.gui_parent.on_joint_calib_changed(self.joint_name, min_val, max_val)
+
+
+class QuardBotWidget(QWidget):
+    """Dedicated PyQt5 Tab Widget for Quard Bot Locomotion & Servo Control (NO 3D Viewport)."""
+    update_log_signal = pyqtSignal(str)
+    update_status_signal = pyqtSignal(bool, str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.quard_host = "http://sesame-robot.local"
+        self.is_online = False
+        self.init_ui()
+        self.update_log_signal.connect(self.log_to_console)
+        self.update_status_signal.connect(self.set_status)
+
+        # Periodic Heartbeat check
+        self.ping_timer = QTimer(self)
+        self.ping_timer.timeout.connect(self.ping_quard_bot)
+        self.ping_timer.start(5000)
+        QTimer.singleShot(800, self.ping_quard_bot)
+
+    def init_ui(self):
+        main_layout = QHBoxLayout(self)
+        main_layout.setContentsMargins(12, 12, 12, 12)
+        main_layout.setSpacing(12)
+
+        # ── Left Column (Control Cards): Width 480px ─────────────────────
+        left_col = QWidget()
+        left_layout = QVBoxLayout(left_col)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(10)
+
+        # 1. Network Connection Card
+        conn_box = QGroupBox("🌐 Quard Bot Network Target")
+        conn_box.setStyleSheet("""
+            QGroupBox { font-weight: bold; font-size: 13px; border: 1px solid #444; border-radius: 6px; margin-top: 6px; padding-top: 10px; background-color: #2b2b2b; color: #4da6ff; }
+            QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; color: #4da6ff; }
+        """)
+        conn_layout = QHBoxLayout()
+        conn_layout.setContentsMargins(8, 8, 8, 8)
+
+        self.input_host = QLineEdit(self.quard_host)
+        self.input_host.setFont(QFont("Monospace", 9))
+        self.input_host.setStyleSheet("background-color: #18181b; color: #ffffff; border: 1px solid #3f3f46; border-radius: 4px; padding: 4px 8px;")
+
+        self.lbl_status = QLabel("🔴 Offline")
+        self.lbl_status.setFont(QFont("SansSerif", 9, QFont.Bold))
+        self.lbl_status.setStyleSheet("background-color: #4c0519; color: #f43f5e; padding: 4px 10px; border-radius: 4px;")
+
+        btn_ping = QPushButton("🔄 Ping")
+        btn_ping.setStyleSheet("QPushButton { background-color: #0284c7; color: white; font-weight: bold; border-radius: 4px; padding: 4px 10px; } QPushButton:hover { background-color: #0369a1; }")
+        btn_ping.clicked.connect(self.ping_quard_bot)
+
+        conn_layout.addWidget(self.input_host, 1)
+        conn_layout.addWidget(self.lbl_status)
+        conn_layout.addWidget(btn_ping)
+        conn_box.setLayout(conn_layout)
+        left_layout.addWidget(conn_box)
+
+        # 2. D-Pad Locomotion Controller Card
+        dpad_box = QGroupBox("🎮 Locomotion Controller (WASD / Arrow Keys)")
+        dpad_box.setStyleSheet("""
+            QGroupBox { font-weight: bold; font-size: 13px; border: 1px solid #444; border-radius: 6px; margin-top: 6px; padding-top: 10px; background-color: #2b2b2b; color: #f59e0b; }
+            QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; color: #f59e0b; }
+        """)
+        dpad_grid = QGridLayout()
+        dpad_grid.setContentsMargins(10, 10, 10, 10)
+        dpad_grid.setSpacing(8)
+
+        btn_fw = QPushButton("▲\nForward (W)")
+        btn_bk = QPushButton("▼\nBackward (S)")
+        btn_lt = QPushButton("◀\nLeft (A)")
+        btn_rt = QPushButton("▶\nRight (D)")
+        btn_st = QPushButton("⏹\nStand (Space)")
+
+        dpad_style = """
+            QPushButton { background-color: #3f3f46; color: #ffffff; font-weight: bold; border: 1px solid #52525b; border-radius: 8px; min-width: 90px; min-height: 55px; }
+            QPushButton:hover { background-color: #0284c7; border-color: #38bdf8; }
+            QPushButton:pressed { background-color: #0369a1; }
+        """
+        btn_st_style = """
+            QPushButton { background-color: #7f1d1d; color: #fca5a5; font-weight: bold; border: 1px solid #991b1b; border-radius: 8px; min-width: 90px; min-height: 55px; }
+            QPushButton:hover { background-color: #dc2626; color: #ffffff; }
+        """
+        for b in [btn_fw, btn_bk, btn_lt, btn_rt]:
+            b.setStyleSheet(dpad_style)
+        btn_st.setStyleSheet(btn_st_style)
+
+        btn_fw.clicked.connect(lambda: self.send_command({'mode': 'forward'}))
+        btn_bk.clicked.connect(lambda: self.send_command({'mode': 'backward'}))
+        btn_lt.clicked.connect(lambda: self.send_command({'mode': 'left'}))
+        btn_rt.clicked.connect(lambda: self.send_command({'mode': 'right'}))
+        btn_st.clicked.connect(lambda: self.send_command({'mode': 'stand'}))
+
+        dpad_grid.addWidget(btn_fw, 0, 1)
+        dpad_grid.addWidget(btn_lt, 1, 0)
+        dpad_grid.addWidget(btn_st, 1, 1)
+        dpad_grid.addWidget(btn_rt, 1, 2)
+        dpad_grid.addWidget(btn_bk, 2, 1)
+        dpad_box.setLayout(dpad_grid)
+        left_layout.addWidget(dpad_box)
+
+        # 3. Quick Stances & OLED Face Expression Card
+        presets_box = QGroupBox("⚡ Quick Stances & OLED Face Animations")
+        presets_box.setStyleSheet("""
+            QGroupBox { font-weight: bold; font-size: 13px; border: 1px solid #444; border-radius: 6px; margin-top: 6px; padding-top: 10px; background-color: #2b2b2b; color: #34d399; }
+            QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; color: #34d399; }
+        """)
+        presets_layout = QVBoxLayout()
+        presets_layout.setContentsMargins(8, 8, 8, 8)
+
+        stances_row = QHBoxLayout()
+        btn_p_stand = QPushButton("🧍 Stand (45°)")
+        btn_p_zero  = QPushButton("🎯 Base Zero (0°)")
+        btn_p_high  = QPushButton("🦒 High Stance (60°)")
+        btn_p_wave  = QPushButton("👋 Wave Animation")
+
+        p_style = "QPushButton { background-color: #18181b; color: #e4e4e7; border: 1px solid #3f3f46; border-radius: 4px; padding: 6px; font-weight: bold; } QPushButton:hover { background-color: #27272a; color: #38bdf8; }"
+        for b in [btn_p_stand, btn_p_zero, btn_p_high, btn_p_wave]:
+            b.setStyleSheet(p_style)
+
+        btn_p_stand.clicked.connect(lambda: self.send_command({'mode': 'stand'}))
+        btn_p_zero.clicked.connect(lambda: self.send_command({'all': 0}))
+        btn_p_high.clicked.connect(lambda: self.send_command({'all': 60}))
+        btn_p_wave.clicked.connect(lambda: self.send_command({'mode': 'wave'}))
+
+        stances_row.addWidget(btn_p_stand)
+        stances_row.addWidget(btn_p_zero)
+        stances_row.addWidget(btn_p_high)
+        stances_row.addWidget(btn_p_wave)
+        presets_layout.addLayout(stances_row)
+
+        faces_row = QHBoxLayout()
+        lbl_face = QLabel("OLED Face:")
+        lbl_face.setStyleSheet("font-weight: bold; color: #a1a1aa;")
+        faces_row.addWidget(lbl_face)
+
+        faces = [("😊 Happy", "happy"), ("🚶 Walk", "walk"), ("👋 Wave", "wave"), ("😴 Sleepy", "sleepy"), ("✨ Cute", "cute")]
+        for label_text, face_code in faces:
+            b_face = QPushButton(label_text)
+            b_face.setStyleSheet("QPushButton { background-color: #27272a; color: #f4f4f5; border: 1px solid #52525b; border-radius: 12px; padding: 4px 8px; font-size: 11px; } QPushButton:hover { background-color: #38bdf8; color: #000000; }")
+            b_face.clicked.connect(lambda checked, f=face_code: self.send_command({'face': f}))
+            faces_row.addWidget(b_face)
+
+        presets_layout.addLayout(faces_row)
+        presets_box.setLayout(presets_layout)
+        left_layout.addWidget(presets_box)
+        left_layout.addStretch()
+
+        # ── Right Column (PCA9685 Sliders + Console Log) ─────────────────
+        right_col = QWidget()
+        right_layout = QVBoxLayout(right_col)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(10)
+
+        # 4. PCA9685 8-Channel Sliders Box
+        pca_box = QGroupBox("🦾 PCA9685 8-Channel Live Servo Controls")
+        pca_box.setStyleSheet("""
+            QGroupBox { font-weight: bold; font-size: 13px; border: 1px solid #444; border-radius: 6px; margin-top: 6px; padding-top: 10px; background-color: #2b2b2b; color: #a855f7; }
+            QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; color: #a855f7; }
+        """)
+        pca_layout = QVBoxLayout()
+        pca_layout.setContentsMargins(8, 8, 8, 8)
+
+        all_row = QHBoxLayout()
+        lbl_all = QLabel("Set All Servos:")
+        lbl_all.setFont(QFont("SansSerif", 9, QFont.Bold))
+        lbl_all.setStyleSheet("color: #e4e4e7;")
+
+        self.slider_all = QSlider(Qt.Horizontal)
+        self.slider_all.setRange(0, 180)
+        self.slider_all.setValue(90)
+        self.slider_all.setStyleSheet("QSlider::groove:horizontal { border: 1px solid #444; height: 6px; background: #333; border-radius: 3px; } QSlider::sub-page:horizontal { background: #a855f7; border-radius: 3px; } QSlider::handle:horizontal { background: #ffffff; width: 14px; margin: -4px 0; border-radius: 7px; }")
+
+        self.lbl_all_val = QLabel("90°")
+        self.lbl_all_val.setFont(QFont("Monospace", 9, QFont.Bold))
+        self.lbl_all_val.setStyleSheet("color: #a855f7; background: #18181b; padding: 2px 6px; border-radius: 4px;")
+
+        self.slider_all.valueChanged.connect(self.on_all_slider_changed)
+
+        all_row.addWidget(lbl_all)
+        all_row.addWidget(self.slider_all, 1)
+        all_row.addWidget(self.lbl_all_val)
+        pca_layout.addLayout(all_row)
+
+        ch_scroll = QScrollArea()
+        ch_scroll.setWidgetResizable(True)
+        ch_scroll.setStyleSheet("border: none; background: transparent;")
+        ch_container = QWidget()
+        ch_layout = QVBoxLayout(ch_container)
+        ch_layout.setContentsMargins(0, 0, 0, 0)
+        ch_layout.setSpacing(6)
+
+        self.channel_sliders = []
+        self.channel_readouts = []
+
+        channels_info = [
+            (0, "R1 (Right Front Hip)", 90),
+            (1, "R2 (Right Rear Hip)", 0),
+            (2, "L1 (Left Front Hip)", 0),
+            (3, "L2 (Left Rear Hip)", 90),
+            (4, "R4 (Right Rear Foot)", 90),
+            (5, "R3 (Right Front Foot)", 0),
+            (6, "L3 (Left Front Foot)", 90),
+            (7, "L4 (Left Rear Foot)", 0)
+        ]
+
+        for ch, name, def_val in channels_info:
+            row = QWidget()
+            row.setStyleSheet("background-color: #18181b; border: 1px solid #27272a; border-radius: 4px; padding: 4px;")
+            r_layout = QHBoxLayout(row)
+            r_layout.setContentsMargins(6, 4, 6, 4)
+
+            lbl_name = QLabel(f"Ch {ch}: {name}")
+            lbl_name.setFont(QFont("SansSerif", 9, QFont.Bold))
+            lbl_name.setStyleSheet("color: #e4e4e7; min-width: 180px;")
+
+            slider = QSlider(Qt.Horizontal)
+            slider.setRange(0, 180)
+            slider.setValue(def_val)
+            slider.setStyleSheet("QSlider::groove:horizontal { border: 1px solid #444; height: 5px; background: #27272a; border-radius: 2px; } QSlider::sub-page:horizontal { background: #38bdf8; border-radius: 2px; } QSlider::handle:horizontal { background: #ffffff; width: 12px; margin: -4px 0; border-radius: 6px; }")
+
+            lbl_val = QLabel(f"{def_val}°")
+            lbl_val.setFont(QFont("Monospace", 9, QFont.Bold))
+            lbl_val.setStyleSheet("color: #38bdf8; min-width: 40px; text-align: right;")
+
+            slider.valueChanged.connect(lambda val, c=ch, l=lbl_val: self.on_channel_slider_changed(c, val, l))
+
+            r_layout.addWidget(lbl_name)
+            r_layout.addWidget(slider, 1)
+            r_layout.addWidget(lbl_val)
+
+            ch_layout.addWidget(row)
+            self.channel_sliders.append(slider)
+            self.channel_readouts.append(lbl_val)
+
+        ch_scroll.setWidget(ch_container)
+        pca_layout.addWidget(ch_scroll, 1)
+        pca_box.setLayout(pca_layout)
+        right_layout.addWidget(pca_box, 2)
+
+        # 5. Console Log Box
+        log_box = QGroupBox("📟 Quard Bot Console & Output Log")
+        log_box.setStyleSheet("""
+            QGroupBox { font-weight: bold; font-size: 12px; border: 1px solid #333; border-radius: 6px; margin-top: 6px; padding-top: 8px; background-color: #141414; color: #f59e0b; }
+            QGroupBox::title { subcontrol-origin: margin; padding: 0 4px; color: #f59e0b; }
+        """)
+        log_layout = QVBoxLayout()
+        log_layout.setContentsMargins(6, 6, 6, 6)
+
+        self.console_log = QTextEdit()
+        self.console_log.setReadOnly(True)
+        self.console_log.setFont(QFont("Monospace", 9))
+        self.console_log.setStyleSheet("QTextEdit { background-color: #09090b; color: #38bdf8; border: 1px solid #27272a; border-radius: 4px; padding: 4px; }")
+
+        log_layout.addWidget(self.console_log, 1)
+        log_box.setLayout(log_layout)
+        right_layout.addWidget(log_box, 1)
+
+        main_layout.addWidget(left_col, 0)
+        main_layout.addWidget(right_col, 1)
+
+    def on_channel_slider_changed(self, ch, val, lbl_val):
+        lbl_val.setText(f"{val}°")
+        self.send_command({'ch': ch, 'angle': val})
+
+    def on_all_slider_changed(self, val):
+        self.lbl_all_val.setText(f"{val}°")
+        for i, s in enumerate(self.channel_sliders):
+            s.blockSignals(True)
+            s.setValue(val)
+            s.blockSignals(False)
+            self.channel_readouts[i].setText(f"{val}°")
+        self.send_command({'all': val})
+
+    def send_command(self, params):
+        # Normalize params for backwards & forward compatibility
+        norm_params = dict(params)
+        if 'mode' in norm_params:
+            m = str(norm_params['mode']).lower()
+            mode_map = {
+                'forward': 'w', 'walk_forward': 'w', 'w': 'w',
+                'backward': 'b', 'walk_backward': 'b', 'b': 'b',
+                'left': 'l', 'turn_left': 'l', 'l': 'l',
+                'right': 'r', 'turn_right': 'r', 'r': 'r',
+                'stand': 's', 'stop': 's', 's': 's',
+                'zero': 'z', 'z': 'z',
+                'wave': 'hi', 'hi': 'hi'
+            }
+            norm_params['move'] = mode_map.get(m, m)
+
+        if 'ch' in norm_params and 'angle' in norm_params:
+            norm_params['deg'] = norm_params['angle']
+
+        host = self.input_host.text().strip()
+        if not host.startswith("http://") and not host.startswith("https://"):
+            host = "http://" + host
+        url = f"{host.rstrip('/')}/cmd?{urllib.parse.urlencode(norm_params)}"
+
+        def worker():
+            try:
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=1.5) as resp:
+                    reply = resp.read().decode('utf-8', errors='ignore')
+                    self.update_status_signal.emit(True, f"Out: {params} | Reply: {reply}")
+            except Exception as e:
+                self.update_status_signal.emit(False, f"Out: {params} | Error: {e}")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def ping_quard_bot(self):
+        host = self.input_host.text().strip()
+        if not host.startswith("http://") and not host.startswith("https://"):
+            host = "http://" + host
+        url = f"{host.rstrip('/')}/"
+
+        def worker():
+            try:
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=1.2) as resp:
+                    self.update_status_signal.emit(True, None)
+            except Exception as e:
+                self.update_status_signal.emit(False, None)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def set_status(self, is_online, log_msg):
+        self.is_online = is_online
+        if is_online:
+            self.lbl_status.setText("🟢 Connected")
+            self.lbl_status.setStyleSheet("background-color: #064e3b; color: #34d399; padding: 4px 10px; border-radius: 4px;")
+        else:
+            self.lbl_status.setText("🔴 Offline")
+            self.lbl_status.setStyleSheet("background-color: #4c0519; color: #f43f5e; padding: 4px 10px; border-radius: 4px;")
+
+        if log_msg:
+            self.log_to_console(log_msg)
+
+    def log_to_console(self, text):
+        ts = time.strftime("[%H:%M:%S] ")
+        self.console_log.append(ts + text)
+        self.console_log.moveCursor(QTextCursor.End)
 
 
 class CalibratedJointPublisherGUI(QMainWindow):
@@ -515,7 +864,45 @@ class CalibratedJointPublisherGUI(QMainWindow):
 
         # Set Splitter ratios (520px left control panel, 880px right 3D viewport)
         main_splitter.setSizes([520, 880])
-        self.setCentralWidget(main_splitter)
+
+        # ── Top-Level QTabWidget Setup ─────────────────────────────────────
+        self.tabs = QTabWidget()
+        self.tabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: 1px solid #333333;
+                background-color: #1e1e1e;
+            }
+            QTabBar::tab {
+                background-color: #2b2b2b;
+                color: #aaaaaa;
+                font-weight: bold;
+                font-size: 13px;
+                padding: 8px 24px;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                margin-right: 4px;
+            }
+            QTabBar::tab:hover {
+                background-color: #383838;
+                color: #ffffff;
+            }
+            QTabBar::tab:selected {
+                background-color: #0284c7;
+                color: #ffffff;
+            }
+        """)
+
+        arm_dashboard_widget = QWidget()
+        arm_layout = QVBoxLayout(arm_dashboard_widget)
+        arm_layout.setContentsMargins(0, 0, 0, 0)
+        arm_layout.addWidget(main_splitter)
+
+        self.quard_bot_widget = QuardBotWidget(self)
+
+        self.tabs.addTab(arm_dashboard_widget, "🦾 Robot Arm Dashboard")
+        self.tabs.addTab(self.quard_bot_widget, "🤖 Quard Bot (Quadruped)")
+
+        self.setCentralWidget(self.tabs)
 
         # RViz embedding process state
         self.rviz_process = None
@@ -652,6 +1039,25 @@ class CalibratedJointPublisherGUI(QMainWindow):
             self.rviz_process.waitForFinished(1000)
         event.accept()
 
+    def keyPressEvent(self, event):
+        """Capture keyboard events for Quard Bot locomotion when Quard Bot tab is active."""
+        if hasattr(self, 'tabs') and self.tabs.currentIndex() == 1:
+            key = event.key()
+            if key in (Qt.Key_W, Qt.Key_Up):
+                self.quard_bot_widget.send_command({'mode': 'forward'})
+            elif key in (Qt.Key_S, Qt.Key_Down):
+                self.quard_bot_widget.send_command({'mode': 'backward'})
+            elif key in (Qt.Key_A, Qt.Key_Left):
+                self.quard_bot_widget.send_command({'mode': 'left'})
+            elif key in (Qt.Key_D, Qt.Key_Right):
+                self.quard_bot_widget.send_command({'mode': 'right'})
+            elif key == Qt.Key_Space:
+                self.quard_bot_widget.send_command({'mode': 'stand'})
+            else:
+                super().keyPressEvent(event)
+        else:
+            super().keyPressEvent(event)
+
     def on_speed_changed(self, value):
         speed_factor = value / 10.0
         self.lbl_speed_val.setText(f"{speed_factor:.1f}x")
@@ -677,6 +1083,8 @@ class CalibratedJointPublisherGUI(QMainWindow):
                 'turntable_link_joint_dup_1': (-2.0, 2.0),
                 'turntable_link_joint_dup_2': (-2.0, 2.0)
             }
+        if 'wrist_twist_joint' not in joints:
+            joints['wrist_twist_joint'] = (-3.14159, 3.14159)
         return joints
 
     def load_calibration(self):

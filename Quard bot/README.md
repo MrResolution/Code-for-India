@@ -64,11 +64,11 @@ Quard bot/
 
 ---
 
-## 🌐 Web AP Dashboard Control
+## 🌐 Web Dashboard Control
 
-- **WiFi SSID**: `Sesame-Robot-Control`
-- **WiFi Password**: `12345678`
-- **Dashboard URL**: `http://192.168.4.1` or `http://sesame-robot.local`
+- **Primary Wi-Fi Network (STA)**: Connects to Wi-Fi SSID `Sabo` (Password: `sandy0606`) — same network as the Robot Arm
+- **Fallback Access Point (AP)**: `Sesame-Robot-Control` (Password: `12345678`)
+- **Dashboard URL**: `http://<ESP32_IP_ADDRESS>` or `http://sesame-robot.local` (or `http://192.168.4.1` on AP fallback)
 
 ### Features
 - **D-Pad Locomotion**: Forward, Backward, Turn Left, Turn Right, Stand

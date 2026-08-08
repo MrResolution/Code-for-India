@@ -64,6 +64,7 @@ class RobotState:
             'turntable_link_joint_dup_1': 153.1,
             'turntable_link_joint_dup_2': 116.0,
             'turntable_link_joint_dup_3': 90.0,
+            'wrist_twist_joint': 90.0,
             'turntable_link_joint_dup_4': 90.0
         }
         self.calibration = self.load_calibration()
@@ -71,6 +72,11 @@ class RobotState:
         self.sim_speed = 1.0
         self.sim_start_time = time.time()
         self.last_update = time.time()
+        # Quard Bot (Sesame Quadruped) State
+        self.quardbot_host = "http://sesame-robot.local"
+        self.quardbot_online = False
+        self.quardbot_mode = "stand"
+        self.quardbot_channels = [90, 0, 0, 90, 90, 0, 90, 0]
 
     def load_calibration(self):
         if os.path.exists(CALIB_FILE_PATH):
@@ -160,6 +166,35 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
                 self.send_json({"status": "ok", "mode": mode})
             else:
                 self.send_json({"status": "error", "message": "Invalid mode"})
+        elif path == "/api/quardbot/cmd":
+            target_host = data.get("host", robot_state.quardbot_host)
+            cmd_url = f"{target_host.rstrip('/')}/cmd"
+            params = data.get("params", {})
+            try:
+                import urllib.request
+                query_str = urllib.parse.urlencode(params)
+                full_url = f"{cmd_url}?{query_str}"
+                req = urllib.request.Request(full_url)
+                with urllib.request.urlopen(req, timeout=2.0) as resp:
+                    reply = resp.read().decode('utf-8', errors='ignore')
+                    with robot_state.lock:
+                        robot_state.quardbot_online = True
+                    self.send_json({"status": "ok", "reply": reply})
+            except Exception as e:
+                self.send_json({"status": "error", "message": str(e)})
+        elif path == "/api/quardbot/ping":
+            target_host = data.get("host", robot_state.quardbot_host)
+            try:
+                import urllib.request
+                req = urllib.request.Request(target_host.rstrip('/') + "/")
+                with urllib.request.urlopen(req, timeout=1.5) as resp:
+                    with robot_state.lock:
+                        robot_state.quardbot_online = True
+                    self.send_json({"status": "ok", "online": True})
+            except Exception as e:
+                with robot_state.lock:
+                    robot_state.quardbot_online = False
+                self.send_json({"status": "ok", "online": False, "error": str(e)})
         else:
             self.send_error(404)
 

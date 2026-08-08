@@ -19,8 +19,8 @@
     <!-- Top Header Bar -->
     <header class="top-header">
       <div class="brand">
-        <span class="icon">🦾</span>
-        <h1>Robotic Arm Control Center</h1>
+        <span class="icon">🤖🦾</span>
+        <h1>Robotics Integrated Control Center</h1>
         <span class="badge badge-primary">ROS 2 Jazzy</span>
       </div>
 
@@ -30,13 +30,9 @@
           <span class="dot"></span>
           <span>ESP32 #1 (Arm): <strong>Online</strong></span>
         </div>
-        <div class="node-badge status-online">
-          <span class="dot"></span>
-          <span>ESP32 #2 (Sensors): <strong>Active</strong></span>
-        </div>
-        <div class="node-badge status-online">
-          <span class="dot"></span>
-          <span>ESP32 #3 (Base): <strong>Connected</strong></span>
+        <div class="node-badge status-online" id="badge-quardbot">
+          <span class="dot" id="dot-quardbot"></span>
+          <span>ESP32 #2 (Quard Bot): <strong id="status-quardbot-text">Connecting...</strong></span>
         </div>
       </div>
 
@@ -60,46 +56,143 @@
     <main class="main-content">
       <!-- Left Control Panel Tile -->
       <section class="tile control-tile">
-        <div class="tile-header">
-          <h2>🎛️ Joint Control & Calibration Panel</h2>
-          <button id="btn-save" class="btn btn-success btn-sm">💾 Save Config</button>
+        <!-- Tab Navigation Bar -->
+        <div class="tab-nav">
+          <button id="tab-btn-arm" class="tab-btn active">🦾 Robotic Arm</button>
+          <button id="tab-btn-quard" class="tab-btn">🤖 Quard Bot (Quadruped)</button>
         </div>
 
-        <!-- Global Action Bar -->
-        <div class="action-bar">
-          <button id="btn-sim" class="btn btn-warning btn-sm">▶️ Start Sim</button>
-          <button id="btn-home" class="btn btn-info btn-sm">🏠 Go Home</button>
-          <button id="btn-set-home" class="btn btn-purple btn-sm">📌 Set Home</button>
-          <button id="btn-center" class="btn btn-secondary btn-sm">🎯 Center All</button>
-        </div>
+        <!-- PANEL 1: Robotic Arm Control -->
+        <div id="panel-arm-control" class="tab-panel active">
+          <div class="tile-header">
+            <h2>🎛️ Arm Joint Control & Calibration</h2>
+            <button id="btn-save" class="btn btn-success btn-sm">💾 Save Config</button>
+          </div>
 
-        <!-- Speed Multiplier Widget -->
-        <div class="speed-box">
-          <label for="slider-speed">⚡ Sim Speed Multiplier:</label>
-          <input type="range" id="slider-speed" min="1" max="50" value="10">
-          <span id="lbl-speed-val" class="readout-pill">1.0x</span>
-        </div>
+          <!-- Global Action Bar -->
+          <div class="action-bar">
+            <button id="btn-sim" class="btn btn-warning btn-sm">▶️ Start Sim</button>
+            <button id="btn-home" class="btn btn-info btn-sm">🏠 Go Home</button>
+            <button id="btn-set-home" class="btn btn-purple btn-sm">📌 Set Home</button>
+            <button id="btn-center" class="btn btn-secondary btn-sm">🎯 Center All</button>
+          </div>
 
-        <!-- Joint Sliders List Container -->
-        <div class="scroll-container">
-          <div id="joints-list" class="joints-list">
-            <!-- Dynamically populated joint rows -->
+          <!-- Speed Multiplier Widget -->
+          <div class="speed-box">
+            <label for="slider-speed">⚡ Sim Speed Multiplier:</label>
+            <input type="range" id="slider-speed" min="1" max="50" value="10">
+            <span id="lbl-speed-val" class="readout-pill">1.0x</span>
+          </div>
+
+          <!-- Joint Sliders List Container -->
+          <div class="scroll-container">
+            <div id="joints-list" class="joints-list">
+              <!-- Dynamically populated joint rows -->
+            </div>
+          </div>
+
+          <!-- ESP32 Serial Settings Card -->
+          <div class="card serial-card">
+            <div class="card-title">🔌 Arm ESP32 Serial Connection</div>
+            <div class="serial-controls">
+              <select id="serial-port" class="form-input">
+                <option value="/dev/ttyUSB0">/dev/ttyUSB0 (ESP32 USB)</option>
+                <option value="/dev/ttyACM0">/dev/ttyACM0 (NodeMCU)</option>
+              </select>
+              <select id="serial-baud" class="form-input">
+                <option value="115200">115200 Baud</option>
+                <option value="9600">9600 Baud</option>
+              </select>
+              <button id="btn-serial-connect" class="btn btn-primary btn-sm">Connect Serial</button>
+            </div>
           </div>
         </div>
 
-        <!-- ESP32 Serial Settings Card -->
-        <div class="card serial-card">
-          <div class="card-title">🔌 ESP32 Microcontroller Serial Connection</div>
-          <div class="serial-controls">
-            <select id="serial-port" class="form-input">
-              <option value="/dev/ttyUSB0">/dev/ttyUSB0 (ESP32 USB)</option>
-              <option value="/dev/ttyACM0">/dev/ttyACM0 (NodeMCU)</option>
-            </select>
-            <select id="serial-baud" class="form-input">
-              <option value="115200">115200 Baud</option>
-              <option value="9600">9600 Baud</option>
-            </select>
-            <button id="btn-serial-connect" class="btn btn-primary btn-sm">Connect Serial</button>
+        <!-- PANEL 2: Quard Bot Quadruped Control -->
+        <div id="panel-quard-control" class="tab-panel">
+          <div class="tile-header">
+            <h2>🤖 Quard Bot Locomotion & Servo Control</h2>
+            <button id="btn-quard-ping" class="btn btn-info btn-sm">🔄 Test Ping</button>
+          </div>
+
+          <div class="scroll-container">
+            <!-- Quard Bot Connection Configuration Card -->
+            <div class="card quard-conn-card">
+              <div class="card-title">🌐 Quard Bot Network Target</div>
+              <div class="input-row">
+                <input type="text" id="input-quard-host" class="form-input" value="http://sesame-robot.local" placeholder="http://192.168.1.x or http://sesame-robot.local">
+                <span id="pill-quard-status" class="status-pill status-offline">Offline</span>
+              </div>
+            </div>
+
+            <!-- Locomotion D-Pad Controller Card -->
+            <div class="card dpad-card">
+              <div class="card-title">🎮 Locomotion Controller (WASD / Arrows)</div>
+              <div class="dpad-grid">
+                <div></div>
+                <button id="btn-gait-forward" class="btn-dpad" data-cmd="forward" title="Walk Forward (W / ↑)">
+                  <span class="dpad-icon">▲</span>
+                  <span class="dpad-label">Forward</span>
+                </button>
+                <div></div>
+
+                <button id="btn-gait-left" class="btn-dpad" data-cmd="left" title="Turn Left (A / ←)">
+                  <span class="dpad-icon">◀</span>
+                  <span class="dpad-label">Left</span>
+                </button>
+                <button id="btn-gait-stand" class="btn-dpad btn-dpad-center" data-cmd="stand" title="Stand / Stop (Space)">
+                  <span class="dpad-icon">⏹</span>
+                  <span class="dpad-label">Stand</span>
+                </button>
+                <button id="btn-gait-right" class="btn-dpad" data-cmd="right" title="Turn Right (D / →)">
+                  <span class="dpad-icon">▶</span>
+                  <span class="dpad-label">Right</span>
+                </button>
+
+                <div></div>
+                <button id="btn-gait-backward" class="btn-dpad" data-cmd="backward" title="Walk Backward (S / ↓)">
+                  <span class="dpad-icon">▼</span>
+                  <span class="dpad-label">Backward</span>
+                </button>
+                <div></div>
+              </div>
+            </div>
+
+            <!-- Quick Stances & OLED Expression Picker Card -->
+            <div class="card presets-card">
+              <div class="card-title">⚡ Quick Stances & Expression Animations</div>
+              <div class="preset-buttons-grid">
+                <button class="btn btn-outline btn-sm btn-preset" data-preset="stand">🧍 Stand (45°)</button>
+                <button class="btn btn-outline btn-sm btn-preset" data-preset="zero">🎯 Base Zero (0°)</button>
+                <button class="btn btn-outline btn-sm btn-preset" data-preset="high">🦒 High Stance (60°)</button>
+                <button class="btn btn-outline btn-sm btn-preset" data-preset="wave">👋 Wave Animation</button>
+              </div>
+
+              <div class="oled-faces-row">
+                <label>OLED Face:</label>
+                <button class="btn btn-xs btn-face" data-face="happy">😊 Happy</button>
+                <button class="btn btn-xs btn-face" data-face="walk">🚶 Walk</button>
+                <button class="btn btn-xs btn-face" data-face="wave">👋 Wave</button>
+                <button class="btn btn-xs btn-face" data-face="sleepy">😴 Sleepy</button>
+                <button class="btn btn-xs btn-face" data-face="cute">✨ Cute</button>
+              </div>
+            </div>
+
+            <!-- PCA9685 8-Channel Servo Sliders Card -->
+            <div class="card pca-card">
+              <div class="card-title">🦾 PCA9685 8-Channel Live Servo Controls</div>
+              
+              <!-- Set All Servos Slider -->
+              <div class="set-all-row">
+                <label>Set All Channels:</label>
+                <input type="range" id="slider-quard-all" min="0" max="180" value="90">
+                <span id="readout-quard-all" class="readout-pill">90°</span>
+              </div>
+
+              <div id="quard-channels-list" class="quard-channels-list">
+                <!-- Dynamically populated 8-channel servo rows -->
+              </div>
+            </div>
           </div>
         </div>
       </section>

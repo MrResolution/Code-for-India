@@ -7,7 +7,7 @@
     "home_deg": 1.0
   },
   "turntable_link_joint": {
-    "servo_min_deg": 16.6,
+    "servo_min_deg": 0.0,
     "servo_max_deg": 91.4,
     "trim_deg": 0.0,
     "invert": false,
@@ -25,6 +25,13 @@
     "servo_max_deg": 84.0,
     "trim_deg": 0.0,
     "invert": false,
-    "home_deg": 52.7
+    "home_deg": 58.3
+  },
+  "wrist_twist_joint": {
+    "servo_min_deg": 0.0,
+    "servo_max_deg": 180.0,
+    "trim_deg": 0.0,
+    "invert": false,
+    "home_deg": 90.0
   }
 }

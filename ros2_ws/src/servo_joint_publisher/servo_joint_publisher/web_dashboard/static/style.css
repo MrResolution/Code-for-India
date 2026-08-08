@@ -462,3 +462,191 @@ input[type="range"] {
   font-size: 11px;
   color: var(--text-secondary);
 }
+
+/* ── Tab Navigation Bar ─────────────────────────────────────────────────── */
+.tab-nav {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  background-color: #f1f5f9;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tab-btn:hover {
+  background-color: #e2e8f0;
+  color: var(--text-primary);
+}
+
+.tab-btn.active {
+  background-color: #ffffff;
+  color: var(--color-primary);
+  border-color: var(--border-color);
+  box-shadow: var(--shadow-sm);
+}
+
+.tab-panel {
+  display: none;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.tab-panel.active {
+  display: flex;
+}
+
+/* ── Quard Bot Locomotion & Controls UI ─────────────────────────────────── */
+.input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.status-pill {
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.status-online { background-color: #dcfce7; color: #15803d; }
+.status-offline { background-color: #fee2e2; color: #b91c1c; }
+
+/* Locomotion D-Pad Grid */
+.dpad-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.dpad-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 70px);
+  grid-template-rows: repeat(3, 60px);
+  gap: 8px;
+  justify-content: center;
+  margin-top: 10px;
+}
+
+.btn-dpad {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(145deg, #ffffff, #f1f5f9);
+  border: 1px solid #cbd5e1;
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.btn-dpad:hover {
+  background: #e2e8f0;
+  border-color: var(--color-primary);
+  transform: translateY(-1px);
+}
+
+.btn-dpad:active, .btn-dpad.active {
+  background: var(--color-primary);
+  color: #ffffff;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.btn-dpad-center {
+  background: linear-gradient(145deg, #fee2e2, #fef2f2);
+  border-color: #fca5a5;
+  color: #dc2626;
+}
+.btn-dpad-center:hover {
+  background: #dc2626;
+  color: #ffffff;
+}
+
+.dpad-icon { font-size: 16px; margin-bottom: 2px; }
+.dpad-label { font-size: 10px; font-weight: 600; }
+
+/* Presets & Expression Picker */
+.preset-buttons-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.oled-faces-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-color);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.btn-face {
+  background-color: #f1f5f9;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-face:hover, .btn-face.active {
+  background-color: #e0f2fe;
+  color: #0369a1;
+  border-color: #38bdf8;
+}
+
+/* PCA9685 Channel Sliders */
+.set-all-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.quard-channel-card {
+  background-color: #ffffff;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  box-shadow: var(--shadow-sm);
+}
+
+.quard-channel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.quard-channel-name { font-weight: 600; color: var(--text-primary); }
+.quard-channel-val { font-weight: 700; color: var(--color-primary); }

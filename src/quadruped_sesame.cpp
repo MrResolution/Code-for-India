@@ -15,6 +15,11 @@
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 
+// ── Wi-Fi Configuration ─────────────────────────────────────────────────
+const char* WIFI_SSID = "Sabo";     // Same Wi-Fi network as the Robot Arm
+const char* WIFI_PASS = "sandy0606"; // Wi-Fi Password
+
+// Fallback Access Point settings if home Wi-Fi is unavailable:
 #define AP_SSID   "Sesame-Robot-Control"
 #define AP_PASS   "12345678"
 
@@ -281,27 +286,86 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
 
 void handleRoot() { server.send(200, "text/html", DASHBOARD_HTML); }
 void handleCommand() {
-  if (server.hasArg("move")) {
-    String m = server.arg("move");
-    if (m == "w") currentMode = MODE_WALK_FORWARD;
-    else if (m == "b") currentMode = MODE_WALK_BACKWARD;
-    else if (m == "l") currentMode = MODE_TURN_LEFT;
-    else if (m == "r") currentMode = MODE_TURN_RIGHT;
-    else if (m == "s") poseStand();
-    else if (m == "z") poseZero();
-    else if (m == "hi") animHiAction();
-    server.send(200, "text/plain", "OK");
+  server.sendHeader("Connection", "close");
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+
+  bool handled = false;
+
+  // 1. Locomotion / Mode Commands (supports "move", "mode", or "cmd")
+  String m = "";
+  if (server.hasArg("move")) m = server.arg("move");
+  else if (server.hasArg("mode")) m = server.arg("mode");
+  else if (server.hasArg("cmd")) m = server.arg("cmd");
+
+  if (m.length() > 0) {
+    m.toLowerCase();
+    if (m == "w" || m == "forward" || m == "walk_forward") {
+      currentMode = MODE_WALK_FORWARD;
+      handled = true;
+    } else if (m == "b" || m == "backward" || m == "walk_backward") {
+      currentMode = MODE_WALK_BACKWARD;
+      handled = true;
+    } else if (m == "l" || m == "left" || m == "turn_left") {
+      currentMode = MODE_TURN_LEFT;
+      handled = true;
+    } else if (m == "r" || m == "right" || m == "turn_right") {
+      currentMode = MODE_TURN_RIGHT;
+      handled = true;
+    } else if (m == "s" || m == "stand" || m == "stop") {
+      poseStand();
+      handled = true;
+    } else if (m == "z" || m == "zero") {
+      poseZero();
+      handled = true;
+    } else if (m == "hi" || m == "wave") {
+      animHiAction();
+      handled = true;
+    } else if (m == "high") {
+      setAllInputAngles(60);
+      currentMode = MODE_STAND;
+      handled = true;
+    }
   }
-  else if (server.hasArg("ch") && server.hasArg("deg")) {
-    currentMode = MODE_STAND;
-    setServoInputAngle(server.arg("ch").toInt(), server.arg("deg").toInt());
-    server.send(200, "text/plain", "OK");
+
+  // 2. OLED Face Expression Commands
+  if (server.hasArg("face")) {
+    String f = server.arg("face");
+    f.toLowerCase();
+    if (f == "happy") currentFace = FACE_HAPPY;
+    else if (f == "walk") currentFace = FACE_WALK;
+    else if (f == "wave") currentFace = FACE_WAVE;
+    else if (f == "sleepy") currentFace = FACE_SLEEPY;
+    else if (f == "cute") currentFace = FACE_CUTE;
+    handled = true;
   }
-  else if (server.hasArg("all")) {
+
+  // 3. Individual Servo Channel Commands (supports "deg", "angle", or "val")
+  if (server.hasArg("ch")) {
+    int channel = server.arg("ch").toInt();
+    int angle = -1;
+    if (server.hasArg("deg")) angle = server.arg("deg").toInt();
+    else if (server.hasArg("angle")) angle = server.arg("angle").toInt();
+    else if (server.hasArg("val")) angle = server.arg("val").toInt();
+
+    if (angle >= 0) {
+      currentMode = MODE_STAND;
+      setServoInputAngle(channel, angle);
+      handled = true;
+    }
+  }
+
+  // 4. Set All Servo Channels
+  if (server.hasArg("all")) {
     currentMode = MODE_STAND;
     setAllInputAngles(server.arg("all").toInt());
+    handled = true;
+  }
+
+  if (handled) {
     server.send(200, "text/plain", "OK");
-  } else { server.send(400, "text/plain", "Bad Args"); }
+  } else {
+    server.send(400, "text/plain", "Bad Args");
+  }
 }
 
 void setup() {
@@ -341,11 +405,36 @@ void setup() {
     drawCuteFace(FACE_HAPPY);
   }
 
-  // 3. Configure Access Point
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(AP_SSID, AP_PASS);
-  Serial.print(" 🌐 Dashboard URL: http://"); Serial.println(WiFi.softAPIP());
-  if (MDNS.begin("sesame-robot")) Serial.println(" 🌐 mDNS Hostname: http://sesame-robot.local");
+  // 3. Wi-Fi Connection Setup (STA Mode with AP Fallback)
+  WiFi.mode(WIFI_STA);
+  Serial.print(" 🌐 Connecting to Wi-Fi SSID '");
+  Serial.print(WIFI_SSID);
+  Serial.print("'...");
+
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 16) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\n ✅ Connected to Wi-Fi Network!");
+    Serial.print(" 🌐 Dashboard URL: http://");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("\n ⚠️ Wi-Fi Network not found. Starting Access Point fallback...");
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP(AP_SSID, AP_PASS);
+    Serial.print(" 🌐 AP Dashboard URL: http://");
+    Serial.println(WiFi.softAPIP());
+  }
+
+  if (MDNS.begin("sesame-robot")) {
+    Serial.println(" 🌐 mDNS Hostname: http://sesame-robot.local");
+  }
 
   server.on("/", handleRoot);
   server.on("/cmd", handleCommand);
