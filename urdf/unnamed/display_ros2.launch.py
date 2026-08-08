@@ -38,22 +38,23 @@ def generate_launch_description():
         condition=IfCondition(PythonExpression(["'", simulate, "' == 'true'"]))
     )
 
-    # 3. Manual Joint State Publisher GUI (simulate == 'false')
+    # 3. Manual Calibrated Joint State Publisher GUI (simulate == 'false')
     joint_state_publisher_gui = Node(
-        package='joint_state_publisher_gui',
-        executable='joint_state_publisher_gui',
-        name='joint_state_publisher_gui',
+        package='servo_joint_publisher',
+        executable='calibrated_joint_gui',
+        name='calibrated_joint_gui',
         output='screen',
         condition=IfCondition(PythonExpression(["'", simulate, "' == 'false'"]))
     )
 
-    # 4. RViz2
+    # 4. Standalone RViz2 (only for automated simulator mode; GUI embeds its own RViz2 window)
     rviz2_node = Node(
         package='rviz2',
         executable='rviz2',
         name='rviz2',
         output='screen',
-        arguments=['-d', '/home/sabo/Documents/learn_/Hardware/urdf/unnamed/robot.rviz']
+        arguments=['-d', '/home/sabo/Documents/learn_/Hardware/urdf/unnamed/robot.rviz'],
+        condition=IfCondition(PythonExpression(["'", simulate, "' == 'true'"]))
     )
 
     return LaunchDescription([

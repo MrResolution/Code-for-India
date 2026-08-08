@@ -1,14 +1,29 @@
 <?xml version='1.0' encoding='utf-8'?>
 <robot name="unnamed" version="1.0">
-  <material name="None">
-    <color rgba="0.6 0.6 0.6 1.0" />
+  <material name="DarkGray">
+    <color rgba="0.25 0.25 0.28 1.0" />
   </material>
+  <material name="MatteBlack">
+    <color rgba="0.15 0.15 0.15 1.0" />
+  </material>
+  <material name="IndustrialBlue">
+    <color rgba="0.0 0.45 0.75 1.0" />
+  </material>
+  <material name="Aluminum">
+    <color rgba="0.75 0.75 0.80 1.0" />
+  </material>
+  <material name="AccentOrange">
+    <color rgba="0.90 0.45 0.10 1.0" />
+  </material>
+
   <link name="world" />
+
   <joint name="fixed_base" type="fixed">
     <parent link="world" />
     <child link="basecase1_link" />
     <origin xyz="0 0 0" rpy="0 0 0" />
   </joint>
+
   <joint name="turntable_link_joint_dup" type="revolute">
     <limit lower="-3.00000" upper="3.00000" effort="30.0" velocity="2.0" />
     <origin rpy="0 0 0.00443" xyz="-0.045306 -0.000297 0.045118" />
@@ -16,6 +31,7 @@
     <child link="turntable_link" />
     <axis xyz="0 0 1" />
   </joint>
+
   <joint name="turntable_link_joint" type="revolute">
     <limit lower="-2.00000" upper="2.00000" effort="30.0" velocity="2.0" />
     <origin rpy="0 0 3.13716" xyz="-0.029849 -0.000704 0.045105" />
@@ -23,6 +39,7 @@
     <child link="Elbow_1_link" />
     <axis xyz="0 1 0" />
   </joint>
+
   <joint name="turntable_link_joint_dup_1" type="revolute">
     <limit lower="-2.00000" upper="2.00000" effort="30.0" velocity="2.0" />
     <origin rpy="1.57078 1.56581 1.57078" xyz="0.047192 -0.001837 0.194238" />
@@ -30,6 +47,7 @@
     <child link="Elbow_2_link" />
     <axis xyz="0 1 0" />
   </joint>
+
   <joint name="turntable_link_joint_dup_2" type="revolute">
     <limit lower="-2.00000" upper="2.00000" effort="30.0" velocity="2.0" />
     <origin rpy="0.00167 0.01634 0.01070" xyz="-0.000145 -0.000782 0.139796" />
@@ -37,9 +55,12 @@
     <child link="Wrist_pitch._link" />
     <axis xyz="0 1 0" />
   </joint>
+
   <link name="basecase1_link">
     <visual name="basecase1">
-      <material name="None" />
+      <material name="DarkGray">
+        <color rgba="0.25 0.25 0.28 1.0" />
+      </material>
       <origin rpy="0.00000 0.00000 0.00000" xyz="0.00000 0.00000 0.00000" />
       <geometry>
         <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_3_obj3.stl" scale="0.00100 0.00100 0.00100" />
@@ -57,9 +78,12 @@
       <inertia ixx="0.005" ixy="0" ixz="0" iyy="0.005" iyz="0" izz="0.005" />
     </inertial>
   </link>
+
   <link name="turntable_link">
     <visual name="TrunTable">
-      <material name="None" />
+      <material name="MatteBlack">
+        <color rgba="0.15 0.15 0.15 1.0" />
+      </material>
       <origin rpy="-1.04042 -1.54565 -0.52117" xyz="0.00000 0.00000 0.00000" />
       <geometry>
         <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_44_obj44.stl" scale="0.00100 0.00100 0.00100" />
@@ -77,9 +101,12 @@
       <inertia ixx="0.005" ixy="0" ixz="0" iyy="0.005" iyz="0" izz="0.005" />
     </inertial>
   </link>
+
   <link name="Elbow_1_link">
     <visual name="Elbow 1">
-      <material name="None" />
+      <material name="IndustrialBlue">
+        <color rgba="0.0 0.45 0.75 1.0" />
+      </material>
       <origin rpy="0.00000 0.00000 0.00000" xyz="0.00000 0.00000 0.00000" />
       <geometry>
         <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_7_obj7.stl" scale="0.00100 0.00100 0.00100" />
@@ -97,9 +124,12 @@
       <inertia ixx="0.005" ixy="0" ixz="0" iyy="0.005" iyz="0" izz="0.005" />
     </inertial>
   </link>
+
   <link name="Elbow_2_link">
     <visual name="Elbow 2">
-      <material name="None" />
+      <material name="Aluminum">
+        <color rgba="0.75 0.75 0.80 1.0" />
+      </material>
       <origin rpy="0.00000 0.00000 0.00000" xyz="0.00000 0.00000 0.00000" />
       <geometry>
         <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_9_obj9.stl" scale="0.00100 0.00100 0.00100" />
@@ -117,9 +147,12 @@
       <inertia ixx="0.005" ixy="0" ixz="0" iyy="0.005" iyz="0" izz="0.005" />
     </inertial>
   </link>
+
   <link name="Wrist_pitch._link">
     <visual name="Wrist_pitch.">
-      <material name="None" />
+      <material name="AccentOrange">
+        <color rgba="0.90 0.45 0.10 1.0" />
+      </material>
       <origin rpy="0.00000 0.00000 0.00000" xyz="0.00000 0.00000 0.00000" />
       <geometry>
         <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Robot_Arm_Wrist.stl" scale="0.00100 0.00100 0.00100" />

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Robotic Arm Integrated Control & 3D WebGL Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  
+  <!-- Three.js & Loaders -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Header Bar -->
+    <header class="top-header">
+      <div class="brand">
+        <span class="icon">🦾</span>
+        <h1>Robotic Arm Control Center</h1>
+        <span class="badge badge-primary">ROS 2 Jazzy</span>
+      </div>
+
+      <!-- IoT Nodes Status Bar -->
+      <div class="iot-nodes">
+        <div class="node-badge status-online">
+          <span class="dot"></span>
+          <span>ESP32 #1 (Arm): <strong>Online</strong></span>
+        </div>
+        <div class="node-badge status-online">
+          <span class="dot"></span>
+          <span>ESP32 #2 (Sensors): <strong>Active</strong></span>
+        </div>
+        <div class="node-badge status-online">
+          <span class="dot"></span>
+          <span>ESP32 #3 (Base): <strong>Connected</strong></span>
+        </div>
+      </div>
+
+      <!-- Communication Mode Toggle -->
+      <div class="comm-mode-toggle">
+        <span class="toggle-label" id="lbl-serial">📟 Serial</span>
+        <label class="switch" for="toggle-comm-mode">
+          <input type="checkbox" id="toggle-comm-mode" checked>
+          <span class="switch-slider"></span>
+        </label>
+        <span class="toggle-label active" id="lbl-wifi">📡 WiFi</span>
+      </div>
+
+      <!-- Actions -->
+      <div class="header-actions">
+        <button id="btn-estop" class="btn btn-danger">🚨 E-STOP</button>
+      </div>
+    </header>
+
+    <!-- Main Split View Layout -->
+    <main class="main-content">
+      <!-- Left Control Panel Tile -->
+      <section class="tile control-tile">
+        <div class="tile-header">
+          <h2>🎛️ Joint Control & Calibration Panel</h2>
+          <button id="btn-save" class="btn btn-success btn-sm">💾 Save Config</button>
+        </div>
+
+        <!-- Global Action Bar -->
+        <div class="action-bar">
+          <button id="btn-sim" class="btn btn-warning btn-sm">▶️ Start Sim</button>
+          <button id="btn-home" class="btn btn-info btn-sm">🏠 Go Home</button>
+          <button id="btn-set-home" class="btn btn-purple btn-sm">📌 Set Home</button>
+          <button id="btn-center" class="btn btn-secondary btn-sm">🎯 Center All</button>
+        </div>
+
+        <!-- Speed Multiplier Widget -->
+        <div class="speed-box">
+          <label for="slider-speed">⚡ Sim Speed Multiplier:</label>
+          <input type="range" id="slider-speed" min="1" max="50" value="10">
+          <span id="lbl-speed-val" class="readout-pill">1.0x</span>
+        </div>
+
+        <!-- Joint Sliders List Container -->
+        <div class="scroll-container">
+          <div id="joints-list" class="joints-list">
+            <!-- Dynamically populated joint rows -->
+          </div>
+        </div>
+
+        <!-- ESP32 Serial Settings Card -->
+        <div class="card serial-card">
+          <div class="card-title">🔌 ESP32 Microcontroller Serial Connection</div>
+          <div class="serial-controls">
+            <select id="serial-port" class="form-input">
+              <option value="/dev/ttyUSB0">/dev/ttyUSB0 (ESP32 USB)</option>
+              <option value="/dev/ttyACM0">/dev/ttyACM0 (NodeMCU)</option>
+            </select>
+            <select id="serial-baud" class="form-input">
+              <option value="115200">115200 Baud</option>
+              <option value="9600">9600 Baud</option>
+            </select>
+            <button id="btn-serial-connect" class="btn btn-primary btn-sm">Connect Serial</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right 3D Viewport Tile -->
+      <section class="tile viewport-tile">
+        <div class="tile-header">
+          <h2>🧊 Integrated 3D WebGL Viewport</h2>
+          <div class="view-controls">
+            <button id="btn-reset-cam" class="btn btn-outline btn-xs">📷 Reset View</button>
+            <button id="btn-top-cam" class="btn btn-outline btn-xs">🔍 Top</button>
+            <button id="btn-side-cam" class="btn btn-outline btn-xs">🔍 Side</button>
+          </div>
+        </div>
+
+        <!-- 3D Canvas Container -->
+        <div class="canvas-wrapper">
+          <div id="canvas-container"></div>
+          <div class="viewport-overlay">
+            <span class="overlay-item">Framework: <strong>Three.js (WebGL)</strong></span>
+            <span class="overlay-item">Target FPS: <strong>60 FPS</strong></span>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

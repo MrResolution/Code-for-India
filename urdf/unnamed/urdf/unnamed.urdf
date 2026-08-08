@@ -14,9 +14,11 @@
     <axis xyz="0.00000 1.00000 0.00000"/>
   </joint>
   <joint name="Gripper+finger+Geared_right_link" type="revolute">
+    <limit lower="-2.00000" upper="2.00000" effort="0.00000" velocity="0.00000"/>
     <origin rpy="-0.00000 0.00000 -0.00000" xyz="0.30158 -0.00038 -0.07414"/>
     <parent link="Gripper+Rod+Geared_right_link"/>
     <child link="Gripper+finger+Geared_right_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
   </joint>
   <joint name="turntable_link_joint_dup_1" type="revolute">
     <limit lower="-2.00000" upper="2.00000" effort="0.00000" velocity="0.00000"/>
@@ -61,9 +63,11 @@
     <axis xyz="0.00000 0.00000 1.00000"/>
   </joint>
   <joint name="Gripper+finger+Geared_left_link" type="revolute">
+    <limit lower="-2.00000" upper="2.00000" effort="0.00000" velocity="0.00000"/>
     <origin rpy="0.00000 -0.00000 -0.00000" xyz="-0.30120 0.00058 -0.05526"/>
     <parent link="Gripper+Rod+Geared_left_link"/>
     <child link="Gripper+finger+Geared_left_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
   </joint>
   <joint name="turntable_link_joint_dup_5" type="revolute">
     <limit lower="-2.00000" upper="2.00000" effort="0.00000" velocity="0.00000"/>
