@@ -25,7 +25,18 @@ A complete robotics project featuring a **multi-DOF robotic arm with a parallel 
 │       └── servo_simulator.py          # Automated trajectory generator
 ├── src/                        # Microcontroller firmware (PlatformIO)
 │   ├── main.cpp                # VL53L1X ToF sensor code
-│   └── main_servo.cpp          # Servo firmware (streams angle data)
+│   ├── main_servo.cpp          # Servo firmware (streams angle data)
+│   ├── bts7960_motor_bt.cpp    # ESP32 Bluetooth BTS7960 motor driver firmware
+│   └── quadruped_sesame.cpp    # Sesame 8-servo quadruped robot firmware
+├── Quard bot/                  # Sesame Quadruped Robot STLs & firmware
+│   ├── stl/                    # 10x 3D printable STL mesh parts (L1..L4, R1..R4, Frame)
+│   ├── firmware/               # ESP32 firmware (PCA9685, SSD1306 OLED, WebServer)
+│   └── README.md               # Pinout mapping, OLED graphics & Web AP guide
+├── bts_motor_control/          # Dual BTS7960 43A H-Bridge Motor Controller
+│   ├── firmware/               # Modular & single-file C++ driver source
+│   └── README.md               # BTS7960 wiring pinout & Bluetooth protocol guide
+
+
 ├── scripts/                    # Utility scripts
 │   └── convert_3mf_to_stl.py  # 3MF → binary STL converter
 ├── platformio.ini              # PlatformIO config (ESP32 NodeMCU-32S)

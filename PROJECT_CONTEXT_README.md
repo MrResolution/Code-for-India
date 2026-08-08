@@ -26,7 +26,18 @@ This repository contains the complete codebase, URDF robot models, 3D STL mesh a
 │   └── convert_3mf_to_stl.py             # Python utility to convert 3MF archives into binary STL files
 ├── src/
 │   ├── main.cpp                           # Original VL53L1X ToF sensor code
-│   └── main_servo.cpp                     # Microcontroller servo firmware (streams "ANGLE: 90.0")
+│   ├── main_servo.cpp                     # Microcontroller servo firmware (streams "ANGLE: 90.0")
+│   ├── bts7960_motor_bt.cpp               # ESP32 Bluetooth BTS7960 motor driver firmware
+│   └── quadruped_sesame.cpp               # Sesame 8-servo quadruped robot firmware
+├── Quard bot/                             # Sesame Quadruped Robot CAD meshes & firmware
+│   ├── README.md                          # PCA9685 pinout, OLED graphics & Web AP guide
+│   ├── stl/                               # 10x 3D printable STL mesh parts (L1..L4, R1..R4, Frame, Covers)
+│   └── firmware/                          # ESP32 firmware (PCA9685, SSD1306 OLED, WebServer)
+├── bts_motor_control/                     # Dual BTS7960 43A H-Bridge Motor Controller
+│   ├── README.md                          # BTS7960 wiring pinout & Bluetooth protocol guide
+│   └── firmware/                          # Modular & single-file C++ driver source
+
+
 ├── urdf/
 │   ├── single_servo.urdf                 # 1-DOF servo URDF model
 │   ├── robot_arm.urdf                    # 5-DOF robotic arm URDF model
