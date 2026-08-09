@@ -25,20 +25,26 @@ import xml.etree.ElementTree as ET
 import urllib.request
 import urllib.parse
 import threading
+import re
+import random
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QSlider, QDoubleSpinBox, QPushButton, QGroupBox,
     QScrollArea, QMessageBox, QSplitter, QTextEdit, QLineEdit,
-    QTabWidget, QGridLayout
+    QTabWidget, QGridLayout, QComboBox
 )
 from PyQt5.QtCore import Qt, QTimer, QProcess, QProcessEnvironment, pyqtSignal
 from PyQt5.QtGui import QFont, QWindow, QTextCursor
 
-import rclpy
-from rclpy.node import Node
-from sensor_msgs.msg import JointState
-from std_msgs.msg import String as StringMsg
+try:
+    import rclpy
+    from rclpy.node import Node
+    from sensor_msgs.msg import JointState
+    from std_msgs.msg import String as StringMsg
+    ROS2_AVAILABLE = True
+except ImportError:
+    ROS2_AVAILABLE = False
 
 CALIB_FILE_PATH = "/home/chakradhar/Documents/Hardware/servo_calibration.json"
 URDF_PATH = "/home/chakradhar/Documents/Hardware/urdf/unnamed/urdf/unnamed_gazebo.urdf"
@@ -618,6 +624,387 @@ class QuardBotWidget(QWidget):
         self.console_log.moveCursor(QTextCursor.End)
 
 
+class ESP32SensorNodeWidget(QWidget):
+    update_data_signal = pyqtSignal(dict)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.main_gui = parent
+
+        self.sensor_state = {
+            "temperature": 24.5,
+            "humidity": 48.0,
+            "dht_error": False,
+            "accel": {"x": 0.12, "y": -0.05, "z": 9.81},
+            "gyro": {"x": 0.01, "y": 0.00, "z": -0.02},
+            "pitch": -0.3,
+            "roll": 0.7,
+            "gas": 415,
+            "air_quality": "Clean",
+            "connected": False,
+            "simulating": True,
+            "port": "/dev/ttyUSB0",
+            "baudrate": 115200,
+            "raw_log": []
+        }
+
+        self.serial_thread = None
+        self.update_data_signal.connect(self.on_data_updated)
+
+        self.init_ui()
+
+        # Timer to drive simulation when hardware serial is not connected
+        self.sim_timer = QTimer(self)
+        self.sim_timer.timeout.connect(self.sim_tick)
+        self.sim_timer.start(1000)
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+
+        # 1. Connection Header Box
+        conn_box = QGroupBox("🔌 ESP32 Sensor Serial / Stream Connection")
+        conn_box.setStyleSheet("""
+            QGroupBox { font-weight: bold; font-size: 13px; border: 1px solid #444; border-radius: 6px; margin-top: 6px; padding-top: 10px; background-color: #2b2b2b; color: #4da6ff; }
+            QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; color: #4da6ff; }
+        """)
+        conn_layout = QHBoxLayout(conn_box)
+
+        lbl_port = QLabel("Port:")
+        lbl_port.setStyleSheet("color: #aaaaaa; font-weight: bold;")
+        self.combo_port = QComboBox()
+        self.combo_port.addItems(["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyACM0", "/dev/ttyACM1"])
+        self.combo_port.setStyleSheet("background-color: #1e1e1e; color: #ffffff; padding: 4px; border: 1px solid #555; border-radius: 4px;")
+
+        lbl_baud = QLabel("Baud:")
+        lbl_baud.setStyleSheet("color: #aaaaaa; font-weight: bold;")
+        self.combo_baud = QComboBox()
+        self.combo_baud.addItems(["115200", "9600", "57600", "230400"])
+        self.combo_baud.setStyleSheet("background-color: #1e1e1e; color: #ffffff; padding: 4px; border: 1px solid #555; border-radius: 4px;")
+
+        self.btn_connect = QPushButton("Connect Serial")
+        self.btn_connect.setStyleSheet("QPushButton { background-color: #0284c7; color: white; font-weight: bold; padding: 6px 12px; border-radius: 4px; } QPushButton:hover { background-color: #0369a1; }")
+        self.btn_connect.clicked.connect(self.toggle_serial_connection)
+
+        self.btn_sim = QPushButton("▶️ Simulating Data")
+        self.btn_sim.setStyleSheet("QPushButton { background-color: #d97706; color: white; font-weight: bold; padding: 6px 12px; border-radius: 4px; } QPushButton:hover { background-color: #b45309; }")
+        self.btn_sim.clicked.connect(self.toggle_sim)
+
+        self.lbl_status = QLabel("Simulating")
+        self.lbl_status.setStyleSheet("background-color: #064e3b; color: #34d399; font-weight: bold; padding: 4px 10px; border-radius: 4px;")
+
+        conn_layout.addWidget(lbl_port)
+        conn_layout.addWidget(self.combo_port)
+        conn_layout.addWidget(lbl_baud)
+        conn_layout.addWidget(self.combo_baud)
+        conn_layout.addWidget(self.btn_connect)
+        conn_layout.addWidget(self.btn_sim)
+        conn_layout.addStretch()
+        conn_layout.addWidget(self.lbl_status)
+
+        layout.addWidget(conn_box)
+
+        # 2. Main Metrics Grid
+        grid_splitter = QSplitter(Qt.Horizontal)
+
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+
+        # DHT11 Box
+        dht_box = QGroupBox("🌡️ DHT11 Climate Sensor")
+        dht_box.setStyleSheet("""
+            QGroupBox { font-weight: bold; font-size: 13px; border: 1px solid #444; border-radius: 6px; margin-top: 6px; padding-top: 10px; background-color: #2b2b2b; color: #38bdf8; }
+            QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; color: #38bdf8; }
+        """)
+        dht_layout = QGridLayout(dht_box)
+
+        lbl_t_name = QLabel("Temperature:")
+        lbl_t_name.setStyleSheet("color: #cccccc; font-weight: bold; font-size: 13px;")
+        self.lbl_temp_val = QLabel("24.50 °C (76.10 °F)")
+        self.lbl_temp_val.setFont(QFont("Monospace", 14, QFont.Bold))
+        self.lbl_temp_val.setStyleSheet("color: #38bdf8; background-color: #18181b; padding: 6px 10px; border-radius: 4px; border: 1px solid #27272a;")
+
+        lbl_h_name = QLabel("Humidity:")
+        lbl_h_name.setStyleSheet("color: #cccccc; font-weight: bold; font-size: 13px;")
+        self.lbl_hum_val = QLabel("48.00 %")
+        self.lbl_hum_val.setFont(QFont("Monospace", 14, QFont.Bold))
+        self.lbl_hum_val.setStyleSheet("color: #34d399; background-color: #18181b; padding: 6px 10px; border-radius: 4px; border: 1px solid #27272a;")
+
+        self.lbl_dht_status = QLabel("DHT11: OK")
+        self.lbl_dht_status.setStyleSheet("background-color: #064e3b; color: #34d399; font-weight: bold; padding: 4px 8px; border-radius: 4px;")
+
+        dht_layout.addWidget(lbl_t_name, 0, 0)
+        dht_layout.addWidget(self.lbl_temp_val, 0, 1)
+        dht_layout.addWidget(lbl_h_name, 1, 0)
+        dht_layout.addWidget(self.lbl_hum_val, 1, 1)
+        dht_layout.addWidget(self.lbl_dht_status, 2, 0, 1, 2)
+
+        left_layout.addWidget(dht_box)
+
+        # MQ-5 Gas Box
+        gas_box = QGroupBox("💨 MQ-5 Combustible Gas Sensor")
+        gas_box.setStyleSheet("""
+            QGroupBox { font-weight: bold; font-size: 13px; border: 1px solid #444; border-radius: 6px; margin-top: 6px; padding-top: 10px; background-color: #2b2b2b; color: #fbbf24; }
+            QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; color: #fbbf24; }
+        """)
+        gas_layout = QVBoxLayout(gas_box)
+
+        gas_row = QHBoxLayout()
+        lbl_g_name = QLabel("Analog Gas Value:")
+        lbl_g_name.setStyleSheet("color: #cccccc; font-weight: bold; font-size: 13px;")
+        self.lbl_gas_val = QLabel("415 / 4095")
+        self.lbl_gas_val.setFont(QFont("Monospace", 14, QFont.Bold))
+        self.lbl_gas_val.setStyleSheet("color: #fbbf24; background-color: #18181b; padding: 6px 10px; border-radius: 4px; border: 1px solid #27272a;")
+
+        gas_row.addWidget(lbl_g_name)
+        gas_row.addStretch()
+        gas_row.addWidget(self.lbl_gas_val)
+        gas_layout.addLayout(gas_row)
+
+        self.lbl_gas_badge = QLabel("🟢 Clean Air")
+        self.lbl_gas_badge.setStyleSheet("background-color: #064e3b; color: #34d399; font-weight: bold; font-size: 12px; padding: 6px 12px; border-radius: 4px; alignment: center;")
+        gas_layout.addWidget(self.lbl_gas_badge)
+
+        left_layout.addWidget(gas_box)
+        left_layout.addStretch()
+
+        grid_splitter.addWidget(left_widget)
+
+        # Right Widget: MPU6050 & Console Log
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+
+        # MPU6050 Box
+        mpu_box = QGroupBox("🧭 MPU6050 6-DOF IMU (Motion & Tilt)")
+        mpu_box.setStyleSheet("""
+            QGroupBox { font-weight: bold; font-size: 13px; border: 1px solid #444; border-radius: 6px; margin-top: 6px; padding-top: 10px; background-color: #2b2b2b; color: #a78bfa; }
+            QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; color: #a78bfa; }
+        """)
+        mpu_layout = QGridLayout(mpu_box)
+
+        lbl_accel = QLabel("Accel (m/s²):")
+        lbl_accel.setStyleSheet("color: #aaaaaa; font-weight: bold;")
+        self.lbl_accel_val = QLabel("X: 0.12  |  Y: -0.05  |  Z: 9.81")
+        self.lbl_accel_val.setFont(QFont("Monospace", 11, QFont.Bold))
+        self.lbl_accel_val.setStyleSheet("color: #a78bfa; background-color: #18181b; padding: 6px 10px; border-radius: 4px;")
+
+        lbl_gyro = QLabel("Gyro (rad/s):")
+        lbl_gyro.setStyleSheet("color: #aaaaaa; font-weight: bold;")
+        self.lbl_gyro_val = QLabel("X: 0.010 |  Y: 0.000  |  Z: -0.020")
+        self.lbl_gyro_val.setFont(QFont("Monospace", 11, QFont.Bold))
+        self.lbl_gyro_val.setStyleSheet("color: #a78bfa; background-color: #18181b; padding: 6px 10px; border-radius: 4px;")
+
+        lbl_tilt = QLabel("Estimated Tilt:")
+        lbl_tilt.setStyleSheet("color: #aaaaaa; font-weight: bold;")
+        self.lbl_tilt_val = QLabel("Pitch: -0.3°   |   Roll: 0.7°")
+        self.lbl_tilt_val.setFont(QFont("Monospace", 12, QFont.Bold))
+        self.lbl_tilt_val.setStyleSheet("color: #38bdf8; background-color: #0c4a6e; padding: 6px 10px; border-radius: 4px;")
+
+        mpu_layout.addWidget(lbl_accel, 0, 0)
+        mpu_layout.addWidget(self.lbl_accel_val, 0, 1)
+        mpu_layout.addWidget(lbl_gyro, 1, 0)
+        mpu_layout.addWidget(self.lbl_gyro_val, 1, 1)
+        mpu_layout.addWidget(lbl_tilt, 2, 0)
+        mpu_layout.addWidget(self.lbl_tilt_val, 2, 1)
+
+        right_layout.addWidget(mpu_box)
+
+        # Telemetry Log Box
+        log_box = QGroupBox("📜 ESP32 Serial Telemetry Stream Console")
+        log_box.setStyleSheet("""
+            QGroupBox { font-weight: bold; font-size: 12px; border: 1px solid #333; border-radius: 6px; margin-top: 6px; padding-top: 8px; background-color: #141414; color: #38bdf8; }
+            QGroupBox::title { subcontrol-origin: margin; padding: 0 4px; color: #38bdf8; }
+        """)
+        log_layout = QVBoxLayout(log_box)
+
+        self.log_console = QTextEdit()
+        self.log_console.setReadOnly(True)
+        self.log_console.setFont(QFont("Monospace", 9))
+        self.log_console.setStyleSheet("QTextEdit { background-color: #09090b; color: #38bdf8; border: 1px solid #27272a; border-radius: 4px; padding: 4px; }")
+
+        log_layout.addWidget(self.log_console)
+        right_layout.addWidget(log_box, 1)
+
+        grid_splitter.addWidget(right_widget)
+        grid_splitter.setSizes([450, 650])
+        layout.addWidget(grid_splitter, 1)
+
+    def sim_tick(self):
+        if not self.sensor_state["simulating"]:
+            return
+
+        t = time.time()
+        temp = round(24.5 + 1.2 * math.sin(0.2 * t), 2)
+        hum = round(48.0 + 3.5 * math.cos(0.15 * t), 2)
+        ax = round(0.4 * math.sin(0.5 * t), 2)
+        ay = round(0.3 * math.cos(0.4 * t), 2)
+        az = round(9.81 + 0.1 * math.sin(0.8 * t), 2)
+        gx = round(0.02 * math.sin(0.6 * t), 3)
+        gy = round(0.01 * math.cos(0.5 * t), 3)
+        gz = round(-0.01 * math.sin(0.3 * t), 3)
+        gas = int(410 + 25 * math.sin(0.1 * t) + random.randint(-4, 4))
+
+        block = [
+            "========== SENSOR DATA ==========",
+            f"Temperature: {temp:.2f} °C",
+            f"Humidity: {hum:.2f} %",
+            "MPU6050:",
+            f"Accel X: {ax:.2f} | Y: {ay:.2f} | Z: {az:.2f} m/s^2",
+            f"Gyro X: {gx:.3f} | Y: {gy:.3f} | Z: {gz:.3f} rad/s",
+            f"MQ-5 Analog: {gas}",
+            "================================="
+        ]
+
+        for line in block:
+            self.parse_sensor_line(line)
+
+        self.update_data_signal.emit(self.sensor_state)
+
+    def parse_sensor_line(self, line):
+        line = line.strip()
+        if not line:
+            return
+
+        self.sensor_state["raw_log"].append(line)
+        if len(self.sensor_state["raw_log"]) > 100:
+            self.sensor_state["raw_log"].pop(0)
+
+        # 1. DHT11
+        if "DHT11: ERROR" in line:
+            self.sensor_state["dht_error"] = True
+        else:
+            m_temp = re.search(r"Temperature:\s*([-\d\.]+)", line)
+            if m_temp:
+                self.sensor_state["temperature"] = float(m_temp.group(1))
+                self.sensor_state["dht_error"] = False
+
+            m_hum = re.search(r"Humidity:\s*([-\d\.]+)", line)
+            if m_hum:
+                self.sensor_state["humidity"] = float(m_hum.group(1))
+                self.sensor_state["dht_error"] = False
+
+        # 2. MPU6050
+        m_accel = re.search(r"Accel X:\s*([-\d\.]+)\s*\|\s*Y:\s*([-\d\.]+)\s*\|\s*Z:\s*([-\d\.]+)", line)
+        if m_accel:
+            ax = float(m_accel.group(1))
+            ay = float(m_accel.group(2))
+            az = float(m_accel.group(3))
+            self.sensor_state["accel"] = {"x": ax, "y": ay, "z": az}
+
+            if az != 0 or ay != 0 or ax != 0:
+                pitch_rad = math.atan2(ay, math.sqrt(ax**2 + az**2))
+                roll_rad = math.atan2(-ax, az)
+                self.sensor_state["pitch"] = round(pitch_rad * (180.0 / math.pi), 1)
+                self.sensor_state["roll"] = round(roll_rad * (180.0 / math.pi), 1)
+
+        m_gyro = re.search(r"Gyro X:\s*([-\d\.]+)\s*\|\s*Y:\s*([-\d\.]+)\s*\|\s*Z:\s*([-\d\.]+)", line)
+        if m_gyro:
+            gx = float(m_gyro.group(1))
+            gy = float(m_gyro.group(2))
+            gz = float(m_gyro.group(3))
+            self.sensor_state["gyro"] = {"x": gx, "y": gy, "z": gz}
+
+        # 3. MQ-5
+        m_gas = re.search(r"MQ-5 Analog:\s*(\d+)", line)
+        if m_gas:
+            gas_val = int(m_gas.group(1))
+            self.sensor_state["gas"] = gas_val
+            if gas_val < 600:
+                self.sensor_state["air_quality"] = "Clean"
+            elif gas_val < 1500:
+                self.sensor_state["air_quality"] = "Moderate"
+            else:
+                self.sensor_state["air_quality"] = "Danger"
+
+    def on_data_updated(self, data):
+        tempC = data.get("temperature", 24.5)
+        tempF = (tempC * 9/5) + 32
+        hum = data.get("humidity", 48.0)
+
+        self.lbl_temp_val.setText(f"{tempC:.2f} °C ({tempF:.2f} °F)")
+        self.lbl_hum_val.setText(f"{hum:.2f} %")
+
+        if data.get("dht_error"):
+            self.lbl_dht_status.setText("DHT11: ERROR")
+            self.lbl_dht_status.setStyleSheet("background-color: #4c0519; color: #f43f5e; font-weight: bold; padding: 4px 8px; border-radius: 4px;")
+        else:
+            self.lbl_dht_status.setText("DHT11: OK")
+            self.lbl_dht_status.setStyleSheet("background-color: #064e3b; color: #34d399; font-weight: bold; padding: 4px 8px; border-radius: 4px;")
+
+        gas_val = data.get("gas", 415)
+        self.lbl_gas_val.setText(f"{gas_val} / 4095")
+        air_q = data.get("air_quality", "Clean")
+        if air_q == "Danger":
+            self.lbl_gas_badge.setText("⚠️ GAS ALERT! High Level Detected!")
+            self.lbl_gas_badge.setStyleSheet("background-color: #4c0519; color: #f43f5e; font-weight: bold; font-size: 12px; padding: 6px 12px; border-radius: 4px;")
+        elif air_q == "Moderate":
+            self.lbl_gas_badge.setText("🟡 Moderate Gas Reading")
+            self.lbl_gas_badge.setStyleSheet("background-color: #78350f; color: #fbbf24; font-weight: bold; font-size: 12px; padding: 6px 12px; border-radius: 4px;")
+        else:
+            self.lbl_gas_badge.setText("🟢 Clean Air Quality")
+            self.lbl_gas_badge.setStyleSheet("background-color: #064e3b; color: #34d399; font-weight: bold; font-size: 12px; padding: 6px 12px; border-radius: 4px;")
+
+        acc = data.get("accel", {"x":0,"y":0,"z":9.81})
+        gy = data.get("gyro", {"x":0,"y":0,"z":0})
+        pitch = data.get("pitch", 0.0)
+        roll = data.get("roll", 0.0)
+
+        self.lbl_accel_val.setText(f"X: {acc['x']:.2f}  |  Y: {acc['y']:.2f}  |  Z: {acc['z']:.2f}")
+        self.lbl_gyro_val.setText(f"X: {gy['x']:.3f}  |  Y: {gy['y']:.3f}  |  Z: {gy['z']:.3f}")
+        self.lbl_tilt_val.setText(f"Pitch: {pitch:.1f}°   |   Roll: {roll:.1f}°")
+
+        if data.get("raw_log"):
+            self.log_console.setPlainText("\n".join(data["raw_log"][-40:]))
+            self.log_console.moveCursor(QTextCursor.End)
+
+    def toggle_sim(self):
+        self.sensor_state["simulating"] = not self.sensor_state["simulating"]
+        if self.sensor_state["simulating"]:
+            self.btn_sim.setText("▶️ Simulating Data")
+            self.lbl_status.setText("Simulating")
+            self.lbl_status.setStyleSheet("background-color: #064e3b; color: #34d399; font-weight: bold; padding: 4px 10px; border-radius: 4px;")
+        else:
+            self.btn_sim.setText("⏸️ Simulation Paused")
+            self.lbl_status.setText("Paused")
+            self.lbl_status.setStyleSheet("background-color: #4c0519; color: #f43f5e; font-weight: bold; padding: 4px 10px; border-radius: 4px;")
+
+    def toggle_serial_connection(self):
+        port = self.combo_port.currentText()
+        baud = int(self.combo_baud.currentText())
+
+        if self.sensor_state["connected"]:
+            self.sensor_state["connected"] = False
+            self.btn_connect.setText("Connect Serial")
+            self.lbl_status.setText("Disconnected")
+            self.lbl_status.setStyleSheet("background-color: #4c0519; color: #f43f5e; font-weight: bold; padding: 4px 10px; border-radius: 4px;")
+        else:
+            self.sensor_state["connected"] = True
+            self.sensor_state["simulating"] = False
+            self.btn_connect.setText("Disconnect Serial")
+            self.btn_sim.setText("▶️ Simulating Data")
+            self.lbl_status.setText(f"Hardware Serial ({port})")
+            self.lbl_status.setStyleSheet("background-color: #064e3b; color: #34d399; font-weight: bold; padding: 4px 10px; border-radius: 4px;")
+
+            def serial_reader_loop():
+                try:
+                    import serial
+                    with serial.Serial(port, baud, timeout=1.0) as s:
+                        while self.sensor_state["connected"]:
+                            raw_bytes = s.readline()
+                            if raw_bytes:
+                                line = raw_bytes.decode('utf-8', errors='ignore')
+                                self.parse_sensor_line(line)
+                                self.update_data_signal.emit(self.sensor_state)
+                except Exception:
+                    self.sensor_state["connected"] = False
+                    self.update_data_signal.emit(self.sensor_state)
+
+            threading.Thread(target=serial_reader_loop, daemon=True).start()
+
+
 class CalibratedJointPublisherGUI(QMainWindow):
 
     def __init__(self, ros_node):
@@ -909,9 +1296,11 @@ class CalibratedJointPublisherGUI(QMainWindow):
         arm_layout.addWidget(main_splitter)
 
         self.quard_bot_widget = QuardBotWidget(self)
+        self.sensor_node_widget = ESP32SensorNodeWidget(self)
 
         self.tabs.addTab(arm_dashboard_widget, "🦾 Robot Arm Dashboard")
         self.tabs.addTab(self.quard_bot_widget, "🤖 Quard Bot (Quadruped)")
+        self.tabs.addTab(self.sensor_node_widget, "🌡️ ESP32 Sensor Node")
 
         self.setCentralWidget(self.tabs)
 
@@ -1319,43 +1708,49 @@ class CalibratedJointPublisherGUI(QMainWindow):
         self.ros_node.joint_pub.publish(msg)
 
 
-class CalibratedGUINode(Node):
+if ROS2_AVAILABLE:
+    class CalibratedGUINode(Node):
+        def __init__(self):
+            super().__init__('calibrated_joint_gui')
+            self.gui_ref = None
+            self.joint_pub = self.create_publisher(JointState, '/joint_states', 10)
+            self.calib_pub = self.create_publisher(StringMsg, '/servo_calibration', 10)
 
-    def __init__(self):
-        super().__init__('calibrated_joint_gui')
-        self.gui_ref = None
-        self.joint_pub = self.create_publisher(JointState, '/joint_states', 10)
-        self.calib_pub = self.create_publisher(StringMsg, '/servo_calibration', 10)
+            # Subscribe to ESP32 connection status messages
+            self.status_sub = self.create_subscription(
+                StringMsg,
+                '/esp32_connection_status',
+                self.status_callback,
+                10
+            )
+            # Subscribe to /joint_states to mirror active gesture pose on GUI sliders
+            self.joint_sub = self.create_subscription(
+                JointState,
+                '/joint_states',
+                self.joint_states_callback,
+                10
+            )
+            self.get_logger().info("Calibrated Joint Publisher GUI Node initialized.")
 
-        # Subscribe to ESP32 connection status messages
-        self.status_sub = self.create_subscription(
-            StringMsg,
-            '/esp32_connection_status',
-            self.status_callback,
-            10
-        )
-        # Subscribe to /joint_states to mirror active gesture pose on GUI sliders
-        self.joint_sub = self.create_subscription(
-            JointState,
-            '/joint_states',
-            self.joint_states_callback,
-            10
-        )
-        self.get_logger().info("Calibrated Joint Publisher GUI Node initialized.")
+        def joint_states_callback(self, msg: JointState):
+            if self.gui_ref and self.gui_ref.is_gesture_mode:
+                self.gui_ref.update_sliders_from_ros(msg)
 
-    def joint_states_callback(self, msg: JointState):
-        if self.gui_ref and self.gui_ref.is_gesture_mode:
-            self.gui_ref.update_sliders_from_ros(msg)
+        def status_callback(self, msg: StringMsg):
+            if self.gui_ref:
+                self.gui_ref.update_connection_status(msg.data)
 
-    def status_callback(self, msg: StringMsg):
-        if self.gui_ref:
-            self.gui_ref.update_connection_status(msg.data)
-
-    def publish_calibration(self, calib_str):
-        msg = StringMsg()
-        msg.data = calib_str
-        self.calib_pub.publish(msg)
-        self.get_logger().info(f"Broadcasted Calibration: {calib_str}")
+        def publish_calibration(self, calib_str):
+            msg = StringMsg()
+            msg.data = calib_str
+            self.calib_pub.publish(msg)
+            self.get_logger().info(f"Broadcasted Calibration: {calib_str}")
+else:
+    class CalibratedGUINode:
+        def __init__(self):
+            self.gui_ref = None
+        def publish_calibration(self, calib_str):
+            pass
 
 
 def main(args=None):

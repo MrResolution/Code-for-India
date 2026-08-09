@@ -16,9 +16,16 @@ const JOINTS = [
 ];
 
 let scene, camera, renderer, controls;
-let robotMeshes = {};
-let jointState = {};
-let isSimulating = false;
+let sensorState = {
+  temperature: 24.5,
+  humidity: 48.0,
+  pitch: 0,
+  roll: 0,
+  gas: 415,
+  simulating: true,
+  connected: false,
+  raw_log: []
+};
 
 // Initialize Application
 document.addEventListener('DOMContentLoaded', () => {
@@ -26,8 +33,10 @@ document.addEventListener('DOMContentLoaded', () => {
   buildJointControls();
   setupTabs();
   initQuardBotControls();
+  initSensorControls();
   setupEventListeners();
   startStatePolling();
+  startSensorPolling();
 });
 
 // ── Three.js 3D Viewport Setup ─────────────────────────────────────────────
@@ -166,23 +175,56 @@ function loadRobotModel() {
     mesh.position.set(0, 260, 0);
     robotMeshes.gripper.add(mesh);
   });
+
+  // 7. MPU6050 IMU Sensor Module Visual
+  const boxGeom = new THREE.BoxGeometry(70, 12, 45);
+  const boxMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.2, metalness: 0.8 });
+  const sensorMesh = new THREE.Mesh(boxGeom, boxMat);
+  sensorMesh.castShadow = true;
+
+  const chipGeom = new THREE.BoxGeometry(18, 4, 18);
+  const chipMat = new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.1, metalness: 0.9 });
+  const chipMesh = new THREE.Mesh(chipGeom, chipMat);
+  chipMesh.position.set(0, 8, 0);
+  sensorMesh.add(chipMesh);
+
+  robotMeshes.sensorGroup = new THREE.Group();
+  robotMeshes.sensorGroup.position.set(0, 50, 0);
+  robotMeshes.sensorGroup.add(sensorMesh);
+  robotMeshes.sensorGroup.visible = false;
+  scene.add(robotMeshes.sensorGroup);
 }
 
 function animate() {
   requestAnimationFrame(animate);
   controls.update();
 
-  // Apply real-time joint rotations to 3D meshes
-  if (robotMeshes.turntable) {
-    const yawDeg = jointState['turntable_link_joint_dup'] || 90.0;
-    const shoulderDeg = jointState['turntable_link_joint'] || 59.0;
-    const elbowDeg = jointState['turntable_link_joint_dup_1'] || 153.1;
-    const wristDeg = jointState['turntable_link_joint_dup_3'] || 90.0;
+  // Mode 1: Sensor Node active - show 3D IMU module tilting with MPU6050 pitch/roll
+  if (activeTab === 'sensors') {
+    if (robotMeshes.base) robotMeshes.base.visible = false;
+    if (robotMeshes.sensorGroup) {
+      robotMeshes.sensorGroup.visible = true;
+      const pRad = (sensorState.pitch || 0) * (Math.PI / 180.0);
+      const rRad = (sensorState.roll || 0) * (Math.PI / 180.0);
+      robotMeshes.sensorGroup.rotation.x = pRad;
+      robotMeshes.sensorGroup.rotation.z = rRad;
+    }
+  } else {
+    // Mode 2: Arm / Quard Bot active - show robot arm meshes
+    if (robotMeshes.base) robotMeshes.base.visible = true;
+    if (robotMeshes.sensorGroup) robotMeshes.sensorGroup.visible = false;
 
-    robotMeshes.turntable.rotation.y = (yawDeg - 90.0) * (Math.PI / 180.0);
-    robotMeshes.shoulder.rotation.z = (shoulderDeg - 59.0) * (Math.PI / 180.0);
-    robotMeshes.forearm.rotation.z = (elbowDeg - 153.1) * (Math.PI / 180.0);
-    robotMeshes.wrist.rotation.x = (wristDeg - 90.0) * (Math.PI / 180.0);
+    if (robotMeshes.turntable) {
+      const yawDeg = jointState['turntable_link_joint_dup'] || 90.0;
+      const shoulderDeg = jointState['turntable_link_joint'] || 59.0;
+      const elbowDeg = jointState['turntable_link_joint_dup_1'] || 153.1;
+      const wristDeg = jointState['turntable_link_joint_dup_3'] || 90.0;
+
+      robotMeshes.turntable.rotation.y = (yawDeg - 90.0) * (Math.PI / 180.0);
+      robotMeshes.shoulder.rotation.z = (shoulderDeg - 59.0) * (Math.PI / 180.0);
+      robotMeshes.forearm.rotation.z = (elbowDeg - 153.1) * (Math.PI / 180.0);
+      robotMeshes.wrist.rotation.x = (wristDeg - 90.0) * (Math.PI / 180.0);
+    }
   }
 
   renderer.render(scene, camera);
@@ -414,26 +456,32 @@ let activeTab = 'arm';
 function setupTabs() {
   const btnArm = document.getElementById('tab-btn-arm');
   const btnQuard = document.getElementById('tab-btn-quard');
+  const btnSensors = document.getElementById('tab-btn-sensors');
+
   const panelArm = document.getElementById('panel-arm-control');
   const panelQuard = document.getElementById('panel-quard-control');
+  const panelSensors = document.getElementById('panel-sensors-control');
 
-  if (btnArm && btnQuard) {
-    btnArm.addEventListener('click', () => {
-      activeTab = 'arm';
-      btnArm.classList.add('active');
-      btnQuard.classList.remove('active');
-      panelArm.classList.add('active');
-      panelQuard.classList.remove('active');
-    });
+  function setActive(tabName, btn, panel) {
+    activeTab = tabName;
+    [btnArm, btnQuard, btnSensors].forEach(b => b && b.classList.remove('active'));
+    [panelArm, panelQuard, panelSensors].forEach(p => p && p.classList.remove('active'));
 
+    if (btn) btn.classList.add('active');
+    if (panel) panel.classList.add('active');
+  }
+
+  if (btnArm) {
+    btnArm.addEventListener('click', () => setActive('arm', btnArm, panelArm));
+  }
+  if (btnQuard) {
     btnQuard.addEventListener('click', () => {
-      activeTab = 'quard';
-      btnQuard.classList.add('active');
-      btnArm.classList.remove('active');
-      panelQuard.classList.add('active');
-      panelArm.classList.remove('active');
+      setActive('quard', btnQuard, panelQuard);
       pingQuardBot();
     });
+  }
+  if (btnSensors) {
+    btnSensors.addEventListener('click', () => setActive('sensors', btnSensors, panelSensors));
   }
 }
 
@@ -608,4 +656,169 @@ function updateQuardStatusPill(online) {
     dot.parentElement.className = online ? 'node-badge status-online' : 'node-badge status-offline';
     text.innerText = online ? 'Connected' : 'Disconnected';
   }
+}
+
+// ── ESP32 Sensor Node Telemetry & Controls ────────────────────────────────
+function initSensorControls() {
+  const btnConnect = document.getElementById('btn-sensor-connect');
+  const btnSim = document.getElementById('btn-sensors-sim');
+  const btnClear = document.getElementById('btn-clear-sensor-log');
+
+  if (btnConnect) {
+    btnConnect.addEventListener('click', () => {
+      const port = document.getElementById('sensor-serial-port').value;
+      const baud = parseInt(document.getElementById('sensor-serial-baud').value);
+
+      fetch('/api/sensors/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ port: port, baudrate: baud })
+      })
+      .then(res => res.json())
+      .then(data => {
+        alert(`🔌 Connecting to ESP32 on ${port} @ ${baud} baud...`);
+      });
+    });
+  }
+
+  if (btnSim) {
+    btnSim.addEventListener('click', () => {
+      sensorState.simulating = !sensorState.simulating;
+      btnSim.innerText = sensorState.simulating ? '▶️ Simulating Data' : '⏸️ Stop Simulation';
+      btnSim.className = sensorState.simulating ? 'btn btn-warning btn-sm' : 'btn btn-secondary btn-sm';
+
+      fetch('/api/sensors/sim', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ simulating: sensorState.simulating })
+      });
+    });
+  }
+
+  if (btnClear) {
+    btnClear.addEventListener('click', () => {
+      const consoleLog = document.getElementById('sensor-console-log');
+      if (consoleLog) consoleLog.innerText = '';
+    });
+  }
+}
+
+function startSensorPolling() {
+  setInterval(() => {
+    fetch('/api/sensors/data')
+      .then(res => res.json())
+      .then(data => {
+        if (!data) return;
+        sensorState = data;
+
+        // Update DHT11
+        const tempC = data.temperature !== undefined ? data.temperature : 24.5;
+        const tempF = (tempC * 9/5) + 32;
+        const hum = data.humidity !== undefined ? data.humidity : 48.0;
+
+        const elTemp = document.getElementById('val-temp');
+        const elTempF = document.getElementById('val-temp-f');
+        const elHum = document.getElementById('val-humidity');
+        const meterTemp = document.getElementById('meter-temp');
+        const meterHum = document.getElementById('meter-humidity');
+        const badgeDht = document.getElementById('badge-dht-status');
+
+        if (elTemp) elTemp.innerText = `${tempC.toFixed(2)} °C`;
+        if (elTempF) elTempF.innerText = `(${tempF.toFixed(2)} °F)`;
+        if (elHum) elHum.innerText = `${hum.toFixed(2)} %`;
+        if (meterTemp) meterTemp.style.width = `${Math.min(100, Math.max(0, (tempC / 50) * 100))}%`;
+        if (meterHum) meterHum.style.width = `${Math.min(100, Math.max(0, hum))}%`;
+
+        if (badgeDht) {
+          if (data.dht_error) {
+            badgeDht.className = 'status-pill status-offline';
+            badgeDht.innerText = 'ERROR';
+          } else {
+            badgeDht.className = 'status-pill status-online';
+            badgeDht.innerText = 'OK';
+          }
+        }
+
+        // Update MQ-5 Gas
+        const gasVal = data.gas !== undefined ? data.gas : 415;
+        const elGas = document.getElementById('val-gas');
+        const meterGas = document.getElementById('meter-gas');
+        const badgeGas = document.getElementById('badge-gas-status');
+
+        if (elGas) elGas.innerText = `${gasVal} / 4095`;
+        if (meterGas) {
+          const pct = Math.min(100, Math.max(0, (gasVal / 4095) * 100));
+          meterGas.style.width = `${pct.toFixed(1)}%`;
+          if (gasVal > 1500) {
+            meterGas.className = 'meter-fill meter-gas-danger';
+          } else if (gasVal > 600) {
+            meterGas.className = 'meter-fill meter-gas-warning';
+          } else {
+            meterGas.className = 'meter-fill meter-gas-fill';
+          }
+        }
+        if (badgeGas) {
+          if (data.air_quality === 'Danger') {
+            badgeGas.className = 'status-pill status-offline';
+            badgeGas.innerText = '⚠️ GAS ALERT!';
+          } else if (data.air_quality === 'Moderate') {
+            badgeGas.className = 'status-pill';
+            badgeGas.style.backgroundColor = '#fef3c7';
+            badgeGas.style.color = '#d97706';
+            badgeGas.innerText = 'Moderate';
+          } else {
+            badgeGas.className = 'status-pill status-online';
+            badgeGas.innerText = 'Clean Air';
+          }
+        }
+
+        // Update MPU6050
+        const accel = data.accel || { x: 0, y: 0, z: 9.81 };
+        const gyro = data.gyro || { x: 0, y: 0, z: 0 };
+        const pitch = data.pitch !== undefined ? data.pitch : 0.0;
+        const roll = data.roll !== undefined ? data.roll : 0.0;
+
+        const elAx = document.getElementById('val-accel-x');
+        const elAy = document.getElementById('val-accel-y');
+        const elAz = document.getElementById('val-accel-z');
+        const elGx = document.getElementById('val-gyro-x');
+        const elGy = document.getElementById('val-gyro-y');
+        const elGz = document.getElementById('val-gyro-z');
+        const elPitch = document.getElementById('val-pitch');
+        const elRoll = document.getElementById('val-roll');
+
+        if (elAx) elAx.innerText = accel.x.toFixed(2);
+        if (elAy) elAy.innerText = accel.y.toFixed(2);
+        if (elAz) elAz.innerText = accel.z.toFixed(2);
+        if (elGx) elGx.innerText = gyro.x.toFixed(3);
+        if (elGy) elGy.innerText = gyro.y.toFixed(3);
+        if (elGz) elGz.innerText = gyro.z.toFixed(3);
+        if (elPitch) elPitch.innerText = `${pitch.toFixed(1)}°`;
+        if (elRoll) elRoll.innerText = `${roll.toFixed(1)}°`;
+
+        // Update Console Log
+        const elConsole = document.getElementById('sensor-console-log');
+        if (elConsole && data.raw_log && data.raw_log.length > 0) {
+          elConsole.innerText = data.raw_log.slice(-30).join('\n');
+          elConsole.scrollTop = elConsole.scrollHeight;
+        }
+
+        // Update Header Badge
+        const textNode = document.getElementById('status-sensornode-text');
+        const dotNode = document.getElementById('dot-sensornode');
+        if (textNode && dotNode) {
+          if (data.simulating) {
+            textNode.innerText = 'Simulating';
+            dotNode.parentElement.className = 'node-badge status-online';
+          } else if (data.connected) {
+            textNode.innerText = 'Hardware Serial';
+            dotNode.parentElement.className = 'node-badge status-online';
+          } else {
+            textNode.innerText = 'Disconnected';
+            dotNode.parentElement.className = 'node-badge status-offline';
+          }
+        }
+      })
+      .catch(err => {});
+  }, 100); // 10 Hz telemetry sync
 }

@@ -81,9 +81,9 @@ class ServoSerialCommander(Node):
 
         mode_str = f"📶 Wi-Fi UDP ({self.esp32_ip}:{self.udp_port})" if self.use_wifi else f"🔌 USB Serial ({self.port})"
         self.get_logger().info(
-            f"5-Physical-Servo Arm Commander Initializing...\n"
+            f"6-Physical-Servo Arm Commander Initializing...\n"
             f"  Communication Mode: {mode_str}\n"
-            f"  Active 4 URDF Control Joints:\n"
+            f"  Active Servo Control Joints:\n"
             + "\n".join([
                 f"    • '{j}' [GPIO {c['pin']}]: range=[{c['servo_min_deg']}°, {c['servo_max_deg']}°]"
                 for j, c in self.joint_calib.items()
@@ -184,22 +184,23 @@ class ServoSerialCommander(Node):
                 self.get_logger().info("📶 Commander actively switched to Wi-Fi UDP mode.")
             return
 
-        if text.startswith('CALIB:'):
+        if text.startswith('CMD:') or text.startswith('CALIB:'):
             self.write_raw_data(text + "\n")
-            try:
-                payload = text[6:]
-                eq_idx = payload.find('=')
-                if eq_idx > 0:
-                    j_name = payload[:eq_idx]
-                    limits = payload[eq_idx+1:].split(',')
-                    if len(limits) == 2:
-                        min_deg, max_deg = float(limits[0]), float(limits[1])
-                        if j_name in self.joint_calib:
-                            self.joint_calib[j_name]['servo_min_deg'] = min_deg
-                            self.joint_calib[j_name]['servo_max_deg'] = max_deg
-                            self.get_logger().info(f"⚙️ Live Limits Updated for '{j_name}': [{min_deg}°, {max_deg}°]")
-            except Exception as e:
-                self.get_logger().error(f"Error parsing calibration string: {e}")
+            if text.startswith('CALIB:'):
+                try:
+                    payload = text[6:]
+                    eq_idx = payload.find('=')
+                    if eq_idx > 0:
+                        j_name = payload[:eq_idx]
+                        limits = payload[eq_idx+1:].split(',')
+                        if len(limits) == 2:
+                            min_deg, max_deg = float(limits[0]), float(limits[1])
+                            if j_name in self.joint_calib:
+                                self.joint_calib[j_name]['servo_min_deg'] = min_deg
+                                self.joint_calib[j_name]['servo_max_deg'] = max_deg
+                                self.get_logger().info(f"⚙️ Live Limits Updated for '{j_name}': [{min_deg}°, {max_deg}°]")
+                except Exception as e:
+                    self.get_logger().error(f"Error parsing calibration string: {e}")
 
     def connect_serial(self):
         """Establish non-blocking serial connection to ESP32."""

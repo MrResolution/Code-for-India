@@ -34,6 +34,10 @@
           <span class="dot" id="dot-quardbot"></span>
           <span>ESP32 #2 (Quard Bot): <strong id="status-quardbot-text">Connecting...</strong></span>
         </div>
+        <div class="node-badge status-online" id="badge-sensornode">
+          <span class="dot" id="dot-sensornode"></span>
+          <span>ESP32 #3 (Sensors): <strong id="status-sensornode-text">Simulating</strong></span>
+        </div>
       </div>
 
       <!-- Communication Mode Toggle -->
@@ -60,6 +64,7 @@
         <div class="tab-nav">
           <button id="tab-btn-arm" class="tab-btn active">🦾 Robotic Arm</button>
           <button id="tab-btn-quard" class="tab-btn">🤖 Quard Bot (Quadruped)</button>
+          <button id="tab-btn-sensors" class="tab-btn">🌡️ ESP32 Sensor Node</button>
         </div>
 
         <!-- PANEL 1: Robotic Arm Control -->
@@ -192,6 +197,106 @@
               <div id="quard-channels-list" class="quard-channels-list">
                 <!-- Dynamically populated 8-channel servo rows -->
               </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- PANEL 3: ESP32 Sensor Node (DHT11, MPU6050, MQ-5) -->
+        <div id="panel-sensors-control" class="tab-panel">
+          <div class="tile-header">
+            <h2>🌡️ ESP32 Sensor Node Telemetry</h2>
+            <button id="btn-sensors-sim" class="btn btn-warning btn-sm">▶️ Simulating Data</button>
+          </div>
+
+          <div class="scroll-container">
+            <!-- Connection & Telemetry Settings Card -->
+            <div class="card sensor-conn-card">
+              <div class="card-title">🔌 ESP32 Serial / Stream Connection</div>
+              <div class="serial-controls">
+                <select id="sensor-serial-port" class="form-input">
+                  <option value="/dev/ttyUSB0">/dev/ttyUSB0 (ESP32 USB)</option>
+                  <option value="/dev/ttyUSB1">/dev/ttyUSB1</option>
+                  <option value="/dev/ttyACM0">/dev/ttyACM0 (NodeMCU)</option>
+                </select>
+                <select id="sensor-serial-baud" class="form-input">
+                  <option value="115200">115200 Baud</option>
+                  <option value="9600">9600 Baud</option>
+                </select>
+                <button id="btn-sensor-connect" class="btn btn-primary btn-sm">Connect Serial</button>
+              </div>
+            </div>
+
+            <!-- DHT11 Climate Card -->
+            <div class="card sensor-data-card">
+              <div class="card-title flex-between">
+                <span>🌡️ DHT11 Temperature & Humidity</span>
+                <span id="badge-dht-status" class="status-pill status-online">OK</span>
+              </div>
+              <div class="sensor-metrics-grid">
+                <div class="metric-box">
+                  <span class="metric-label">Temperature</span>
+                  <span id="val-temp" class="metric-val">24.50 °C</span>
+                  <span id="val-temp-f" class="metric-subval">(76.10 °F)</span>
+                  <div class="meter-bar"><div id="meter-temp" class="meter-fill" style="width: 49%"></div></div>
+                </div>
+                <div class="metric-box">
+                  <span class="metric-label">Relative Humidity</span>
+                  <span id="val-humidity" class="metric-val">48.00 %</span>
+                  <span class="metric-subval">Comfort Zone</span>
+                  <div class="meter-bar"><div id="meter-humidity" class="meter-fill" style="width: 48%"></div></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- MQ-5 Combustible Gas Card -->
+            <div class="card sensor-data-card">
+              <div class="card-title flex-between">
+                <span>💨 MQ-5 Gas & Air Quality Sensor</span>
+                <span id="badge-gas-status" class="status-pill status-online">Clean Air</span>
+              </div>
+              <div class="sensor-single-metric">
+                <div class="metric-row">
+                  <span class="metric-label">Analog Gas Reading:</span>
+                  <span id="val-gas" class="readout-pill">415 / 4095</span>
+                </div>
+                <div class="meter-bar meter-lg"><div id="meter-gas" class="meter-fill meter-gas-fill" style="width: 10%"></div></div>
+              </div>
+            </div>
+
+            <!-- MPU6050 IMU Motion Card -->
+            <div class="card sensor-data-card">
+              <div class="card-title flex-between">
+                <span>🧭 MPU6050 6-DOF IMU (Motion & Tilt)</span>
+                <span id="badge-imu-status" class="status-pill status-online">Active</span>
+              </div>
+              <div class="imu-grid">
+                <div class="imu-col">
+                  <h4>Accelerometer (m/s²)</h4>
+                  <div class="axis-row"><span>X:</span><strong id="val-accel-x">0.12</strong></div>
+                  <div class="axis-row"><span>Y:</span><strong id="val-accel-y">-0.05</strong></div>
+                  <div class="axis-row"><span>Z:</span><strong id="val-accel-z">9.81</strong></div>
+                </div>
+                <div class="imu-col">
+                  <h4>Gyroscope (rad/s)</h4>
+                  <div class="axis-row"><span>X:</span><strong id="val-gyro-x">0.01</strong></div>
+                  <div class="axis-row"><span>Y:</span><strong id="val-gyro-y">0.00</strong></div>
+                  <div class="axis-row"><span>Z:</span><strong id="val-gyro-z">-0.02</strong></div>
+                </div>
+                <div class="imu-col imu-col-tilt">
+                  <h4>Estimated Tilt</h4>
+                  <div class="axis-row"><span>Pitch:</span><strong id="val-pitch">-0.3°</strong></div>
+                  <div class="axis-row"><span>Roll:</span><strong id="val-roll">0.7°</strong></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Live ESP32 Serial Console Log -->
+            <div class="card terminal-card">
+              <div class="card-title flex-between">
+                <span>📜 ESP32 Live Telemetry Log</span>
+                <button id="btn-clear-sensor-log" class="btn btn-outline btn-xs">Clear Console</button>
+              </div>
+              <pre id="sensor-console-log" class="terminal-log">Connecting to ESP32 Telemetry Stream...</pre>
             </div>
           </div>
         </div>

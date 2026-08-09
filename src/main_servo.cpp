@@ -32,18 +32,20 @@ struct ServoJoint {
   bool isMirroredSlave; // If true, automatically mirrors master joint angle (180.0 - deg)
 };
 
-// Define all 5 physical robotic arm servos mapped to ESP32 GPIO pins:
+// Define all 6 physical robotic arm servos mapped to ESP32 GPIO pins:
 // 1. Servo 1: GPIO 18 (Base Turntable - turntable_link_joint_dup)
 // 2. Servo 2: GPIO 19 (Shoulder Pitch Master - turntable_link_joint)
 // 3. Servo 3: GPIO 21 (Shoulder Pitch Mirrored Slave - turntable_link_joint_slave)
 // 4. Servo 4: GPIO 22 (Elbow 1 Pitch - turntable_link_joint_dup_1)
 // 5. Servo 5: GPIO 23 (Elbow 2 Pitch - turntable_link_joint_dup_2)
+// 6. Servo 6: GPIO 27 (Wrist Twist - wrist_twist_joint)
 ServoJoint joints[] = {
   { "turntable_link_joint_dup",   18, Servo(), 90.0, 90.0, 0.0, 180.0, 0.0, false },
   { "turntable_link_joint",       19, Servo(), 90.0, 90.0, 0.0, 180.0, 0.0, false }, // Primary Shoulder
   { "turntable_link_joint_slave", 21, Servo(), 90.0, 90.0, 0.0, 180.0, 0.0, true  }, // Opposing Mirrored Shoulder
   { "turntable_link_joint_dup_1", 22, Servo(), 90.0, 90.0, 0.0, 180.0, 0.0, false },
-  { "turntable_link_joint_dup_2", 23, Servo(), 90.0, 90.0, 0.0, 180.0, 0.0, false }
+  { "turntable_link_joint_dup_2", 23, Servo(), 90.0, 90.0, 0.0, 180.0, 0.0, false },
+  { "wrist_twist_joint",          27, Servo(), 90.0, 90.0, 0.0, 180.0, 0.0, false }  // Wrist Twist Servo
 };
 
 const int NUM_JOINTS = sizeof(joints) / sizeof(joints[0]);
@@ -184,10 +186,10 @@ void setup() {
   delay(1000);
 
   Serial.println("\n==================================================");
-  Serial.println("  ESP32 5-Servo Dual Mirrored Arm Controller     ");
+  Serial.println("  ESP32 6-Servo Dual Mirrored Arm Controller     ");
   Serial.println("==================================================");
 
-  // Initialize all 5 physical servos
+  // Initialize all 6 physical servos
   for (int i = 0; i < NUM_JOINTS; i++) {
 #if defined(ESP32)
     joints[i].servoObj.setPeriodHertz(50);

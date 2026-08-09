@@ -11,27 +11,27 @@
     "servo_max_deg": 91.4,
     "trim_deg": 0.0,
     "invert": false,
-    "home_deg": 16.6
+    "home_deg": 9.3
   },
   "turntable_link_joint_dup_1": {
     "servo_min_deg": 30.4,
     "servo_max_deg": 180.0,
     "trim_deg": 0.0,
     "invert": false,
-    "home_deg": 180.0
+    "home_deg": 176.3
   },
   "turntable_link_joint_dup_2": {
-    "servo_min_deg": 52.7,
-    "servo_max_deg": 84.0,
+    "servo_min_deg": 55.7,
+    "servo_max_deg": 90.7,
     "trim_deg": 0.0,
     "invert": false,
-    "home_deg": 58.3
+    "home_deg": 56.7
   },
   "wrist_twist_joint": {
     "servo_min_deg": 0.0,
-    "servo_max_deg": 180.0,
+    "servo_max_deg": 177.0,
     "trim_deg": 0.0,
     "invert": false,
-    "home_deg": 90.0
+    "home_deg": 10.6
   }
 }
