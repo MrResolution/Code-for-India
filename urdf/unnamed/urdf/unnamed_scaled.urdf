@@ -3,6 +3,33 @@
   <material name="None">
     <color rgba="0.6 0.6 0.6 1.0" />
     </material>
+  <material name="DarkSteel">
+    <color rgba="0.22 0.24 0.28 1.0" />
+    </material>
+  <material name="Copper">
+    <color rgba="0.72 0.45 0.20 1.0" />
+    </material>
+  <material name="Teal">
+    <color rgba="0.10 0.56 0.62 1.0" />
+    </material>
+  <material name="Cyan">
+    <color rgba="0.18 0.68 0.76 1.0" />
+    </material>
+  <material name="Gold">
+    <color rgba="0.85 0.65 0.13 1.0" />
+    </material>
+  <material name="Gunmetal">
+    <color rgba="0.32 0.34 0.36 1.0" />
+    </material>
+  <material name="OrangeRod">
+    <color rgba="0.90 0.45 0.10 1.0" />
+    </material>
+  <material name="RedTip">
+    <color rgba="0.85 0.18 0.18 1.0" />
+    </material>
+  <material name="Silver">
+    <color rgba="0.75 0.75 0.78 1.0" />
+    </material>
   <link name="world" />
   <joint name="fixed_base" type="fixed">
     <parent link="world" />
@@ -86,16 +113,16 @@
     </joint>
   <link name="basecase1_link">
     <visual name="basecase1">
-      <material name="None" />
+      <material name="DarkSteel" />
       <origin rpy="0.00000 0.00000 -0.00000" xyz="-0.00000 -0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/part_3_obj3.stl" scale="0.00100 0.00100 0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_3_obj3.stl" scale="0.00100 0.00100 0.00100" />
         </geometry>
       </visual>
     <collision name="basecase1_collision">
       <origin rpy="0.00000 0.00000 -0.00000" xyz="-0.00000 -0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/part_3_obj3.stl" scale="0.00100 0.00100 0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_3_obj3.stl" scale="0.00100 0.00100 0.00100" />
         </geometry>
       </collision>
     <inertial>
@@ -106,16 +133,16 @@
     </link>
   <link name="turntable_link">
     <visual name="TrunTable">
-      <material name="None" />
+      <material name="Copper" />
       <origin rpy="-1.04042 -1.54565 -0.52117" xyz="0.00000 0.00000 -0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/part_44_obj44.stl" scale="0.00100 0.00100 0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_44_obj44.stl" scale="0.00100 0.00100 0.00100" />
         </geometry>
       </visual>
     <collision name="TrunTable_collision">
       <origin rpy="-1.04042 -1.54565 -0.52117" xyz="0.00000 0.00000 -0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/part_44_obj44.stl" scale="0.00100 0.00100 0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_44_obj44.stl" scale="0.00100 0.00100 0.00100" />
         </geometry>
       </collision>
     <inertial>
@@ -126,16 +153,16 @@
     </link>
   <link name="Gripper+Rod+Geared_right_link">
     <visual name="Gripper+Rod+Geared_right">
-      <material name="None" />
+      <material name="OrangeRod" />
       <origin rpy="-0.00000 0.00000 -0.00000" xyz="0.00000 -0.00000 -0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.001.stl" scale="0.00100 -0.00100 -0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.001.stl" scale="0.00100 -0.00100 -0.00100" />
         </geometry>
       </visual>
     <collision name="Gripper+Rod+Geared_right_collision">
       <origin rpy="-0.00000 0.00000 -0.00000" xyz="0.00000 -0.00000 -0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.001.stl" scale="0.00100 -0.00100 -0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.001.stl" scale="0.00100 -0.00100 -0.00100" />
         </geometry>
       </collision>
     <inertial>
@@ -146,16 +173,16 @@
     </link>
   <link name="Gripper+finger+Geared_right_link">
     <visual name="Gripper+finger+Geared_right">
-      <material name="None" />
+      <material name="RedTip" />
       <origin rpy="0.00000 -0.00000 0.00000" xyz="0.00000 0.00000 -0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.002.stl" scale="0.00100 -0.00100 -0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.002.stl" scale="0.00100 -0.00100 -0.00100" />
         </geometry>
       </visual>
     <collision name="Gripper+finger+Geared_right_collision">
       <origin rpy="0.00000 -0.00000 0.00000" xyz="0.00000 0.00000 -0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.002.stl" scale="0.00100 -0.00100 -0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.002.stl" scale="0.00100 -0.00100 -0.00100" />
         </geometry>
       </collision>
     <inertial>
@@ -166,16 +193,16 @@
     </link>
   <link name="Elbow_1_link">
     <visual name="Elbow 1">
-      <material name="None" />
+      <material name="Teal" />
       <origin rpy="0.00000 0.00000 0.00000" xyz="0.00000 -0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/part_7_obj7.stl" scale="0.00100 0.00100 0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_7_obj7.stl" scale="0.00100 0.00100 0.00100" />
         </geometry>
       </visual>
     <collision name="Elbow 1_collision">
       <origin rpy="0.00000 0.00000 0.00000" xyz="0.00000 -0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/part_7_obj7.stl" scale="0.00100 0.00100 0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_7_obj7.stl" scale="0.00100 0.00100 0.00100" />
         </geometry>
       </collision>
     <inertial>
@@ -186,16 +213,16 @@
     </link>
   <link name="Elbow_2_link">
     <visual name="Elbow 2">
-      <material name="None" />
+      <material name="Cyan" />
       <origin rpy="0.00000 0.00000 -0.00000" xyz="0.00000 0.00000 -0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/part_9_obj9.stl" scale="0.00100 0.00100 0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_9_obj9.stl" scale="0.00100 0.00100 0.00100" />
         </geometry>
       </visual>
     <collision name="Elbow 2_collision">
       <origin rpy="0.00000 0.00000 -0.00000" xyz="0.00000 0.00000 -0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/part_9_obj9.stl" scale="0.00100 0.00100 0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_9_obj9.stl" scale="0.00100 0.00100 0.00100" />
         </geometry>
       </collision>
     <inertial>
@@ -206,16 +233,16 @@
     </link>
   <link name="Wrist_pitch._link">
     <visual name="Wrist_pitch.">
-      <material name="None" />
+      <material name="Gold" />
       <origin rpy="0.00000 -0.00000 0.00000" xyz="0.00000 -0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Robot_Arm_Wrist.stl" scale="0.00100 0.00100 0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Robot_Arm_Wrist.stl" scale="0.00100 0.00100 0.00100" />
         </geometry>
       </visual>
     <collision name="Wrist_pitch._collision">
       <origin rpy="0.00000 -0.00000 0.00000" xyz="0.00000 -0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Robot_Arm_Wrist.stl" scale="0.00100 0.00100 0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Robot_Arm_Wrist.stl" scale="0.00100 0.00100 0.00100" />
         </geometry>
       </collision>
     <inertial>
@@ -226,16 +253,16 @@
     </link>
   <link name="gripper_base_link">
     <visual name="gripper_base">
-      <material name="None" />
+      <material name="Gunmetal" />
       <origin rpy="0.00000 -0.00000 -0.00000" xyz="0.00000 0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/mg996r-v17.005.stl" scale="0.00100 0.00100 -0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/mg996r-v17.005.stl" scale="0.00100 0.00100 -0.00100" />
         </geometry>
       </visual>
     <collision name="gripper_base_collision">
       <origin rpy="0.00000 -0.00000 -0.00000" xyz="0.00000 0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/mg996r-v17.005.stl" scale="0.00100 0.00100 -0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/mg996r-v17.005.stl" scale="0.00100 0.00100 -0.00100" />
         </geometry>
       </collision>
     <inertial>
@@ -246,16 +273,16 @@
     </link>
   <link name="left_parallel_link">
     <visual name="left_parallel">
-      <material name="None" />
+      <material name="Silver" />
       <origin rpy="0.00000 0.00000 0.00000" xyz="-0.00000 -0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod.001.stl" scale="-0.00100 -0.00100 -0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod.001.stl" scale="-0.00100 -0.00100 -0.00100" />
         </geometry>
       </visual>
     <collision name="left_parallel_collision">
       <origin rpy="0.00000 0.00000 0.00000" xyz="-0.00000 -0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod.001.stl" scale="-0.00100 -0.00100 -0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod.001.stl" scale="-0.00100 -0.00100 -0.00100" />
         </geometry>
       </collision>
     <inertial>
@@ -266,16 +293,16 @@
     </link>
   <link name="right_parallel_link">
     <visual name="right_parallel">
-      <material name="None" />
+      <material name="Silver" />
       <origin rpy="0.00000 -0.00000 -0.00000" xyz="0.00000 -0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod.002.stl" scale="0.00100 -0.00100 -0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod.002.stl" scale="0.00100 -0.00100 -0.00100" />
         </geometry>
       </visual>
     <collision name="right_parallel_collision">
       <origin rpy="0.00000 -0.00000 -0.00000" xyz="0.00000 -0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod.002.stl" scale="0.00100 -0.00100 -0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod.002.stl" scale="0.00100 -0.00100 -0.00100" />
         </geometry>
       </collision>
     <inertial>
@@ -286,16 +313,16 @@
     </link>
   <link name="Gripper+Rod+Geared_left_link">
     <visual name="Gripper+Rod+Geared_left">
-      <material name="None" />
+      <material name="OrangeRod" />
       <origin rpy="0.00000 0.00000 -0.00000" xyz="-0.00000 0.00000 -0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.stl" scale="-0.00100 -0.00100 -0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.stl" scale="-0.00100 -0.00100 -0.00100" />
         </geometry>
       </visual>
     <collision name="Gripper+Rod+Geared_left_collision">
       <origin rpy="0.00000 0.00000 -0.00000" xyz="-0.00000 0.00000 -0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.stl" scale="-0.00100 -0.00100 -0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.stl" scale="-0.00100 -0.00100 -0.00100" />
         </geometry>
       </collision>
     <inertial>
@@ -306,16 +333,16 @@
     </link>
   <link name="Gripper+finger+Geared_left_link">
     <visual name="Gripper+finger+Geared_left">
-      <material name="None" />
+      <material name="RedTip" />
       <origin rpy="0.00000 0.00000 -0.00000" xyz="0.00000 0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.003.stl" scale="-0.00100 -0.00100 -0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.003.stl" scale="-0.00100 -0.00100 -0.00100" />
         </geometry>
       </visual>
     <collision name="Gripper+finger+Geared_left_collision">
       <origin rpy="0.00000 0.00000 -0.00000" xyz="0.00000 0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.003.stl" scale="-0.00100 -0.00100 -0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.003.stl" scale="-0.00100 -0.00100 -0.00100" />
         </geometry>
       </collision>
     <inertial>

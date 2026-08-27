@@ -7,7 +7,7 @@ from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
-    urdf_path = '/home/chakradhar/Documents/Hardware/urdf/unnamed/urdf/unnamed_gazebo.urdf'
+    urdf_path = '/home/sabo/Documents/learn_/Hardware/urdf/unnamed/urdf/unnamed_gazebo.urdf'
 
     with open(urdf_path, 'r') as f:
         robot_desc = f.read()

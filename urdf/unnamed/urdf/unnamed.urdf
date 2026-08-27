@@ -81,7 +81,7 @@
       <material name="None"/>
       <origin rpy="0.00000 0.00000 -0.00000" xyz="-0.00000 -0.00000 0.00000"/>
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/part_3_obj3.stl" scale="0.00100 0.00100 0.00100"/>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_3_obj3.stl" scale="0.00100 0.00100 0.00100"/>
       </geometry>
     </visual>
   </link>
@@ -90,7 +90,7 @@
       <material name="None"/>
       <origin rpy="-1.04042 -1.54565 -0.52117" xyz="0.00000 0.00000 -0.00000"/>
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/part_44_obj44.stl" scale="0.00100 0.00100 0.00100"/>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_44_obj44.stl" scale="0.00100 0.00100 0.00100"/>
       </geometry>
     </visual>
   </link>
@@ -99,7 +99,7 @@
       <material name="None"/>
       <origin rpy="-0.00000 0.00000 -0.00000" xyz="0.00000 -0.00000 -0.00000"/>
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.001.stl" scale="0.00100 -0.00100 -0.00100"/>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.001.stl" scale="0.00100 -0.00100 -0.00100"/>
       </geometry>
     </visual>
   </link>
@@ -108,7 +108,7 @@
       <material name="None"/>
       <origin rpy="0.00000 -0.00000 0.00000" xyz="0.00000 0.00000 -0.00000"/>
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.002.stl" scale="0.00100 -0.00100 -0.00100"/>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.002.stl" scale="0.00100 -0.00100 -0.00100"/>
       </geometry>
     </visual>
   </link>
@@ -117,7 +117,7 @@
       <material name="None"/>
       <origin rpy="0.00000 0.00000 0.00000" xyz="0.00000 -0.00000 0.00000"/>
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/part_7_obj7.stl" scale="0.00100 0.00100 0.00100"/>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_7_obj7.stl" scale="0.00100 0.00100 0.00100"/>
       </geometry>
     </visual>
   </link>
@@ -126,7 +126,7 @@
       <material name="None"/>
       <origin rpy="0.00000 0.00000 -0.00000" xyz="0.00000 0.00000 -0.00000"/>
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/part_9_obj9.stl" scale="0.00100 0.00100 0.00100"/>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_9_obj9.stl" scale="0.00100 0.00100 0.00100"/>
       </geometry>
     </visual>
   </link>
@@ -135,7 +135,7 @@
       <material name="None"/>
       <origin rpy="0.00000 -0.00000 0.00000" xyz="0.00000 -0.00000 0.00000"/>
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Robot_Arm_Wrist.stl" scale="0.00100 0.00100 0.00100"/>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Robot_Arm_Wrist.stl" scale="0.00100 0.00100 0.00100"/>
       </geometry>
     </visual>
   </link>
@@ -144,7 +144,7 @@
       <material name="None"/>
       <origin rpy="0.00000 -0.00000 -0.00000" xyz="0.00000 0.00000 0.00000"/>
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/mg996r-v17.005.stl" scale="0.00100 0.00100 -0.00100"/>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/mg996r-v17.005.stl" scale="0.00100 0.00100 -0.00100"/>
       </geometry>
     </visual>
   </link>
@@ -153,7 +153,7 @@
       <material name="None"/>
       <origin rpy="0.00000 0.00000 0.00000" xyz="-0.00000 -0.00000 0.00000"/>
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod.001.stl" scale="-0.00100 -0.00100 -0.00100"/>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod.001.stl" scale="-0.00100 -0.00100 -0.00100"/>
       </geometry>
     </visual>
   </link>
@@ -162,7 +162,7 @@
       <material name="None"/>
       <origin rpy="0.00000 -0.00000 -0.00000" xyz="0.00000 -0.00000 0.00000"/>
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod.002.stl" scale="0.00100 -0.00100 -0.00100"/>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod.002.stl" scale="0.00100 -0.00100 -0.00100"/>
       </geometry>
     </visual>
   </link>
@@ -171,7 +171,7 @@
       <material name="None"/>
       <origin rpy="0.00000 0.00000 -0.00000" xyz="-0.00000 0.00000 -0.00000"/>
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.stl" scale="-0.00100 -0.00100 -0.00100"/>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.stl" scale="-0.00100 -0.00100 -0.00100"/>
       </geometry>
     </visual>
   </link>
@@ -180,7 +180,7 @@
       <material name="None"/>
       <origin rpy="0.00000 0.00000 -0.00000" xyz="0.00000 0.00000 0.00000"/>
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.003.stl" scale="-0.00100 -0.00100 -0.00100"/>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Gripper_Rod_Geared___1_.003.stl" scale="-0.00100 -0.00100 -0.00100"/>
       </geometry>
     </visual>
   </link>

@@ -63,13 +63,13 @@
       </material>
       <origin rpy="0.00000 0.00000 0.00000" xyz="0.00000 0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/part_3_obj3.stl" scale="0.00100 0.00100 0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_3_obj3.stl" scale="0.00100 0.00100 0.00100" />
       </geometry>
     </visual>
     <collision name="basecase1_col">
       <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/part_3_obj3.stl" scale="0.00100 0.00100 0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_3_obj3.stl" scale="0.00100 0.00100 0.00100" />
       </geometry>
     </collision>
     <inertial>
@@ -86,13 +86,13 @@
       </material>
       <origin rpy="-1.04042 -1.54565 -0.52117" xyz="0.00000 0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/part_44_obj44.stl" scale="0.00100 0.00100 0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_44_obj44.stl" scale="0.00100 0.00100 0.00100" />
       </geometry>
     </visual>
     <collision name="TrunTable_col">
       <origin xyz="0.00000 0.00000 0.00000" rpy="-1.04042 -1.54565 -0.52117" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/part_44_obj44.stl" scale="0.00100 0.00100 0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_44_obj44.stl" scale="0.00100 0.00100 0.00100" />
       </geometry>
     </collision>
     <inertial>
@@ -109,13 +109,13 @@
       </material>
       <origin rpy="0.00000 0.00000 0.00000" xyz="0.00000 0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/part_7_obj7.stl" scale="0.00100 0.00100 0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_7_obj7.stl" scale="0.00100 0.00100 0.00100" />
       </geometry>
     </visual>
     <collision name="Elbow 1_col">
       <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/part_7_obj7.stl" scale="0.00100 0.00100 0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_7_obj7.stl" scale="0.00100 0.00100 0.00100" />
       </geometry>
     </collision>
     <inertial>
@@ -132,13 +132,13 @@
       </material>
       <origin rpy="0.00000 0.00000 0.00000" xyz="0.00000 0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/part_9_obj9.stl" scale="0.00100 0.00100 0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_9_obj9.stl" scale="0.00100 0.00100 0.00100" />
       </geometry>
     </visual>
     <collision name="Elbow 2_col">
       <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/part_9_obj9.stl" scale="0.00100 0.00100 0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/part_9_obj9.stl" scale="0.00100 0.00100 0.00100" />
       </geometry>
     </collision>
     <inertial>
@@ -155,13 +155,13 @@
       </material>
       <origin rpy="0.00000 0.00000 0.00000" xyz="0.00000 0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Robot_Arm_Wrist.stl" scale="0.00100 0.00100 0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Robot_Arm_Wrist.stl" scale="0.00100 0.00100 0.00100" />
       </geometry>
     </visual>
     <collision name="Wrist_pitch._col">
       <origin xyz="0.00000 0.00000 0.00000" rpy="0.00000 0.00000 0.00000" />
       <geometry>
-        <mesh filename="file:///home/chakradhar/Documents/Hardware/urdf/unnamed/meshes/stl/Robot_Arm_Wrist.stl" scale="0.00100 0.00100 0.00100" />
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/Robot_Arm_Wrist.stl" scale="0.00100 0.00100 0.00100" />
       </geometry>
     </collision>
     <inertial>

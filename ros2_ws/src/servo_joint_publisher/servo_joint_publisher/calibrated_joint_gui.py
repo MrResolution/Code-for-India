@@ -46,8 +46,8 @@ try:
 except ImportError:
     ROS2_AVAILABLE = False
 
-CALIB_FILE_PATH = "/home/chakradhar/Documents/Hardware/servo_calibration.json"
-URDF_PATH = "/home/chakradhar/Documents/Hardware/urdf/unnamed/urdf/unnamed_gazebo.urdf"
+CALIB_FILE_PATH = "/home/sabo/Documents/learn_/Hardware/servo_calibration.json"
+URDF_PATH = "/home/sabo/Documents/learn_/Hardware/urdf/unnamed/urdf/unnamed_gazebo.urdf"
 
 # Default Homing Pose requested by user for the 4 URDF arm joints:
 DEFAULT_HOME_DEGS = {
@@ -1329,7 +1329,8 @@ class CalibratedJointPublisherGUI(QMainWindow):
         self.sim_configs = [
             ('turntable_link_joint_dup',   0.15, 0.0),
             ('turntable_link_joint',       0.20, math.pi / 3),
-            ('turntable_link_joint_dup_1', 0.25, math.pi / 1.5)
+            ('turntable_link_joint_dup_1', 0.25, math.pi / 1.5),
+            ('turntable_link_joint_dup_2', 0.35, math.pi / 3),
         ]
 
         self.log_to_console("🚀 Dashboard Hardware & Wi-Fi Monitor Initialized.")
@@ -1370,7 +1371,7 @@ class CalibratedJointPublisherGUI(QMainWindow):
 
     def init_rviz_embed(self):
         """Spawn RViz2 as child process and schedule embedding."""
-        rviz_config = "/home/chakradhar/Documents/Hardware/urdf/unnamed/robot.rviz"
+        rviz_config = "/home/sabo/Documents/learn_/Hardware/urdf/unnamed/robot.rviz"
         self.rviz_process = QProcess(self)
 
         env = QProcessEnvironment.systemEnvironment()
