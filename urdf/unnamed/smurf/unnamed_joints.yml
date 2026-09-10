@@ -1,0 +1,180 @@
+{
+  "joints": [
+    {
+      "child": "L1-v117_link",
+      "constraint_axes": [],
+      "cut_joint": false,
+      "joint_dependencies": [],
+      "joint_type": "revolute",
+      "name": "joint_l1_hip",
+      "origin": {
+        "position": [
+          2.46389102935791,
+          2.583024024963379,
+          2.0363380908966064
+        ],
+        "relative_to": "Internal-Frame-v121_link",
+        "rotation": [
+          -3.2102442821819576e-17,
+          -1.5099588779321493e-07,
+          -5.642598921440218e-07
+        ]
+      },
+      "parent": "Internal-Frame-v121_link"
+    },
+    {
+      "child": "L3-v117_link",
+      "constraint_axes": [],
+      "cut_joint": false,
+      "joint_dependencies": [],
+      "joint_type": "revolute",
+      "name": "joint_l3_foot",
+      "origin": {
+        "position": [
+          -0.9338412284851074,
+          3.6884355545043945,
+          -1.9524199962615967
+        ],
+        "relative_to": "L1-v117_link",
+        "rotation": [
+          1.570796553288701,
+          2.40402671103368e-07,
+          1.5707969347658561
+        ]
+      },
+      "parent": "L1-v117_link"
+    },
+    {
+      "child": "L2-v117_link",
+      "constraint_axes": [],
+      "cut_joint": false,
+      "joint_dependencies": [],
+      "joint_type": "revolute",
+      "name": "joint_l2_hip",
+      "origin": {
+        "position": [
+          -2.395306348800659,
+          2.5832982063293457,
+          2.0363380908966064
+        ],
+        "relative_to": "Internal-Frame-v121_link",
+        "rotation": [
+          2.3841858576290065e-07,
+          -1.5099578498656285e-07,
+          3.1415925661669846
+        ]
+      },
+      "parent": "Internal-Frame-v121_link"
+    },
+    {
+      "child": "L4-v117_link",
+      "constraint_axes": [],
+      "cut_joint": false,
+      "joint_dependencies": [],
+      "joint_type": "revolute",
+      "name": "joint_l4_foot",
+      "origin": {
+        "position": [
+          0.6339819431304932,
+          -4.7017998695373535,
+          -1.6646907329559326
+        ],
+        "relative_to": "L2-v117_link",
+        "rotation": [
+          1.5597535370249158,
+          6.534935443891499e-07,
+          1.570796370506398
+        ]
+      },
+      "parent": "L2-v117_link"
+    },
+    {
+      "child": "R1-v117_link",
+      "constraint_axes": [],
+      "cut_joint": false,
+      "joint_dependencies": [],
+      "joint_type": "revolute",
+      "name": "joint_r1_hip",
+      "origin": {
+        "position": [
+          2.4649367332458496,
+          -2.5105624198913574,
+          2.0363388061523438
+        ],
+        "relative_to": "Internal-Frame-v121_link",
+        "rotation": [
+          -5.404101557360132e-07,
+          0.0,
+          2.220446049250313e-16
+        ]
+      },
+      "parent": "Internal-Frame-v121_link"
+    },
+    {
+      "child": "R3-v117_link",
+      "constraint_axes": [],
+      "cut_joint": false,
+      "joint_dependencies": [],
+      "joint_type": "revolute",
+      "name": "R3-v117_link_joint",
+      "origin": {
+        "position": [
+          -0.9414410591125488,
+          -3.6856071949005127,
+          -1.9530608654022217
+        ],
+        "relative_to": "R1-v117_link",
+        "rotation": [
+          1.5515630564884937,
+          -4.4958927669647153e-07,
+          1.570796370506283
+        ]
+      },
+      "parent": "R1-v117_link"
+    },
+    {
+      "child": "R2-v117_link",
+      "constraint_axes": [],
+      "cut_joint": false,
+      "joint_dependencies": [],
+      "joint_type": "revolute",
+      "name": "joint_r2_hip",
+      "origin": {
+        "position": [
+          -2.403423309326172,
+          -2.498649835586548,
+          2.036341667175293
+        ],
+        "relative_to": "Internal-Frame-v121_link",
+        "rotation": [
+          -1.7484556069646828e-07,
+          -1.5099578876132114e-07,
+          3.1415925661669872
+        ]
+      },
+      "parent": "Internal-Frame-v121_link"
+    },
+    {
+      "child": "R4-v117_link",
+      "constraint_axes": [],
+      "cut_joint": false,
+      "joint_dependencies": [],
+      "joint_type": "revolute",
+      "name": "joint_r4_foot",
+      "origin": {
+        "position": [
+          -0.9549762606620789,
+          3.673494338989258,
+          -1.95619797706604
+        ],
+        "relative_to": "R2-v117_link",
+        "rotation": [
+          1.5515623281433177,
+          3.1769937125503134e-08,
+          1.570796489715619
+        ]
+      },
+      "parent": "R2-v117_link"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "additional_files": {},
+  "description": "",
+  "files": [
+    "../urdf/unnamed.urdf",
+    "unnamed_joints.yml",
+    "unnamed_links.yml"
+  ],
+  "modelname": "unnamed",
+  "version": "0.0.0"
+}

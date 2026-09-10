@@ -1371,6 +1371,9 @@ class CalibratedJointPublisherGUI(QMainWindow):
 
     def init_rviz_embed(self):
         """Spawn RViz2 as child process and schedule embedding."""
+        import sys as sys
+        print("[Dashboard] init_rviz_embed: Starting RViz2 process...", file=sys.stderr, flush=True)
+
         rviz_config = "/home/sabo/Documents/learn_/Hardware/urdf/unnamed/robot.rviz"
         self.rviz_process = QProcess(self)
 
@@ -1382,60 +1385,154 @@ class CalibratedJointPublisherGUI(QMainWindow):
         self.rviz_process.start("ros2", ["run", "rviz2", "rviz2", "-d", rviz_config])
 
         self.already_docked = False
-        QTimer.singleShot(1500, self.embed_rviz_window)
-        QTimer.singleShot(3000, self.embed_rviz_window)
+        self._embed_attempt = 0
+        # Schedule multiple retry attempts with increasing delays
+        for delay_ms in [3000, 5000, 7000, 10000, 14000, 18000, 23000, 28000]:
+            QTimer.singleShot(delay_ms, self.embed_rviz_window)
+        print(f"[Dashboard] init_rviz_embed: Scheduled 8 embed attempts", file=sys.stderr, flush=True)
 
-    def embed_rviz_window(self):
-        """Locate X11 Window ID of spawned RViz process and reparent into container."""
-        if hasattr(self, 'already_docked') and self.already_docked:
-            return
+    def _find_rviz_x11_window(self):
+        """Find the main RViz2 X11 window ID using xdotool (without --onlyvisible for XWayland compat)."""
+        import sys as sys
+        try:
+            main_win_id = str(int(self.winId()))
+        except Exception as e:
+            print(f"[Dashboard] _find_rviz: Error getting main winId: {e}", file=sys.stderr, flush=True)
+            return None, []
 
-        if not self.isVisible() or not self.winId():
-            QTimer.singleShot(500, self.embed_rviz_window)
-            return
+        print(f"[Dashboard] _find_rviz: main_win_id={main_win_id}", file=sys.stderr, flush=True)
 
-        main_win_id = str(int(self.winId()))
-
+        # Search without --onlyvisible since it doesn't work under XWayland on Wayland compositors
         search_queries = [
-            ["xdotool", "search", "--onlyvisible", "--class", "rviz2"],
-            ["xdotool", "search", "--onlyvisible", "--class", "rviz"],
-            ["xdotool", "search", "--onlyvisible", "--name", "robot.rviz"],
-            ["xdotool", "search", "--onlyvisible", "--name", "RViz"]
+            ["xdotool", "search", "--name", "RViz"],
+            ["xdotool", "search", "--name", "robot.rviz"],
+            ["xdotool", "search", "--class", "rviz2"],
+            ["xdotool", "search", "--class", "rviz"],
         ]
 
-        rviz_win_id = None
         for cmd in search_queries:
             try:
-                out = subprocess.check_output(cmd).decode().strip()
+                out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, timeout=5).decode().strip()
                 if out:
-                    ids = [i for i in out.split('\n') if i.strip()]
+                    ids = [i.strip() for i in out.split('\n') if i.strip()]
                     valid_ids = [i for i in ids if i != main_win_id]
-                    if valid_ids:
-                        rviz_win_id = int(valid_ids[-1])
-                        break
-            except Exception:
+                    print(f"[Dashboard] _find_rviz: cmd={cmd[-1]}, found ids={ids}, valid={valid_ids}", file=sys.stderr, flush=True)
+                    if not valid_ids:
+                        continue
+
+                    # Pick the window whose WM_NAME contains "RViz" (the main viewport window)
+                    for wid in reversed(valid_ids):
+                        try:
+                            props = subprocess.check_output(
+                                ["xprop", "-id", wid, "WM_NAME"],
+                                stderr=subprocess.DEVNULL,
+                                timeout=3
+                            ).decode()
+                            if "RViz" in props or "robot.rviz" in props:
+                                print(f"[Dashboard] _find_rviz: Found RViz window {wid}: {props.strip()}", file=sys.stderr, flush=True)
+                                return int(wid), valid_ids
+                        except Exception:
+                            continue
+
+                    # Fallback: return last valid id
+                    print(f"[Dashboard] _find_rviz: Fallback to window {valid_ids[-1]}", file=sys.stderr, flush=True)
+                    return int(valid_ids[-1]), valid_ids
+            except subprocess.TimeoutExpired:
+                print(f"[Dashboard] _find_rviz: Timeout on {cmd}", file=sys.stderr, flush=True)
+                continue
+            except subprocess.CalledProcessError:
+                continue
+            except Exception as e:
+                print(f"[Dashboard] _find_rviz: Error on {cmd}: {e}", file=sys.stderr, flush=True)
                 continue
 
-        if rviz_win_id is not None:
-            try:
-                container_win_id = str(int(self.rviz_frame.winId()))
+        print(f"[Dashboard] _find_rviz: No RViz window found", file=sys.stderr, flush=True)
+        return None, []
 
-                for wid in valid_ids:
-                    if int(wid) != rviz_win_id:
-                        subprocess.call(["xdotool", "windowunmap", str(wid)])
+    def embed_rviz_window(self):
+        """Locate X11 Window ID of spawned RViz process and embed into container."""
+        import sys
 
-                subprocess.call(["xdotool", "windowreparent", str(rviz_win_id), container_win_id])
+        try:
+            if hasattr(self, 'already_docked') and self.already_docked:
+                return
 
-                qwin = QWindow.fromWinId(rviz_win_id)
-                qwin.setFlags(Qt.SubWindow | Qt.FramelessWindowHint)
+            self._embed_attempt = getattr(self, '_embed_attempt', 0) + 1
 
-                self.embedded_rviz_widget = QWidget.createWindowContainer(qwin, self.rviz_frame)
-                self.rviz_frame_layout.addWidget(self.embedded_rviz_widget)
+            if not self.isVisible():
+                QTimer.singleShot(1000, self.embed_rviz_window)
+                return
 
-                self.already_docked = True
-                self.log_to_console("✅ Integrated RViz 3D Viewport docked successfully.")
-            except Exception as e:
-                print(f"[Dashboard] RViz window embedding notice: {e}")
+            rviz_win_id, valid_ids = self._find_rviz_x11_window()
+
+            if rviz_win_id is not None:
+                try:
+                    # 1. Hide auxiliary RViz windows (toolbars, selection-owner, etc.)
+                    for wid in valid_ids:
+                        if int(wid) != rviz_win_id:
+                            try:
+                                subprocess.call(["xdotool", "windowunmap", str(wid)],
+                                                stderr=subprocess.DEVNULL, timeout=2)
+                            except Exception:
+                                pass
+
+                    # 2. Strip window decorations & set window type to utility so compositor allows embedding
+                    try:
+                        subprocess.call([
+                            "xprop", "-id", str(rviz_win_id), "-f", "_MOTIF_WM_HINTS", "32c",
+                            "-set", "_MOTIF_WM_HINTS", "2, 0, 0, 0, 0"
+                        ], stderr=subprocess.DEVNULL, timeout=2)
+                        subprocess.call([
+                            "xprop", "-id", str(rviz_win_id), "-f", "_NET_WM_WINDOW_TYPE", "32a",
+                            "-set", "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_UTILITY"
+                        ], stderr=subprocess.DEVNULL, timeout=2)
+                    except Exception:
+                        pass
+
+                    container_win_id = str(int(self.rviz_frame.winId()))
+                    self.rviz_win_id = rviz_win_id
+
+                    # 3. Perform native X11 reparent into container widget
+                    subprocess.call(["xdotool", "windowreparent", str(rviz_win_id), container_win_id], stderr=subprocess.DEVNULL, timeout=2)
+                    subprocess.call(["xdotool", "windowmap", str(rviz_win_id)], stderr=subprocess.DEVNULL, timeout=2)
+
+                    # 4. Wrap with Qt window container for layout management
+                    qwin = QWindow.fromWinId(rviz_win_id)
+                    qwin.setFlags(Qt.SubWindow | Qt.FramelessWindowHint)
+
+                    self.embedded_rviz_widget = QWidget.createWindowContainer(qwin, self.rviz_frame)
+                    self.rviz_frame_layout.addWidget(self.embedded_rviz_widget)
+
+                    self.already_docked = True
+                    self.log_to_console("✅ Integrated RViz 3D Viewport docked successfully.")
+
+                    # 5. Sync size & position
+                    QTimer.singleShot(100, self._resize_embedded_rviz)
+                    QTimer.singleShot(500, self._resize_embedded_rviz)
+                    QTimer.singleShot(1200, self._resize_embedded_rviz)
+                except Exception as e:
+                    print(f"[Dashboard] embed_rviz_window: ERROR: {e}", file=sys.stderr, flush=True)
+            else:
+                if self._embed_attempt <= 10:
+                    QTimer.singleShot(1000, self.embed_rviz_window)
+        except Exception as e:
+            print(f"[Dashboard] embed_rviz_window: UNHANDLED ERROR: {e}", file=sys.stderr, flush=True)
+
+    def _resize_embedded_rviz(self):
+        """Force embedded RViz widget & window to fit container."""
+        import sys
+        try:
+            if self.embedded_rviz_widget and self.rviz_frame:
+                size = self.rviz_frame.size()
+                w, h = size.width(), size.height()
+                self.embedded_rviz_widget.resize(w, h)
+                self.embedded_rviz_widget.setMinimumSize(10, 10)
+                if hasattr(self, 'rviz_win_id') and self.rviz_win_id:
+                    subprocess.call(["xdotool", "windowmove", str(self.rviz_win_id), "0", "0"], stderr=subprocess.DEVNULL, timeout=2)
+                    subprocess.call(["xdotool", "windowsize", str(self.rviz_win_id), str(w), str(h)], stderr=subprocess.DEVNULL, timeout=2)
+                print(f"[Dashboard] _resize_embedded_rviz: Resized to {w}x{h}", file=sys.stderr, flush=True)
+        except Exception as e:
+            print(f"[Dashboard] _resize_embedded_rviz: ERROR: {e}", file=sys.stderr, flush=True)
 
     def closeEvent(self, event):
         """Cleanly terminate child processes when dashboard window is closed."""

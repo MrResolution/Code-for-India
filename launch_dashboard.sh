@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 source /opt/ros/jazzy/setup.bash
 source /home/sabo/Documents/learn_/Hardware/ros2_ws/install/setup.bash
+export QT_QPA_PLATFORM=xcb
 pkill -9 -f calibrated_joint_gui 2>/dev/null || true
 pkill -9 -f robot_state_publisher 2>/dev/null || true
 pkill -9 -f rviz2 2>/dev/null || true
