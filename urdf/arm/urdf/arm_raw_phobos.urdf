@@ -1,0 +1,94 @@
+<robot name="arm" version="1.0">
+  <joint name="turntable_link_joint_dup" type="revolute">
+    <limit lower="-3.00000" upper="3.00000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="0.00000 0.00000 0.00443" xyz="-0.45306 -0.00297 0.45118"/>
+    <parent link="basecase1_link"/>
+    <child link="turntable_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
+  </joint>
+  <joint name="turntable_link_joint" type="revolute">
+    <limit lower="-2.00000" upper="2.00000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="0.00000 0.00000 3.13716" xyz="-0.29849 -0.00704 0.45105"/>
+    <parent link="turntable_link"/>
+    <child link="Elbow_1_link"/>
+    <axis xyz="0.00000 1.00000 0.00000"/>
+  </joint>
+  <joint name="turntable_link_joint_dup_1" type="revolute">
+    <limit lower="-2.00000" upper="2.00000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="3.13952 0.39443 3.13619" xyz="0.47192 -0.01837 1.94238"/>
+    <parent link="Elbow_1_link"/>
+    <child link="Elbow_2_link"/>
+    <axis xyz="0.00000 1.00000 0.00000"/>
+  </joint>
+  <joint name="turntable_link_joint_dup_2" type="revolute">
+    <limit lower="-2.00000" upper="2.00000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="-2.95221 -1.48707 2.94799" xyz="-0.00145 -0.00782 1.39796"/>
+    <parent link="Elbow_2_link"/>
+    <child link="Wrist_pitch._link"/>
+    <axis xyz="0.00000 1.00000 0.00000"/>
+  </joint>
+  <joint name="turntable_link_joint_dup_3" type="revolute">
+    <limit lower="-2.00000" upper="2.00000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="3.05545 1.55437 -0.10182" xyz="-0.01615 0.00642 0.40411"/>
+    <parent link="Wrist_pitch._link"/>
+    <child link="gripper_base_link"/>
+    <axis xyz="-1.00000 0.00000 0.00000"/>
+  </joint>
+  <link name="basecase1_link">
+    <visual name="basecase1">
+      <material name="None"/>
+      <origin rpy="0.00000 0.00000 -0.00000" xyz="-0.00000 -0.00000 0.00000"/>
+      <geometry>
+        <mesh filename="../meshes/stl/part_3_obj3.stl" scale="0.01000 0.01000 0.01000"/>
+      </geometry>
+    </visual>
+  </link>
+  <link name="turntable_link">
+    <visual name="TrunTable">
+      <material name="None"/>
+      <origin rpy="-1.04042 -1.54565 -0.52117" xyz="0.00000 0.00000 -0.00000"/>
+      <geometry>
+        <mesh filename="../meshes/stl/part_44_obj44.stl" scale="0.01000 0.01000 0.01000"/>
+      </geometry>
+    </visual>
+  </link>
+  <link name="Elbow_1_link">
+    <visual name="Elbow 1">
+      <material name="None"/>
+      <origin rpy="0.00000 0.00000 0.00000" xyz="0.00000 -0.00000 0.00000"/>
+      <geometry>
+        <mesh filename="../meshes/stl/part_7_obj7.stl" scale="0.01000 0.01000 0.01000"/>
+      </geometry>
+    </visual>
+  </link>
+  <link name="Elbow_2_link">
+    <visual name="Elbow 2">
+      <material name="None"/>
+      <origin rpy="-0.00000 0.00000 -0.00000" xyz="0.00000 0.00000 0.00000"/>
+      <geometry>
+        <mesh filename="../meshes/stl/part_9_obj9.stl" scale="0.01000 0.01000 0.01000"/>
+      </geometry>
+    </visual>
+  </link>
+  <link name="Wrist_pitch._link">
+    <visual name="Wrist_pitch.">
+      <material name="Material"/>
+      <origin rpy="0.00000 -0.00000 0.00000" xyz="0.00000 0.00000 0.00000"/>
+      <geometry>
+        <mesh filename="../meshes/stl/Robot+Arm+Wrist.stl" scale="0.01000 0.01000 0.01000"/>
+      </geometry>
+    </visual>
+  </link>
+  <link name="gripper_base_link">
+    <visual name="gripper_base">
+      <material name="None"/>
+      <origin rpy="0.00000 -0.00000 -0.00000" xyz="-0.00000 0.00000 0.00000"/>
+      <geometry>
+        <mesh filename="../meshes/stl/mg996r-v17.005.stl" scale="0.09664 0.09664 -0.09664"/>
+      </geometry>
+    </visual>
+  </link>
+  <material name="Material">
+    <color rgba="0.80000 0.80000 0.80000 1.00000"/>
+  </material>
+</robot>

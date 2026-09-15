@@ -4,34 +4,70 @@
     "servo_max_deg": 1.0,
     "trim_deg": 0.0,
     "invert": false,
-    "home_deg": 1.0
+    "home_deg": 90.0,
+    "sync_offset_deg": -90.0
   },
   "turntable_link_joint": {
-    "servo_min_deg": 0.0,
-    "servo_max_deg": 91.4,
+    "servo_min_deg": 9.0,
+    "servo_max_deg": 62.1,
     "trim_deg": 0.0,
     "invert": false,
-    "home_deg": 9.3
+    "home_deg": 9.3,
+    "sync_offset_deg": 8.5
   },
   "turntable_link_joint_dup_1": {
-    "servo_min_deg": 30.4,
+    "servo_min_deg": 56.9,
+    "servo_max_deg": 122.9,
+    "trim_deg": 0.0,
+    "invert": false,
+    "home_deg": 176.3,
+    "sync_offset_deg": -68.5
+  },
+  "turntable_link_joint_dup_2": {
+    "servo_min_deg": 0.0,
     "servo_max_deg": 180.0,
     "trim_deg": 0.0,
     "invert": false,
-    "home_deg": 176.3
-  },
-  "turntable_link_joint_dup_2": {
-    "servo_min_deg": 55.7,
-    "servo_max_deg": 90.7,
-    "trim_deg": 0.0,
-    "invert": false,
-    "home_deg": 56.7
+    "home_deg": 80.7,
+    "sync_offset_deg": 99.3
   },
   "wrist_twist_joint": {
     "servo_min_deg": 0.0,
     "servo_max_deg": 177.0,
     "trim_deg": 0.0,
     "invert": false,
-    "home_deg": 10.6
+    "home_deg": 10.6,
+    "sync_offset_deg": 0.0
+  },
+  "turntable_link_joint_dup_3": {
+    "servo_min_deg": 0.0,
+    "servo_max_deg": 177.0,
+    "trim_deg": 0.0,
+    "invert": false,
+    "home_deg": 10.6,
+    "sync_offset_deg": 2.8
+  },
+  "grip": {
+    "servo_min_deg": 0.0,
+    "servo_max_deg": 180.0,
+    "trim_deg": 0.0,
+    "invert": false,
+    "home_deg": 90.0,
+    "sync_offset_deg": -71.8
+  },
+  "imu_offsets": {
+    "pitch": 0.0,
+    "roll": 0.0,
+    "yaw": 0.0
+  },
+  "quard_offsets": {
+    "0": 0.0,
+    "1": 0.0,
+    "2": 0.0,
+    "3": 0.0,
+    "4": 0.0,
+    "5": 0.0,
+    "6": 0.0,
+    "7": 0.0
   }
 }

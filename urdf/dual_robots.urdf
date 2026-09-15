@@ -1,0 +1,474 @@
+<?xml version="1.0" ?>
+<robot name="dual_robots" version="1.0">
+  <material name="None">
+    <color rgba="0.6 0.6 0.6 1.0"/>
+  </material>
+  <material name="DarkSteel">
+    <color rgba="0.22 0.24 0.28 1.0"/>
+  </material>
+  <material name="Copper">
+    <color rgba="0.72 0.45 0.20 1.0"/>
+  </material>
+  <material name="Teal">
+    <color rgba="0.10 0.56 0.62 1.0"/>
+  </material>
+  <material name="Cyan">
+    <color rgba="0.18 0.68 0.76 1.0"/>
+  </material>
+  <material name="Gold">
+    <color rgba="0.85 0.65 0.13 1.0"/>
+  </material>
+  <material name="Gunmetal">
+    <color rgba="0.32 0.34 0.36 1.0"/>
+  </material>
+  <material name="OrangeRod">
+    <color rgba="0.90 0.45 0.10 1.0"/>
+  </material>
+  <material name="RedTip">
+    <color rgba="0.85 0.18 0.18 1.0"/>
+  </material>
+  <material name="Silver">
+    <color rgba="0.75 0.75 0.78 1.0"/>
+  </material>
+  <material name="teal_chassis">
+    <color rgba="0.35 0.65 0.58 1.0"/>
+  </material>
+  <material name="blue_r1">
+    <color rgba="0.38 0.55 0.72 1.0"/>
+  </material>
+  <material name="orange_r3">
+    <color rgba="0.72 0.50 0.40 1.0"/>
+  </material>
+  <material name="green_r2">
+    <color rgba="0.45 0.68 0.50 1.0"/>
+  </material>
+  <material name="purple_hip">
+    <color rgba="0.62 0.44 0.62 1.0"/>
+  </material>
+  <material name="purple_foot">
+    <color rgba="0.50 0.42 0.58 1.0"/>
+  </material>
+  <material name="top_cover_mat">
+    <color rgba="0.28 0.55 0.50 1.0"/>
+  </material>
+  <link name="world"/>
+  <joint name="arm_base_joint" type="fixed">
+    <parent link="world"/>
+    <child link="basecase1_link"/>
+    <origin xyz="0.22 0.0 0.0" rpy="0 0 0"/>
+  </joint>
+  <joint name="turntable_link_joint_dup" type="revolute">
+    <limit lower="-3.00000" upper="3.00000" effort="30.0" velocity="2.0"/>
+    <origin rpy="0.00000 0.00000 0.00443" xyz="-0.045306 -0.000297 0.045118"/>
+    <parent link="basecase1_link"/>
+    <child link="turntable_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
+  </joint>
+  <joint name="turntable_link_joint" type="revolute">
+    <limit lower="-2.00000" upper="2.00000" effort="30.0" velocity="2.0"/>
+    <origin rpy="0.00000 0.00000 3.13716" xyz="-0.029849 -0.000704 0.045105"/>
+    <parent link="turntable_link"/>
+    <child link="Elbow_1_link"/>
+    <axis xyz="0.00000 1.00000 0.00000"/>
+  </joint>
+  <joint name="turntable_link_joint_dup_1" type="revolute">
+    <limit lower="-2.00000" upper="2.00000" effort="30.0" velocity="2.0"/>
+    <origin rpy="1.57078 1.56581 1.57078" xyz="0.047192 -0.001837 0.194238"/>
+    <parent link="Elbow_1_link"/>
+    <child link="Elbow_2_link"/>
+    <axis xyz="0.00000 1.00000 0.00000"/>
+  </joint>
+  <joint name="turntable_link_joint_dup_2" type="revolute">
+    <limit lower="-2.00000" upper="2.00000" effort="30.0" velocity="2.0"/>
+    <origin rpy="0.00167 0.01634 0.01070" xyz="-0.000145 -0.000782 0.139796"/>
+    <parent link="Elbow_2_link"/>
+    <child link="Wrist_pitch._link"/>
+    <axis xyz="0.00000 1.00000 0.00000"/>
+  </joint>
+  <joint name="turntable_link_joint_dup_3" type="revolute">
+    <limit lower="-3.14159" upper="3.14159" effort="30.0" velocity="2.0"/>
+    <origin rpy="0.00000 0.00000 0.00000" xyz="-0.001615 0.000642 0.040411"/>
+    <parent link="Wrist_pitch._link"/>
+    <child link="gripper_base_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
+  </joint>
+  <link name="basecase1_link">
+    <visual name="basecase1">
+      <material name="DarkSteel"/>
+      <origin rpy="0.00000 0.00000 -0.00000" xyz="-0.00000 -0.00000 0.00000"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/part_3_obj3.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+    </visual>
+    <collision name="basecase1_collision">
+      <origin rpy="0.00000 0.00000 -0.00000" xyz="-0.00000 -0.00000 0.00000"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/part_3_obj3.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin rpy="0.00000 0.00000 -0.00000" xyz="-0.00000 -0.00000 0.00000"/>
+      <mass value="2.500"/>
+      <inertia ixx="0.004021" ixy="0.000000" ixz="0.000000" iyy="0.010207" iyz="0.000000" izz="0.012187"/>
+    </inertial>
+  </link>
+  <link name="turntable_link">
+    <visual name="TrunTable">
+      <material name="Copper"/>
+      <origin rpy="-1.04042 -1.54565 -0.52117" xyz="0.00000 0.00000 -0.00000"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/part_44_obj44.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+    </visual>
+    <collision name="TrunTable_collision">
+      <origin rpy="-1.04042 -1.54565 -0.52117" xyz="0.00000 0.00000 -0.00000"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/part_44_obj44.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin rpy="-1.04042 -1.54565 -0.52117" xyz="0.00000 0.00000 -0.00000"/>
+      <mass value="1.200"/>
+      <inertia ixx="0.002993" ixy="0.000000" ixz="0.000000" iyy="0.003436" iyz="0.000000" izz="0.003329"/>
+    </inertial>
+  </link>
+  <link name="Elbow_1_link">
+    <visual name="Elbow 1">
+      <material name="Teal"/>
+      <origin rpy="0.00000 0.00000 0.00000" xyz="0.00000 -0.00000 0.00000"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/part_7_obj7.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+    </visual>
+    <collision name="Elbow 1_collision">
+      <origin rpy="0.00000 0.00000 0.00000" xyz="0.00000 -0.00000 0.00000"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/part_7_obj7.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin rpy="0.00000 0.00000 0.00000" xyz="0.00000 -0.00000 0.00000"/>
+      <mass value="1.000"/>
+      <inertia ixx="0.004946" ixy="0.000000" ixz="0.000000" iyy="0.005623" iyz="0.000000" izz="0.000827"/>
+    </inertial>
+  </link>
+  <link name="Elbow_2_link">
+    <visual name="Elbow 2">
+      <material name="Cyan"/>
+      <origin rpy="0.00000 0.00000 -0.00000" xyz="0.00000 0.00000 -0.00000"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/part_9_obj9.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+    </visual>
+    <collision name="Elbow 2_collision">
+      <origin rpy="0.00000 0.00000 -0.00000" xyz="0.00000 0.00000 -0.00000"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/part_9_obj9.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin rpy="0.00000 0.00000 -0.00000" xyz="0.00000 0.00000 -0.00000"/>
+      <mass value="0.800"/>
+      <inertia ixx="0.002506" ixy="0.000000" ixz="0.000000" iyy="0.002095" iyz="0.000000" izz="0.000627"/>
+    </inertial>
+  </link>
+  <link name="Wrist_pitch._link">
+    <visual name="Wrist_pitch.">
+      <material name="Gold"/>
+      <origin rpy="0.00000 -0.00000 0.00000" xyz="0.00000 -0.00000 0.00000"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/Robot+Arm+Wrist.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+    </visual>
+    <collision name="Wrist_pitch._collision">
+      <origin rpy="0.00000 -0.00000 0.00000" xyz="0.00000 -0.00000 0.00000"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/Robot+Arm+Wrist.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin rpy="0.00000 -0.00000 0.00000" xyz="0.00000 -0.00000 0.00000"/>
+      <mass value="0.500"/>
+      <inertia ixx="0.000397" ixy="0.000000" ixz="0.000000" iyy="0.000193" iyz="0.000000" izz="0.000286"/>
+    </inertial>
+  </link>
+  <link name="gripper_base_link">
+    <visual name="gripper_base">
+      <material name="Gunmetal"/>
+      <origin rpy="0.00000 0.00000 0.00000" xyz="0.00000 0.00000 0.00000"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/gripper_base.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+    </visual>
+    <collision name="gripper_base_collision">
+      <origin rpy="0.00000 0.00000 0.00000" xyz="0.00000 0.00000 0.00000"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/gripper_base.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin rpy="0.00000 0.00000 0.00000" xyz="0.00000 0.00000 0.00000"/>
+      <mass value="0.300"/>
+      <inertia ixx="0.000100" ixy="0.000000" ixz="0.000000" iyy="0.000100" iyz="0.000000" izz="0.000100"/>
+    </inertial>
+  </link>
+  <joint name="quard_base_joint" type="fixed">
+    <parent link="world"/>
+    <child link="Internal-Frame-v121_link"/>
+    <origin xyz="-0.22 0.0 0.048" rpy="0 0 0"/>
+  </joint>
+  <joint name="joint_l1_hip" type="revolute">
+    <parent link="Internal-Frame-v121_link"/>
+    <child link="L1-v117_link"/>
+    <origin xyz="0.024639 0.025830 0.020363" rpy="0.00000 0.00000 0.00000"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1.2000" upper="1.2000" effort="2.5" velocity="6.0"/>
+  </joint>
+  <joint name="joint_l3_foot" type="revolute">
+    <parent link="L1-v117_link"/>
+    <child link="L3-v117_link"/>
+    <origin xyz="-0.009338 0.036884 -0.019524" rpy="1.57080 0.00000 1.57080"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1.2000" upper="1.2000" effort="2.5" velocity="6.0"/>
+  </joint>
+  <joint name="joint_l2_hip" type="revolute">
+    <parent link="Internal-Frame-v121_link"/>
+    <child link="L2-v117_link"/>
+    <origin xyz="-0.023953 0.025833 0.020363" rpy="0.00000 0.00000 3.14159"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1.2000" upper="1.2000" effort="2.5" velocity="6.0"/>
+  </joint>
+  <joint name="joint_l4_foot" type="revolute">
+    <parent link="L2-v117_link"/>
+    <child link="L4-v117_link"/>
+    <origin xyz="-0.009349 -0.036870 -0.019547" rpy="1.55975 0.00000 1.57080"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1.2000" upper="1.2000" effort="2.5" velocity="6.0"/>
+  </joint>
+  <joint name="joint_r1_hip" type="revolute">
+    <parent link="Internal-Frame-v121_link"/>
+    <child link="R1-v117_link"/>
+    <origin xyz="0.024649 -0.025106 0.020363" rpy="0.00000 0.00000 0.00000"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1.2000" upper="1.2000" effort="2.5" velocity="6.0"/>
+  </joint>
+  <joint name="joint_r3_foot" type="revolute">
+    <parent link="R1-v117_link"/>
+    <child link="R3-v117_link"/>
+    <origin xyz="-0.009414 -0.036856 -0.019531" rpy="1.55156 0.00000 1.57080"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1.2000" upper="1.2000" effort="2.5" velocity="6.0"/>
+  </joint>
+  <joint name="joint_r2_hip" type="revolute">
+    <parent link="Internal-Frame-v121_link"/>
+    <child link="R2-v117_link"/>
+    <origin xyz="-0.024034 -0.024987 0.020363" rpy="0.00000 0.00000 3.14159"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1.2000" upper="1.2000" effort="2.5" velocity="6.0"/>
+  </joint>
+  <joint name="joint_r4_foot" type="revolute">
+    <parent link="R2-v117_link"/>
+    <child link="R4-v117_link"/>
+    <origin xyz="-0.009550 0.036735 -0.019562" rpy="1.55156 0.00000 1.57080"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-1.2000" upper="1.2000" effort="2.5" velocity="6.0"/>
+  </joint>
+  <link name="Internal-Frame-v121_link">
+    <inertial>
+      <mass value="0.28"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.00018" ixy="0" ixz="0" iyy="0.00022" iyz="0" izz="0.0003"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/quard_bot/meshes/chassis.stl" scale="1 1 1"/>
+      </geometry>
+      <material name="teal_chassis">
+        <color rgba="0.35 0.65 0.58 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/quard_bot/meshes/chassis.stl" scale="1 1 1"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="L1-v117_link">
+    <inertial>
+      <mass value="0.03"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="1e-05" ixy="0" ixz="0" iyy="1e-05" iyz="0" izz="1e-05"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/quard_bot/meshes/L1.stl" scale="1 1 1"/>
+      </geometry>
+      <material name="purple_hip">
+        <color rgba="0.62 0.44 0.62 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/quard_bot/meshes/L1.stl" scale="1 1 1"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="L3-v117_link">
+    <inertial>
+      <mass value="0.02"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="1e-05" ixy="0" ixz="0" iyy="1e-05" iyz="0" izz="1e-05"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/quard_bot/meshes/L3.stl" scale="1 1 1"/>
+      </geometry>
+      <material name="purple_foot">
+        <color rgba="0.50 0.42 0.58 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/quard_bot/meshes/L3.stl" scale="1 1 1"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="L2-v117_link">
+    <inertial>
+      <mass value="0.03"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="1e-05" ixy="0" ixz="0" iyy="1e-05" iyz="0" izz="1e-05"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/quard_bot/meshes/L2.stl" scale="1 1 1"/>
+      </geometry>
+      <material name="purple_hip">
+        <color rgba="0.62 0.44 0.62 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/quard_bot/meshes/L2.stl" scale="1 1 1"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="L4-v117_link">
+    <inertial>
+      <mass value="0.02"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="1e-05" ixy="0" ixz="0" iyy="1e-05" iyz="0" izz="1e-05"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/quard_bot/meshes/L4.stl" scale="1 1 1"/>
+      </geometry>
+      <material name="purple_foot">
+        <color rgba="0.50 0.42 0.58 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/quard_bot/meshes/L4.stl" scale="1 1 1"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="R1-v117_link">
+    <inertial>
+      <mass value="0.03"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="1e-05" ixy="0" ixz="0" iyy="1e-05" iyz="0" izz="1e-05"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/quard_bot/meshes/R1.stl" scale="1 1 1"/>
+      </geometry>
+      <material name="blue_r1">
+        <color rgba="0.38 0.55 0.72 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/quard_bot/meshes/R1.stl" scale="1 1 1"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="R3-v117_link">
+    <inertial>
+      <mass value="0.02"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="1e-05" ixy="0" ixz="0" iyy="1e-05" iyz="0" izz="1e-05"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/quard_bot/meshes/R3.stl" scale="1 1 1"/>
+      </geometry>
+      <material name="orange_r3">
+        <color rgba="0.72 0.50 0.40 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/quard_bot/meshes/R3.stl" scale="1 1 1"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="R2-v117_link">
+    <inertial>
+      <mass value="0.03"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="1e-05" ixy="0" ixz="0" iyy="1e-05" iyz="0" izz="1e-05"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/quard_bot/meshes/R2.stl" scale="1 1 1"/>
+      </geometry>
+      <material name="green_r2">
+        <color rgba="0.45 0.68 0.50 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/quard_bot/meshes/R2.stl" scale="1 1 1"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="R4-v117_link">
+    <inertial>
+      <mass value="0.02"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="1e-05" ixy="0" ixz="0" iyy="1e-05" iyz="0" izz="1e-05"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/quard_bot/meshes/R4.stl" scale="1 1 1"/>
+      </geometry>
+      <material name="purple_foot">
+        <color rgba="0.50 0.42 0.58 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/quard_bot/meshes/R4.stl" scale="1 1 1"/>
+      </geometry>
+    </collision>
+  </link>
+</robot>

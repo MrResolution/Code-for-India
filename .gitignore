@@ -6,6 +6,12 @@
 .piolibdeps/
 
 # ============================================
+# Secrets (never commit credentials)
+# ============================================
+include/secrets.h
+
+
+# ============================================
 # ROS 2 Colcon Build Artifacts
 # ============================================
 ros2_ws/build/
@@ -27,6 +33,10 @@ venv/
 # Blender Autosave / Backup Files
 # ============================================
 *.blend1
+*.blend.bak
+*.bak
+.ros_logs/
+
 
 # ============================================
 # Phobos Export History Logs

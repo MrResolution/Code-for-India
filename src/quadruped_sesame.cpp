@@ -1,6 +1,7 @@
 // ======================================================================
-//   Sesame Robot — Staggered Startup & Brownout-Proof Firmware
-//   ESP32 Core v3.x Compatible (GPIO 21/22 + SSD1306 OLED GPIO 18/19)
+//   Sesame Quadruped Robot — Clean Real-Time Firmware (No OLED)
+//   • Core 0: Wi-Fi UDP (Port 8888), WebServer (Port 80), Watchdog
+//   • Core 1: Dedicated Locomotion & Gait Task (PCA9685 I2C 50Hz)
 // ======================================================================
 
 #include <WiFi.h>
@@ -8,40 +9,27 @@
 #include <ESPmDNS.h>
 #include <Wire.h>
 #include <Adafruit_PWMServoDriver.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
 
 // 🛡️ ESP32 Power System Control (ESP32 Core v3.x API)
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 
-// ── Wi-Fi Configuration ─────────────────────────────────────────────────
-const char* WIFI_SSID = "Sabo";     // Same Wi-Fi network as the Robot Arm
-const char* WIFI_PASS = "sandy0606"; // Wi-Fi Password
+// 🌐 Unified Robot Communication Protocol
+#include "robot_protocol.h"
 
-// Fallback Access Point settings if home Wi-Fi is unavailable:
-#define AP_SSID   "Sesame-Robot-Control"
-#define AP_PASS   "12345678"
+RobotProtocol robotComm("Sesame_Quadruped");
 
+// ── PCA9685 I2C Pin Definitions ─────────────────────────────────────────
 #define PCA_SDA  21
 #define PCA_SCL  22
 
-#define OLED_SDA 18
-#define OLED_SCL 19
-
-TwoWire I2C_OLED = TwoWire(1);
-
 Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver(0x40);
-
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
-#define OLED_RESET    -1
-
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &I2C_OLED, OLED_RESET);
-
 WebServer server(80);
 
+// ── Kinematics & Calibration ────────────────────────────────────────────
+// Base zero offset for each of the 8 servo channels:
 const int baseZero[8] = {90, 0, 0, 90, 90, 0, 90, 0};
+int currentInputAngles[8] = {45, 45, 45, 45, 45, 45, 45, 45};
 
 enum GaitMode {
   MODE_STAND,
@@ -51,151 +39,221 @@ enum GaitMode {
   MODE_TURN_RIGHT
 };
 
-GaitMode currentMode = MODE_STAND;
-int stepDelay = 250;
+volatile GaitMode currentMode = MODE_STAND;
+volatile GaitMode requestedMode = MODE_STAND;
+volatile int stepDelay = 220; // Gait step phase delay (ms)
 
-enum FaceState {
-  FACE_HAPPY,
-  FACE_WALK,
-  FACE_WAVE,
-  FACE_SLEEPY,
-  FACE_CUTE
-};
+// Locomotion safety watchdog: stop walking if no command received for 2 seconds
+const unsigned long LOCOMOTION_WATCHDOG_MS = 2000;
+unsigned long lastMotionCommandMs = 0;
 
-FaceState currentFace = FACE_HAPPY;
-unsigned long lastEyeBlink = 0;
-bool isBlinking = false;
-int walkEyeOffset = 0;
-bool oledReady = false;
+// Mutex for PCA9685 I2C bus transactions
+SemaphoreHandle_t pcaMutex = NULL;
 
-// 🎨 OLED CUTE FACE GRAPHICS
-void drawCuteFace(FaceState state) {
-  if (!oledReady) return;
-  display.clearDisplay();
-
-  switch (state) {
-    case FACE_HAPPY: {
-      if (isBlinking) {
-        display.drawCircle(40, 28, 12, SSD1306_WHITE);
-        display.fillRect(28, 28, 25, 14, SSD1306_BLACK);
-        display.drawCircle(88, 28, 12, SSD1306_WHITE);
-        display.fillRect(76, 28, 25, 14, SSD1306_BLACK);
-      } else {
-        display.fillCircle(40, 26, 14, SSD1306_WHITE);
-        display.fillCircle(88, 26, 14, SSD1306_WHITE);
-        display.fillCircle(35, 21, 5, SSD1306_BLACK);
-        display.fillCircle(44, 30, 3, SSD1306_BLACK);
-        display.fillCircle(83, 21, 5, SSD1306_BLACK);
-        display.fillCircle(92, 30, 3, SSD1306_BLACK);
-      }
-      for (int x = 20; x <= 30; x += 4) display.drawLine(x, 44, x + 2, 40, SSD1306_WHITE);
-      for (int x = 98; x <= 108; x += 4) display.drawLine(x, 44, x + 2, 40, SSD1306_WHITE);
-      display.drawCircle(64, 42, 8, SSD1306_WHITE);
-      display.fillRect(54, 34, 20, 9, SSD1306_BLACK);
-      break;
-    }
-    case FACE_WALK: {
-      int eyeShiftX = (walkEyeOffset % 2 == 0) ? 4 : -4;
-      display.fillCircle(40 + eyeShiftX, 26, 12, SSD1306_WHITE);
-      display.fillCircle(88 + eyeShiftX, 26, 12, SSD1306_WHITE);
-      display.fillCircle(37 + eyeShiftX, 23, 4, SSD1306_BLACK);
-      display.fillCircle(85 + eyeShiftX, 23, 4, SSD1306_BLACK);
-      display.fillCircle(64, 46, 5, SSD1306_WHITE);
-      display.fillCircle(64, 46, 3, SSD1306_BLACK);
-      break;
-    }
-    case FACE_WAVE: {
-      display.drawCircle(40, 28, 14, SSD1306_WHITE);
-      display.fillRect(24, 28, 32, 16, SSD1306_BLACK);
-      display.fillCircle(88, 26, 14, SSD1306_WHITE);
-      display.fillCircle(83, 21, 5, SSD1306_BLACK);
-      display.fillCircle(92, 30, 3, SSD1306_BLACK);
-      display.drawCircle(59, 44, 5, SSD1306_WHITE);
-      display.drawCircle(69, 44, 5, SSD1306_WHITE);
-      display.fillRect(52, 36, 24, 8, SSD1306_BLACK);
-      break;
-    }
-    case FACE_SLEEPY: {
-      display.drawCircle(40, 24, 12, SSD1306_WHITE);
-      display.fillRect(26, 12, 28, 14, SSD1306_BLACK);
-      display.drawCircle(88, 24, 12, SSD1306_WHITE);
-      display.fillRect(74, 12, 28, 14, SSD1306_BLACK);
-      display.drawLine(60, 44, 68, 44, SSD1306_WHITE);
-      display.setTextSize(1);
-      display.setTextColor(SSD1306_WHITE);
-      display.setCursor(102, 10); display.print("Z");
-      display.setCursor(110, 18); display.print("z");
-      display.setCursor(116, 25); display.print("z");
-      break;
-    }
-    case FACE_CUTE: {
-      display.fillCircle(40, 26, 13, SSD1306_WHITE);
-      display.fillCircle(88, 26, 13, SSD1306_WHITE);
-      display.fillCircle(36, 22, 4, SSD1306_BLACK);
-      display.fillCircle(84, 22, 4, SSD1306_BLACK);
-      display.fillCircle(64, 42, 7, SSD1306_WHITE);
-      display.fillRect(54, 35, 20, 7, SSD1306_BLACK);
-      break;
-    }
-  }
-
-  display.display();
-}
-
-void updateOLEDAnimation() {
-  if (currentFace == FACE_HAPPY) {
-    if (millis() - lastEyeBlink > 3500) {
-      isBlinking = true;
-      drawCuteFace(FACE_HAPPY);
-      delay(150);
-      isBlinking = false;
-      drawCuteFace(FACE_HAPPY);
-      lastEyeBlink = millis();
-    }
-  }
-}
-
-// SERVO KINEMATICS WITH STAGGERED ANTI-SURGE POWER PROTECTION
+// ── Servo Kinematics ────────────────────────────────────────────────────
 int calculateFinalAngle(int channel, int inputAngle) {
   int finalAngle = (baseZero[channel] == 90) ? (90 - inputAngle) : (0 + inputAngle);
   return constrain(finalAngle, 0, 180);
 }
 
 void setServoInputAngle(uint8_t channel, int inputAngle) {
+  if (channel < 8) currentInputAngles[channel] = inputAngle;
   int finalAngle = calculateFinalAngle(channel, inputAngle);
   int uS = map(finalAngle, 0, 180, 732, 2929);
-  pwm.writeMicroseconds(channel, uS);
-  delay(15);
-}
 
-// Move servos one by one with a 35ms delay to prevent power surge
-void setAllInputAngles(int inputAngle) {
-  for (int i = 0; i < 8; i++) {
-    setServoInputAngle(i, inputAngle);
-    delay(35);
+  if (pcaMutex != NULL && xSemaphoreTake(pcaMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+    pwm.writeMicroseconds(channel, uS);
+    xSemaphoreGive(pcaMutex);
   }
 }
 
-void poseStand() { currentMode = MODE_STAND; currentFace = FACE_HAPPY; drawCuteFace(FACE_HAPPY); setAllInputAngles(45); }
-void poseZero()  { currentMode = MODE_STAND; currentFace = FACE_SLEEPY; drawCuteFace(FACE_SLEEPY); setAllInputAngles(0); }
+void setAllInputAngles(int targetInputAngle) {
+  bool moving = true;
+  while (moving) {
+    moving = false;
+    for (int i = 0; i < 8; i++) {
+      if (currentInputAngles[i] < targetInputAngle) {
+        currentInputAngles[i] = min(currentInputAngles[i] + 3, targetInputAngle);
+        int finalAngle = calculateFinalAngle(i, currentInputAngles[i]);
+        int uS = map(finalAngle, 0, 180, 732, 2929);
+        if (pcaMutex != NULL && xSemaphoreTake(pcaMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+          pwm.writeMicroseconds(i, uS);
+          xSemaphoreGive(pcaMutex);
+        }
+        moving = true;
+      } else if (currentInputAngles[i] > targetInputAngle) {
+        currentInputAngles[i] = max(currentInputAngles[i] - 3, targetInputAngle);
+        int finalAngle = calculateFinalAngle(i, currentInputAngles[i]);
+        int uS = map(finalAngle, 0, 180, 732, 2929);
+        if (pcaMutex != NULL && xSemaphoreTake(pcaMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+          pwm.writeMicroseconds(i, uS);
+          xSemaphoreGive(pcaMutex);
+        }
+        moving = true;
+      }
+    }
+    vTaskDelay(pdMS_TO_TICKS(15));
+  }
+}
+
+// Non-blocking interruptible phase delay: returns false if mode changed
+bool gaitPhaseDelay(int ms) {
+  int elapsed = 0;
+  while (elapsed < ms) {
+    if (currentMode != requestedMode || currentMode == MODE_STAND) {
+      return false; // Preempt immediately!
+    }
+    vTaskDelay(pdMS_TO_TICKS(10));
+    elapsed += 10;
+  }
+  return true;
+}
+
+void poseStand()  { currentMode = MODE_STAND; requestedMode = MODE_STAND; setAllInputAngles(45); }
+void poseZero()   { currentMode = MODE_STAND; requestedMode = MODE_STAND; setAllInputAngles(0); }
+void poseCrouch() { currentMode = MODE_STAND; requestedMode = MODE_STAND; setAllInputAngles(30); }
+void poseHigh()   { currentMode = MODE_STAND; requestedMode = MODE_STAND; setAllInputAngles(60); }
 
 void animHiAction() {
-  currentMode = MODE_STAND; currentFace = FACE_WAVE; drawCuteFace(FACE_WAVE);
-  setAllInputAngles(60); delay(400);
-  setServoInputAngle(5, 0);  delay(200);
-  setServoInputAngle(5, 30); delay(200);
-  setServoInputAngle(5, 0);  delay(200);
-  setServoInputAngle(5, 30); delay(200);
-  setServoInputAngle(5, 0);  delay(200);
+  currentMode = MODE_STAND; requestedMode = MODE_STAND;
+  setAllInputAngles(60);
+  vTaskDelay(pdMS_TO_TICKS(250));
+  for (int w = 0; w < 3; w++) {
+    setServoInputAngle(5, 0);  vTaskDelay(pdMS_TO_TICKS(140));
+    setServoInputAngle(5, 35); vTaskDelay(pdMS_TO_TICKS(140));
+  }
   poseStand();
 }
 
-void stepWalkForward()  { currentFace = FACE_WALK; walkEyeOffset++; drawCuteFace(FACE_WALK); setServoInputAngle(0, 75); setServoInputAngle(3, 75); delay(stepDelay); setServoInputAngle(0, 45); setServoInputAngle(3, 45); delay(stepDelay); setServoInputAngle(1, 15); setServoInputAngle(2, 15); delay(stepDelay); setServoInputAngle(1, 45); setServoInputAngle(2, 45); delay(stepDelay); }
-void stepWalkBackward() { currentFace = FACE_WALK; walkEyeOffset++; drawCuteFace(FACE_WALK); setServoInputAngle(1, 75); setServoInputAngle(2, 75); delay(stepDelay); setServoInputAngle(1, 45); setServoInputAngle(2, 45); delay(stepDelay); setServoInputAngle(0, 15); setServoInputAngle(3, 15); delay(stepDelay); setServoInputAngle(0, 45); setServoInputAngle(3, 45); delay(stepDelay); }
-void stepTurnLeft()     { currentFace = FACE_WALK; walkEyeOffset++; drawCuteFace(FACE_WALK); setServoInputAngle(0, 75); setServoInputAngle(1, 75); delay(stepDelay); setServoInputAngle(0, 45); setServoInputAngle(1, 45); delay(stepDelay); setServoInputAngle(2, 15); setServoInputAngle(3, 15); delay(stepDelay); setServoInputAngle(2, 45); setServoInputAngle(3, 45); delay(stepDelay); }
-void stepTurnRight()    { currentFace = FACE_WALK; walkEyeOffset++; drawCuteFace(FACE_WALK); setServoInputAngle(2, 75); setServoInputAngle(3, 75); delay(stepDelay); setServoInputAngle(2, 45); setServoInputAngle(3, 45); delay(stepDelay); setServoInputAngle(0, 15); setServoInputAngle(1, 15); delay(stepDelay); setServoInputAngle(0, 45); setServoInputAngle(1, 45); delay(stepDelay); }
+// ── Locomotion Steps (Interruptible) ────────────────────────────────────
+bool stepWalkForward() {
+  // Phase 1: Lift Diag A & swing hips forward
+  setServoInputAngle(5, 25); setServoInputAngle(7, 65);
+  setServoInputAngle(0, 70); setServoInputAngle(3, 70);
+  if (!gaitPhaseDelay(stepDelay)) return false;
 
-// WEB DASHBOARD HTML
+  // Phase 2: Ground Diag A
+  setServoInputAngle(5, 45); setServoInputAngle(7, 45);
+  setServoInputAngle(0, 45); setServoInputAngle(3, 45);
+  if (!gaitPhaseDelay(stepDelay / 2)) return false;
+
+  // Phase 3: Lift Diag B & swing hips forward
+  setServoInputAngle(4, 65); setServoInputAngle(6, 25);
+  setServoInputAngle(1, 20); setServoInputAngle(2, 20);
+  if (!gaitPhaseDelay(stepDelay)) return false;
+
+  // Phase 4: Ground Diag B
+  setServoInputAngle(4, 45); setServoInputAngle(6, 45);
+  setServoInputAngle(1, 45); setServoInputAngle(2, 45);
+  return gaitPhaseDelay(stepDelay / 2);
+}
+
+bool stepWalkBackward() {
+  setServoInputAngle(4, 25); setServoInputAngle(6, 65);
+  setServoInputAngle(1, 70); setServoInputAngle(2, 70);
+  if (!gaitPhaseDelay(stepDelay)) return false;
+
+  setServoInputAngle(4, 45); setServoInputAngle(6, 45);
+  setServoInputAngle(1, 45); setServoInputAngle(2, 45);
+  if (!gaitPhaseDelay(stepDelay / 2)) return false;
+
+  setServoInputAngle(5, 65); setServoInputAngle(7, 25);
+  setServoInputAngle(0, 20); setServoInputAngle(3, 20);
+  if (!gaitPhaseDelay(stepDelay)) return false;
+
+  setServoInputAngle(5, 45); setServoInputAngle(7, 45);
+  setServoInputAngle(0, 45); setServoInputAngle(3, 45);
+  return gaitPhaseDelay(stepDelay / 2);
+}
+
+bool stepTurnLeft() {
+  setServoInputAngle(5, 30); setServoInputAngle(4, 60);
+  setServoInputAngle(0, 70); setServoInputAngle(1, 70);
+  if (!gaitPhaseDelay(stepDelay)) return false;
+
+  setServoInputAngle(5, 45); setServoInputAngle(4, 45);
+  setServoInputAngle(0, 45); setServoInputAngle(1, 45);
+  if (!gaitPhaseDelay(stepDelay / 2)) return false;
+
+  setServoInputAngle(6, 60); setServoInputAngle(7, 30);
+  setServoInputAngle(2, 20); setServoInputAngle(3, 20);
+  if (!gaitPhaseDelay(stepDelay)) return false;
+
+  setServoInputAngle(6, 45); setServoInputAngle(7, 45);
+  setServoInputAngle(2, 45); setServoInputAngle(3, 45);
+  return gaitPhaseDelay(stepDelay / 2);
+}
+
+bool stepTurnRight() {
+  setServoInputAngle(6, 30); setServoInputAngle(7, 60);
+  setServoInputAngle(2, 70); setServoInputAngle(3, 70);
+  if (!gaitPhaseDelay(stepDelay)) return false;
+
+  setServoInputAngle(6, 45); setServoInputAngle(7, 45);
+  setServoInputAngle(2, 45); setServoInputAngle(3, 45);
+  if (!gaitPhaseDelay(stepDelay / 2)) return false;
+
+  setServoInputAngle(5, 60); setServoInputAngle(4, 30);
+  setServoInputAngle(0, 20); setServoInputAngle(1, 20);
+  if (!gaitPhaseDelay(stepDelay)) return false;
+
+  setServoInputAngle(5, 45); setServoInputAngle(4, 45);
+  setServoInputAngle(0, 45); setServoInputAngle(1, 45);
+  return gaitPhaseDelay(stepDelay / 2);
+}
+
+/**
+ * FreeRTOS Task: Dedicated Locomotion & Gait Engine running on Core 1.
+ * Completely isolates servo timing from Wi-Fi/HTTP/UDP network traffic.
+ */
+void locomotionTask(void* pvParameters) {
+  (void)pvParameters;
+
+  for (;;) {
+    currentMode = requestedMode;
+
+    switch (currentMode) {
+      case MODE_WALK_FORWARD:
+        stepWalkForward();
+        break;
+      case MODE_WALK_BACKWARD:
+        stepWalkBackward();
+        break;
+      case MODE_TURN_LEFT:
+        stepTurnLeft();
+        break;
+      case MODE_TURN_RIGHT:
+        stepTurnRight();
+        break;
+      case MODE_STAND:
+      default:
+        vTaskDelay(pdMS_TO_TICKS(30));
+        break;
+    }
+  }
+}
+
+// ── Web Dashboard & Status JSON ─────────────────────────────────────────
+String getSesameStatusJson() {
+  String json = "{";
+  json += "\"name\":\"Sesame Robot\",";
+  json += "\"online\":true,";
+  json += "\"mode\":";
+  switch(currentMode) {
+    case MODE_WALK_FORWARD:  json += "\"forward\","; break;
+    case MODE_WALK_BACKWARD: json += "\"backward\","; break;
+    case MODE_TURN_LEFT:     json += "\"left\","; break;
+    case MODE_TURN_RIGHT:    json += "\"right\","; break;
+    default:                 json += "\"stand\","; break;
+  }
+  json += "\"step_delay\":" + String(stepDelay) + ",";
+  json += "\"ip\":\"" + robotComm.getIP().toString() + "\",";
+  json += "\"rssi\":" + String(WiFi.status() == WL_CONNECTED ? String(WiFi.RSSI()) : "0") + ",";
+  json += "\"uptime_ms\":" + String(millis());
+  json += "}";
+  return json;
+}
+
 const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="en">
@@ -215,7 +273,7 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
     .status-dot { width: 8px; height: 8px; background: var(--success); border-radius: 50%; box-shadow: 0 0 8px var(--success); }
     .container { width: 100%; max-width: 900px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
     @media (max-width: 768px) { .container { grid-template-columns: 1fr; } }
-    .card { background: var(--card-bg); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid var(--card-border); border-radius: 20px; padding: 24px; box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4); }
+    .card { background: var(--card-bg); backdrop-filter: blur(16px); border: 1px solid var(--card-border); border-radius: 20px; padding: 24px; box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4); }
     .card h2 { font-size: 1.1rem; font-weight: 600; margin-bottom: 16px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; }
     .dpad-grid { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); gap: 12px; width: 220px; height: 220px; margin: 0 auto; }
     .btn-dpad { background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 16px; color: var(--text); font-size: 1.5rem; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.15s ease; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2); }
@@ -234,9 +292,9 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
 </head>
 <body>
   <header>
-    <h1>SESAME ROBOT AP</h1>
-    <p>Direct WiFi Access Point + Cute OLED Expressions</p>
-    <div class="status-badge"><div class="status-dot"></div><span>AP Connected (192.168.4.1)</span></div>
+    <h1>SESAME ROBOT</h1>
+    <p>Dual-Core Real-Time Locomotion + Ultra-Low Latency UDP</p>
+    <div class="status-badge"><div class="status-dot"></div><span id="ip-badge">Connecting...</span></div>
   </header>
   <div class="container">
     <div class="card">
@@ -279,19 +337,26 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawliteral(
       sliderDebounce[ch] = setTimeout(() => fetch('/cmd?ch=' + ch + '&deg=' + val).catch(err => console.error(err)), 50);
     };
     const sendAngleAll = (val) => fetch('/cmd?all=' + val).catch(err => console.error(err));
+    fetch('/status').then(r=>r.json()).then(d=>{ document.getElementById('ip-badge').innerText = 'Online (' + d.ip + ')'; });
   </script>
 </body>
 </html>
 )rawliteral";
 
 void handleRoot() { server.send(200, "text/html", DASHBOARD_HTML); }
+
+void handleStatus() {
+  server.sendHeader("Connection", "close");
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.send(200, "application/json", getSesameStatusJson());
+}
+
 void handleCommand() {
   server.sendHeader("Connection", "close");
   server.sendHeader("Access-Control-Allow-Origin", "*");
+  lastMotionCommandMs = millis();
 
   bool handled = false;
-
-  // 1. Locomotion / Mode Commands (supports "move", "mode", or "cmd")
   String m = "";
   if (server.hasArg("move")) m = server.arg("move");
   else if (server.hasArg("mode")) m = server.arg("mode");
@@ -299,72 +364,146 @@ void handleCommand() {
 
   if (m.length() > 0) {
     m.toLowerCase();
-    if (m == "w" || m == "forward" || m == "walk_forward") {
-      currentMode = MODE_WALK_FORWARD;
-      handled = true;
-    } else if (m == "b" || m == "backward" || m == "walk_backward") {
-      currentMode = MODE_WALK_BACKWARD;
-      handled = true;
-    } else if (m == "l" || m == "left" || m == "turn_left") {
-      currentMode = MODE_TURN_LEFT;
-      handled = true;
-    } else if (m == "r" || m == "right" || m == "turn_right") {
-      currentMode = MODE_TURN_RIGHT;
-      handled = true;
-    } else if (m == "s" || m == "stand" || m == "stop") {
-      poseStand();
-      handled = true;
-    } else if (m == "z" || m == "zero") {
-      poseZero();
-      handled = true;
-    } else if (m == "hi" || m == "wave") {
-      animHiAction();
-      handled = true;
-    } else if (m == "high") {
-      setAllInputAngles(60);
-      currentMode = MODE_STAND;
-      handled = true;
-    }
+    if (m == "w" || m == "forward") { requestedMode = MODE_WALK_FORWARD; handled = true; }
+    else if (m == "b" || m == "backward") { requestedMode = MODE_WALK_BACKWARD; handled = true; }
+    else if (m == "l" || m == "left") { requestedMode = MODE_TURN_LEFT; handled = true; }
+    else if (m == "r" || m == "right") { requestedMode = MODE_TURN_RIGHT; handled = true; }
+    else if (m == "s" || m == "stand" || m == "stop") { requestedMode = MODE_STAND; poseStand(); handled = true; }
+    else if (m == "z" || m == "zero") { poseZero(); handled = true; }
+    else if (m == "hi" || m == "wave") { animHiAction(); handled = true; }
+    else if (m == "crouch") { poseCrouch(); handled = true; }
+    else if (m == "high") { poseHigh(); handled = true; }
   }
 
-  // 2. OLED Face Expression Commands
-  if (server.hasArg("face")) {
-    String f = server.arg("face");
-    f.toLowerCase();
-    if (f == "happy") currentFace = FACE_HAPPY;
-    else if (f == "walk") currentFace = FACE_WALK;
-    else if (f == "wave") currentFace = FACE_WAVE;
-    else if (f == "sleepy") currentFace = FACE_SLEEPY;
-    else if (f == "cute") currentFace = FACE_CUTE;
-    handled = true;
-  }
-
-  // 3. Individual Servo Channel Commands (supports "deg", "angle", or "val")
   if (server.hasArg("ch")) {
-    int channel = server.arg("ch").toInt();
-    int angle = -1;
-    if (server.hasArg("deg")) angle = server.arg("deg").toInt();
-    else if (server.hasArg("angle")) angle = server.arg("angle").toInt();
-    else if (server.hasArg("val")) angle = server.arg("val").toInt();
-
-    if (angle >= 0) {
-      currentMode = MODE_STAND;
-      setServoInputAngle(channel, angle);
+    int ch = server.arg("ch").toInt();
+    int angle = server.hasArg("deg") ? server.arg("deg").toInt() : server.arg("val").toInt();
+    if (angle >= 0 && ch >= 0 && ch < 8) {
+      requestedMode = MODE_STAND;
+      setServoInputAngle(ch, angle);
       handled = true;
     }
   }
 
-  // 4. Set All Servo Channels
   if (server.hasArg("all")) {
-    currentMode = MODE_STAND;
+    requestedMode = MODE_STAND;
     setAllInputAngles(server.arg("all").toInt());
     handled = true;
   }
 
-  if (handled) {
-    server.send(200, "text/plain", "OK");
+  if (server.hasArg("speed") || server.hasArg("delay")) {
+    int s = server.hasArg("speed") ? server.arg("speed").toInt() : server.arg("delay").toInt();
+    if (s >= 50 && s <= 800) { stepDelay = s; handled = true; }
+  }
+
+  server.send(handled ? 200 : 400, "text/plain", handled ? "OK" : "Bad Args");
+}
+
+/**
+ * High-Speed Unified UDP & Serial Command Processor
+ */
+void processSesameCommand(const String& prefix, const String& target, const String& payload, String& reply) {
+  lastMotionCommandMs = millis();
+
+  if (prefix == "CMD") {
+    String tgt = target; tgt.toLowerCase();
+    String val = payload; val.toLowerCase();
+
+    // Movement / Locomotion
+    if (tgt == "move" || tgt == "gait" || tgt == "drive") {
+      if (val == "w" || val == "forward" || val == "walk_forward") {
+        requestedMode = MODE_WALK_FORWARD;
+        reply = "ACK:move=forward";
+      } else if (val == "b" || val == "backward" || val == "walk_backward") {
+        requestedMode = MODE_WALK_BACKWARD;
+        reply = "ACK:move=backward";
+      } else if (val == "l" || val == "left" || val == "turn_left") {
+        requestedMode = MODE_TURN_LEFT;
+        reply = "ACK:move=left";
+      } else if (val == "r" || val == "right" || val == "turn_right") {
+        requestedMode = MODE_TURN_RIGHT;
+        reply = "ACK:move=right";
+      } else if (val == "s" || val == "stand" || val == "stop") {
+        requestedMode = MODE_STAND;
+        poseStand();
+        reply = "ACK:move=stand";
+      } else if (val == "z" || val == "zero") {
+        poseZero();
+        reply = "ACK:move=zero";
+      } else if (val == "hi" || val == "wave") {
+        animHiAction();
+        reply = "ACK:move=wave";
+      } else if (val == "crouch") {
+        poseCrouch();
+        reply = "ACK:move=crouch";
+      } else if (val == "high") {
+        poseHigh();
+        reply = "ACK:move=high";
+      } else {
+        reply = "ERR:UNKNOWN_MOVE:" + payload;
+      }
+    }
+    // Direct Channel (e.g. CMD:ch0=45 or CMD:ch=0,45)
+    else if (tgt.startsWith("ch")) {
+      int ch = -1, angle = -1;
+      if (tgt == "ch") {
+        int commaIdx = payload.indexOf(',');
+        if (commaIdx > 0) {
+          ch = payload.substring(0, commaIdx).toInt();
+          angle = payload.substring(commaIdx + 1).toInt();
+        }
+      } else {
+        ch = tgt.substring(2).toInt();
+        angle = payload.toInt();
+      }
+      if (ch >= 0 && ch < 8 && angle >= 0 && angle <= 180) {
+        requestedMode = MODE_STAND;
+        setServoInputAngle(ch, angle);
+        reply = "ACK:ch" + String(ch) + "=" + String(angle);
+      } else {
+        reply = "ERR:INVALID_CHANNEL_OR_ANGLE";
+      }
+    }
+    // Set All Servos
+    else if (tgt == "all") {
+      requestedMode = MODE_STAND;
+      setAllInputAngles(payload.toInt());
+      reply = "ACK:all=" + payload;
+    }
+    // Gait Step Delay / Speed
+    else if (tgt == "speed" || tgt == "delay") {
+      int s = payload.toInt();
+      if (s >= 50 && s <= 800) {
+        stepDelay = s;
+        reply = "ACK:speed=" + String(s);
+      } else {
+        reply = "ERR:SPEED_RANGE_50_800";
+      }
+    }
+    // Direct Actions
+    else if (tgt == "stand" || tgt == "stop") {
+      requestedMode = MODE_STAND;
+      poseStand();
+      reply = "ACK:stand";
+    } else if (tgt == "zero") {
+      poseZero();
+      reply = "ACK:zero";
+    } else if (tgt == "wave" || tgt == "hi") {
+      animHiAction();
+      reply = "ACK:wave";
+    } else if (tgt == "crouch") {
+      poseCrouch();
+      reply = "ACK:crouch";
+    } else if (tgt == "high") {
+      poseHigh();
+      reply = "ACK:high";
+    } else {
+      reply = "ERR:UNKNOWN_TARGET:" + target;
+    }
+  } else if (prefix == "CALIB") {
+    reply = "ACK:CALIB:" + target + "=" + payload;
   } else {
-    server.send(400, "text/plain", "Bad Args");
+    reply = "ERR:UNKNOWN_PREFIX:" + prefix;
   }
 }
 
@@ -375,83 +514,74 @@ void setup() {
   #endif
 
   Serial.begin(115200);
-  delay(1000);
+  delay(500);
+
   Serial.println("\n==================================================");
-  Serial.println(" 🤖 SESAME ROBOT - STAGGERED STARTUP FIRMWARE");
+  Serial.println(" 🤖 SESAME ROBOT - REAL-TIME DUAL-CORE FIRMWARE");
   Serial.println("==================================================");
 
-  // 1. Initialize PCA9685 (GPIO 21 & 22)
+  pcaMutex = xSemaphoreCreateMutex();
+
+  // 1. Initialize PCA9685 I2C (GPIO 21 & 22)
   Wire.begin(PCA_SDA, PCA_SCL);
+  Wire.setClock(400000);
   pwm.begin();
   pwm.setPWMFreq(50);
+  Serial.println(" ✅ PCA9685 I2C initialized on GPIO 21 (SDA) / GPIO 22 (SCL)");
 
-  // 2. Initialize OLED I2C Bus on GPIO 18 & 19
-  I2C_OLED.begin(OLED_SDA, OLED_SCL);
+  // 2. Launch Dedicated Locomotion Task on Core 1 (Isolated from Wi-Fi stack)
+  xTaskCreatePinnedToCore(
+    locomotionTask,
+    "LocomotionEngine",
+    4096,
+    NULL,
+    2,
+    NULL,
+    1 // Core 1
+  );
+  Serial.println("🎯 Locomotion Engine task launched on Core 1 (Real-Time)");
 
-  if (display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println(" ✅ OLED Found at 0x3C!");
-    oledReady = true;
-  } else if (display.begin(SSD1306_SWITCHCAPVCC, 0x3D)) {
-    Serial.println(" ✅ OLED Found at 0x3D!");
-    oledReady = true;
-  } else {
-    Serial.println(" ❌ OLED display not detected on 18/19.");
-  }
+  // 3. Initialize Unified Communication Protocol on Core 0
+  RobotWiFiConfig wifiCfg(
+    "123", "12345678",       // Primary Wi-Fi (Active Router network)
+    "Sabo", "sandy0606",     // Secondary Wi-Fi (Hotspot)
+    "Sesame_AP", "sesame123", // SoftAP Fallback
+    8888,                    // UDP Port
+    "sesame-robot"           // mDNS Hostname (http://sesame-robot.local)
+  );
 
-  if (oledReady) {
-    display.clearDisplay();
-    display.setRotation(0);
-    display.dim(false);
-    drawCuteFace(FACE_HAPPY);
-  }
+  robotComm.setConfig(wifiCfg);
+  robotComm.setCommandHandler(processSesameCommand);
+  robotComm.setStatusHandler(getSesameStatusJson);
+  robotComm.begin();
 
-  // 3. Wi-Fi Connection Setup (STA Mode with AP Fallback)
-  WiFi.mode(WIFI_STA);
-  Serial.print(" 🌐 Connecting to Wi-Fi SSID '");
-  Serial.print(WIFI_SSID);
-  Serial.print("'...");
+  // ⚡ Wi-Fi Power & Latency Optimization
+  WiFi.setSleep(false);                 // Sub-2ms low-latency UDP response
+  WiFi.setTxPower(WIFI_POWER_17dBm);    // Mitigates RF current spikes to prevent servo brownout
 
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 16) {
-    delay(500);
-    Serial.print(".");
-    attempts++;
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\n ✅ Connected to Wi-Fi Network!");
-    Serial.print(" 🌐 Dashboard URL: http://");
-    Serial.println(WiFi.localIP());
-  } else {
-    Serial.println("\n ⚠️ Wi-Fi Network not found. Starting Access Point fallback...");
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP(AP_SSID, AP_PASS);
-    Serial.print(" 🌐 AP Dashboard URL: http://");
-    Serial.println(WiFi.softAPIP());
-  }
-
-  if (MDNS.begin("sesame-robot")) {
-    Serial.println(" 🌐 mDNS Hostname: http://sesame-robot.local");
-  }
-
+  // 4. Start Web Dashboard Server (Port 80)
   server.on("/", handleRoot);
   server.on("/cmd", handleCommand);
+  server.on("/status", handleStatus);
+  server.on("/state", handleStatus);
   server.begin();
 
-  Serial.println(" 🧍 Standing up smoothly...");
+  lastMotionCommandMs = millis();
   poseStand();
 }
 
 void loop() {
+  // Main Communication & Network Loop (Runs isolated on Core 0)
+  robotComm.update();
   server.handleClient();
-  updateOLEDAnimation();
-  switch (currentMode) {
-    case MODE_WALK_FORWARD:  stepWalkForward();  break;
-    case MODE_WALK_BACKWARD: stepWalkBackward(); break;
-    case MODE_TURN_LEFT:     stepTurnLeft();     break;
-    case MODE_TURN_RIGHT:    stepTurnRight();    break;
-    case MODE_STAND:         break;
+
+  // 🛡️ Safety Watchdog: If walking and connection goes silent, return to STAND
+  if (currentMode != MODE_STAND) {
+    if (millis() - lastMotionCommandMs > LOCOMOTION_WATCHDOG_MS) {
+      Serial.println("⚠️ Locomotion Watchdog Timeout (>2s silent) -> Auto-Standing");
+      poseStand();
+    }
   }
+
+  delay(1);
 }

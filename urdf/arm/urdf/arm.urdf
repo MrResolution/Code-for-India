@@ -1,0 +1,200 @@
+<?xml version="1.0" ?>
+<robot name="arm" version="1.0">
+  <material name="DarkSteel">
+    <color rgba="0.22 0.24 0.28 1.0"/>
+  </material>
+  <material name="Copper">
+    <color rgba="0.72 0.45 0.20 1.0"/>
+  </material>
+  <material name="Teal">
+    <color rgba="0.10 0.56 0.62 1.0"/>
+  </material>
+  <material name="Aluminum">
+    <color rgba="0.75 0.75 0.80 1.0"/>
+  </material>
+  <material name="AccentOrange">
+    <color rgba="0.90 0.45 0.10 1.0"/>
+  </material>
+  <material name="Gunmetal">
+    <color rgba="0.32 0.34 0.36 1.0"/>
+  </material>
+  <material name="MatteBlack">
+    <color rgba="0.15 0.15 0.15 1.0"/>
+  </material>
+  <material name="IndustrialBlue">
+    <color rgba="0.00 0.45 0.75 1.0"/>
+  </material>
+  <link name="world"/>
+  <joint name="fixed_base" type="fixed">
+    <parent link="world"/>
+    <child link="basecase1_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+  <joint name="turntable_link_joint_dup" type="revolute">
+    <parent link="basecase1_link"/>
+    <child link="turntable_link"/>
+    <origin xyz="-0.045306 -0.000297 0.045118" rpy="0.00000 0.00000 0.00443"/>
+    <axis xyz="0.0 0.0 1.0"/>
+    <limit lower="-3.0000" upper="3.0000" effort="30.0" velocity="2.0"/>
+  </joint>
+  <joint name="turntable_link_joint" type="revolute">
+    <parent link="turntable_link"/>
+    <child link="Elbow_1_link"/>
+    <origin xyz="-0.029849 -0.000704 0.045105" rpy="0.00000 0.00000 3.13716"/>
+    <axis xyz="0.0 1.0 0.0"/>
+    <limit lower="-2.0000" upper="2.0000" effort="30.0" velocity="2.0"/>
+  </joint>
+  <joint name="turntable_link_joint_dup_1" type="revolute">
+    <parent link="Elbow_1_link"/>
+    <child link="Elbow_2_link"/>
+    <origin xyz="0.047192 -0.001837 0.194238" rpy="1.57078 1.56581 1.57078"/>
+    <axis xyz="0.0 1.0 0.0"/>
+    <limit lower="-2.0000" upper="2.0000" effort="30.0" velocity="2.0"/>
+  </joint>
+  <joint name="turntable_link_joint_dup_2" type="revolute">
+    <parent link="Elbow_2_link"/>
+    <child link="Wrist_pitch._link"/>
+    <origin xyz="-0.000145 -0.000782 0.139796" rpy="0.00167 0.01634 0.01070"/>
+    <axis xyz="0.0 1.0 0.0"/>
+    <limit lower="-2.0000" upper="2.0000" effort="30.0" velocity="2.0"/>
+  </joint>
+  <joint name="turntable_link_joint_dup_3" type="revolute">
+    <parent link="Wrist_pitch._link"/>
+    <child link="gripper_base_link"/>
+    <origin xyz="-0.001615 0.000642 0.040411" rpy="0.00000 0.00000 0.00000"/>
+    <axis xyz="0.0 0.0 1.0"/>
+    <limit lower="-3.1416" upper="3.1416" effort="30.0" velocity="2.0"/>
+  </joint>
+  <link name="basecase1_link">
+    <inertial>
+      <mass value="2.500"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.004021" ixy="0" ixz="0" iyy="0.010207" iyz="0" izz="0.012187"/>
+    </inertial>
+    <visual name="basecase1">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/part_3_obj3.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+      <material name="DarkSteel">
+        <color rgba="0.22 0.24 0.28 1.0"/>
+      </material>
+    </visual>
+    <collision name="basecase1_link_col">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/part_3_obj3.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="turntable_link">
+    <inertial>
+      <mass value="1.200"/>
+      <origin xyz="0 0 0" rpy="-1.04042 -1.54565 -0.52117"/>
+      <inertia ixx="0.002993" ixy="0" ixz="0" iyy="0.003436" iyz="0" izz="0.003329"/>
+    </inertial>
+    <visual name="turntable">
+      <origin xyz="0 0 0" rpy="-1.04042 -1.54565 -0.52117"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/part_44_obj44.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+      <material name="MatteBlack">
+        <color rgba="0.15 0.15 0.15 1.0"/>
+      </material>
+    </visual>
+    <collision name="turntable_link_col">
+      <origin xyz="0 0 0" rpy="-1.04042 -1.54565 -0.52117"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/part_44_obj44.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="Elbow_1_link">
+    <inertial>
+      <mass value="1.000"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.005000" ixy="0" ixz="0" iyy="0.005000" iyz="0" izz="0.005000"/>
+    </inertial>
+    <visual name="Elbow_1">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/part_7_obj7.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+      <material name="IndustrialBlue">
+        <color rgba="0.00 0.45 0.75 1.0"/>
+      </material>
+    </visual>
+    <collision name="Elbow_1_link_col">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/part_7_obj7.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="Elbow_2_link">
+    <inertial>
+      <mass value="0.800"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.005000" ixy="0" ixz="0" iyy="0.005000" iyz="0" izz="0.005000"/>
+    </inertial>
+    <visual name="Elbow_2">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/part_9_obj9.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+      <material name="Aluminum">
+        <color rgba="0.75 0.75 0.80 1.0"/>
+      </material>
+    </visual>
+    <collision name="Elbow_2_link_col">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/part_9_obj9.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="Wrist_pitch._link">
+    <inertial>
+      <mass value="0.500"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.000397" ixy="0" ixz="0" iyy="0.000193" iyz="0" izz="0.000286"/>
+    </inertial>
+    <visual name="Wrist_pitch.">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/Robot+Arm+Wrist.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+      <material name="AccentOrange">
+        <color rgba="0.90 0.45 0.10 1.0"/>
+      </material>
+    </visual>
+    <collision name="Wrist_pitch._link_col">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/Robot+Arm+Wrist.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+    </collision>
+  </link>
+  <link name="gripper_base_link">
+    <inertial>
+      <mass value="0.300"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.000100" ixy="0" ixz="0" iyy="0.000100" iyz="0" izz="0.000100"/>
+    </inertial>
+    <visual name="gripper_base">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/gripper_base.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+      <material name="Gunmetal">
+        <color rgba="0.32 0.34 0.36 1.0"/>
+      </material>
+    </visual>
+    <collision name="gripper_base_link_col">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl/gripper_base.stl" scale="0.00100 0.00100 0.00100"/>
+      </geometry>
+    </collision>
+  </link>
+</robot>

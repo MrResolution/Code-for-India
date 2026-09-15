@@ -14,7 +14,9 @@ Physical Servo to Joint Pin Mapping:
   4. turntable_link_joint_dup_2 → ESP32 GPIO 23 (Elbow 2 Pitch)
 """
 
+import json
 import math
+import os
 import socket
 import threading
 import time
@@ -24,6 +26,8 @@ from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import String as StringMsg
 
+CALIB_FILE_PATH = "/home/sabo/Documents/learn_/Hardware/servo_calibration.json"
+
 
 class ServoSerialCommander(Node):
 
@@ -32,7 +36,13 @@ class ServoSerialCommander(Node):
 
         # ── ROS 2 Node Parameters ─────────────────────────────────────────
         self.declare_parameter('use_wifi', False)
-        self.declare_parameter('esp32_ip', '10.216.192.100') # Assigned Wi-Fi IP on network 'Sabo'
+        # Attempt to dynamically resolve robot-arm.local, fallback to known IP
+        resolved_ip = '10.35.234.59'
+        try:
+            resolved_ip = socket.gethostbyname('robot-arm.local')
+        except Exception:
+            pass
+        self.declare_parameter('esp32_ip', resolved_ip)
         self.declare_parameter('udp_port', 8888)
         self.declare_parameter('port', '/dev/ttyUSB0')
         self.declare_parameter('baudrate', 115200)
@@ -55,29 +65,42 @@ class ServoSerialCommander(Node):
             'turntable_link_joint_dup': {
                 'rad_min': -3.0, 'rad_max': 3.0,
                 'servo_min_deg': 0.0, 'servo_max_deg': 180.0,
-                'trim_deg': 0.0, 'invert': False, 'pin': 18
+                'trim_deg': 0.0, 'sync_offset_deg': 0.0, 'invert': False, 'pin': 18
             },
             'turntable_link_joint': {
                 'rad_min': -2.0, 'rad_max': 2.0,
                 'servo_min_deg': 0.0, 'servo_max_deg': 180.0,
-                'trim_deg': 0.0, 'invert': False, 'pin': 19 # Drives GPIO 19 Primary & GPIO 21 Slave
+                'trim_deg': 0.0, 'sync_offset_deg': 0.0, 'invert': False, 'pin': 19 # Drives GPIO 19 Primary & GPIO 21 Slave
             },
             'turntable_link_joint_dup_1': {
                 'rad_min': -2.0, 'rad_max': 2.0,
                 'servo_min_deg': 0.0, 'servo_max_deg': 180.0,
-                'trim_deg': 0.0, 'invert': False, 'pin': 22
+                'trim_deg': 0.0, 'sync_offset_deg': 0.0, 'invert': False, 'pin': 22
             },
             'turntable_link_joint_dup_2': {
                 'rad_min': -2.0, 'rad_max': 2.0,
                 'servo_min_deg': 0.0, 'servo_max_deg': 180.0,
-                'trim_deg': 0.0, 'invert': False, 'pin': 23
+                'trim_deg': 0.0, 'sync_offset_deg': 0.0, 'invert': False, 'pin': 23
+            },
+            'turntable_link_joint_dup_3': {
+                'rad_min': -3.14159, 'rad_max': 3.14159,
+                'servo_min_deg': 0.0, 'servo_max_deg': 180.0,
+                'trim_deg': 0.0, 'sync_offset_deg': 0.0, 'invert': False, 'pin': 27
             },
             'wrist_twist_joint': {
                 'rad_min': -3.14159, 'rad_max': 3.14159,
                 'servo_min_deg': 0.0, 'servo_max_deg': 180.0,
-                'trim_deg': 0.0, 'invert': False, 'pin': 27
+                'trim_deg': 0.0, 'sync_offset_deg': 0.0, 'invert': False, 'pin': 27
+            },
+            'grip': {
+                'rad_min': 0.0, 'rad_max': 3.14159,
+                'servo_min_deg': 0.0, 'servo_max_deg': 180.0,
+                'trim_deg': 0.0, 'sync_offset_deg': 0.0, 'invert': False, 'pin': 26
             },
         }
+
+        # Load stored calibrations from disk
+        self.load_calibration_file()
 
         mode_str = f"📶 Wi-Fi UDP ({self.esp32_ip}:{self.udp_port})" if self.use_wifi else f"🔌 USB Serial ({self.port})"
         self.get_logger().info(
@@ -85,7 +108,7 @@ class ServoSerialCommander(Node):
             f"  Communication Mode: {mode_str}\n"
             f"  Active Servo Control Joints:\n"
             + "\n".join([
-                f"    • '{j}' [GPIO {c['pin']}]: range=[{c['servo_min_deg']}°, {c['servo_max_deg']}°]"
+                f"    • '{j}' [GPIO {c['pin']}]: range=[{c['servo_min_deg']}°, {c['servo_max_deg']}°], sync_offset={c.get('sync_offset_deg', 0.0)}°"
                 for j, c in self.joint_calib.items()
             ])
         )
@@ -184,6 +207,20 @@ class ServoSerialCommander(Node):
                 self.get_logger().info("📶 Commander actively switched to Wi-Fi UDP mode.")
             return
 
+        if text.startswith('SYNC:'):
+            try:
+                payload = text[5:].strip()
+                eq_idx = payload.find('=')
+                if eq_idx > 0:
+                    j_name = payload[:eq_idx].strip()
+                    val = float(payload[eq_idx+1:].strip())
+                    if j_name in self.joint_calib:
+                        self.joint_calib[j_name]['sync_offset_deg'] = val
+                        self.get_logger().info(f"🎯 Live Sync Offset Updated for '{j_name}': {val:+.1f}°")
+            except Exception as e:
+                self.get_logger().error(f"Error parsing SYNC string: {e}")
+            return
+
         if text.startswith('CMD:') or text.startswith('CALIB:'):
             self.write_raw_data(text + "\n")
             if text.startswith('CALIB:'):
@@ -201,6 +238,26 @@ class ServoSerialCommander(Node):
                                 self.get_logger().info(f"⚙️ Live Limits Updated for '{j_name}': [{min_deg}°, {max_deg}°]")
                 except Exception as e:
                     self.get_logger().error(f"Error parsing calibration string: {e}")
+
+    def load_calibration_file(self):
+        """Load stored min/max limits, trim, and twin sync offsets from calibration profile."""
+        if os.path.exists(CALIB_FILE_PATH):
+            try:
+                with open(CALIB_FILE_PATH, 'r') as f:
+                    calib_data = json.load(f)
+                    for j_name, c in calib_data.items():
+                        if j_name in self.joint_calib and isinstance(c, dict):
+                            if 'servo_min_deg' in c:
+                                self.joint_calib[j_name]['servo_min_deg'] = float(c['servo_min_deg'])
+                            if 'servo_max_deg' in c:
+                                self.joint_calib[j_name]['servo_max_deg'] = float(c['servo_max_deg'])
+                            if 'trim_deg' in c:
+                                self.joint_calib[j_name]['trim_deg'] = float(c['trim_deg'])
+                            if 'sync_offset_deg' in c:
+                                self.joint_calib[j_name]['sync_offset_deg'] = float(c['sync_offset_deg'])
+                self.get_logger().info(f"✅ Calibration profile loaded from {CALIB_FILE_PATH}")
+            except Exception as e:
+                self.get_logger().error(f"Error loading calibration file: {e}")
 
     def connect_serial(self):
         """Establish non-blocking serial connection to ESP32."""
@@ -271,7 +328,7 @@ class ServoSerialCommander(Node):
                     self.serial_conn = None
 
     def map_rad_to_calibrated_deg(self, rad_val, cfg):
-        """Map radians → calibrated degrees applying bounds, inversion, trim, and safety limits."""
+        """Map radians → calibrated degrees applying bounds, inversion, sync offset, trim, and safety limits."""
         r_min, r_max = cfg['rad_min'], cfg['rad_max']
         rad_clamped = max(r_min, min(r_max, rad_val))
 
@@ -280,6 +337,7 @@ class ServoSerialCommander(Node):
             ratio = 1.0 - ratio
 
         deg = 0.0 + ratio * 180.0
+        deg -= cfg.get('sync_offset_deg', 0.0)
         deg += cfg['trim_deg']
         deg_clamped = max(cfg['servo_min_deg'], min(cfg['servo_max_deg'], deg))
         return round(deg_clamped, 1)
@@ -300,7 +358,8 @@ class ServoSerialCommander(Node):
 
                     if now - last_t >= self.min_cmd_interval:
                         if last_deg is None or abs(deg_value - last_deg) >= 0.5:
-                            cmd = f"CMD:{j_name}={deg_value:.1f}\n"
+                            target_name = "wrist_twist_joint" if j_name == "turntable_link_joint_dup_3" else j_name
+                            cmd = f"CMD:{target_name}={deg_value:.1f}\n"
                             self.write_raw_data(cmd)
                             self.last_sent_deg[j_name] = deg_value
                             self.last_cmd_time[j_name] = now

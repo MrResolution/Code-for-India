@@ -38,6 +38,10 @@
           <span class="dot" id="dot-sensornode"></span>
           <span>ESP32 #3 (Sensors): <strong id="status-sensornode-text">Simulating</strong></span>
         </div>
+        <div class="node-badge status-online" id="badge-slamnode">
+          <span class="dot" id="dot-slamnode"></span>
+          <span>ESP32-CAM (SLAM): <strong id="status-slamnode-text">Listening</strong></span>
+        </div>
       </div>
 
       <!-- Communication Mode Toggle -->
@@ -65,17 +69,22 @@
           <button id="tab-btn-arm" class="tab-btn active">🦾 Robotic Arm</button>
           <button id="tab-btn-quard" class="tab-btn">🤖 Quard Bot (Quadruped)</button>
           <button id="tab-btn-sensors" class="tab-btn">🌡️ ESP32 Sensor Node</button>
+          <button id="tab-btn-slam" class="tab-btn">👁️ Visual SLAM (Sensor Bot)</button>
         </div>
 
         <!-- PANEL 1: Robotic Arm Control -->
         <div id="panel-arm-control" class="tab-panel active">
           <div class="tile-header">
             <h2>🎛️ Arm Joint Control & Calibration</h2>
-            <button id="btn-save" class="btn btn-success btn-sm">💾 Save Config</button>
+            <div style="display:flex;gap:6px;">
+              <button id="btn-load-arm-view" class="btn btn-outline btn-sm" title="Focus and load Robot Arm in 3D Viewport">👁️ 3D View</button>
+              <button id="btn-save" class="btn btn-success btn-sm">💾 Save Config</button>
+            </div>
           </div>
 
           <!-- Global Action Bar -->
           <div class="action-bar">
+            <button id="btn-sync-all-arm" class="btn btn-success btn-sm" title="Capture current posture as aligned reference">🎯 Sync to Physical</button>
             <button id="btn-sim" class="btn btn-warning btn-sm">▶️ Start Sim</button>
             <button id="btn-home" class="btn btn-info btn-sm">🏠 Go Home</button>
             <button id="btn-set-home" class="btn btn-purple btn-sm">📌 Set Home</button>
@@ -117,7 +126,10 @@
         <div id="panel-quard-control" class="tab-panel">
           <div class="tile-header">
             <h2>🤖 Quard Bot Locomotion & Servo Control</h2>
-            <button id="btn-quard-ping" class="btn btn-info btn-sm">🔄 Test Ping</button>
+            <div style="display:flex;gap:6px;">
+              <button id="btn-load-quard-view" class="btn btn-outline btn-sm" title="Focus and load Quard Bot in 3D Viewport">👁️ 3D View</button>
+              <button id="btn-quard-ping" class="btn btn-info btn-sm">🔄 Test Ping</button>
+            </div>
           </div>
 
           <div class="scroll-container">
@@ -169,6 +181,7 @@
               <div class="preset-buttons-grid">
                 <button class="btn btn-outline btn-sm btn-preset" data-preset="stand">🧍 Stand (45°)</button>
                 <button class="btn btn-outline btn-sm btn-preset" data-preset="zero">🎯 Base Zero (0°)</button>
+                <button class="btn btn-outline btn-sm btn-preset" data-preset="crouch">🦆 Crouch (30°)</button>
                 <button class="btn btn-outline btn-sm btn-preset" data-preset="high">🦒 High Stance (60°)</button>
                 <button class="btn btn-outline btn-sm btn-preset" data-preset="wave">👋 Wave Animation</button>
               </div>
@@ -190,8 +203,8 @@
               <!-- Set All Servos Slider -->
               <div class="set-all-row">
                 <label>Set All Channels:</label>
-                <input type="range" id="slider-quard-all" min="0" max="180" value="90">
-                <span id="readout-quard-all" class="readout-pill">90°</span>
+                <input type="range" id="slider-quard-all" min="0" max="180" value="45">
+                <span id="readout-quard-all" class="readout-pill">45°</span>
               </div>
 
               <div id="quard-channels-list" class="quard-channels-list">
@@ -201,17 +214,38 @@
           </div>
         </div>
 
-        <!-- PANEL 3: ESP32 Sensor Node (DHT11, MPU6050, MQ-5) -->
+        <!-- PANEL 3: ESP32 Rover Sensor Node (DHT11, BMP280, MPU6050, MQ Gas, Water, Flame, GPS) -->
         <div id="panel-sensors-control" class="tab-panel">
           <div class="tile-header">
-            <h2>🌡️ ESP32 Sensor Node Telemetry</h2>
-            <button id="btn-sensors-sim" class="btn btn-warning btn-sm">▶️ Simulating Data</button>
+            <h2>🚀 ESP32 Rover Sensor Node Telemetry</h2>
+            <div style="display:flex;gap:6px;">
+              <button id="btn-load-sensor-view" class="btn btn-outline btn-sm" title="Focus and load IMU Sensor in 3D Viewport">👁️ 3D View</button>
+              <button id="btn-sensors-sim" class="btn btn-warning btn-sm">▶️ Simulating Data</button>
+            </div>
           </div>
 
           <div class="scroll-container">
-            <!-- Connection & Telemetry Settings Card -->
+            <!-- Emergency Fire Alert Banner -->
+            <div id="banner-sensor-fire" style="display:none; background:#b91c1c; color:#ffffff; font-weight:bold; padding:10px 14px; border-radius:6px; margin-bottom:10px; text-align:center; font-size:14px; border:2px solid #ef4444; box-shadow: 0 0 15px rgba(239,68,68,0.5);">
+              🚨 EMERGENCY: FIRE DETECTED ON ROVER! 🚨
+            </div>
+
+            <!-- Connection & Stream Settings Card -->
             <div class="card sensor-conn-card">
-              <div class="card-title">🔌 ESP32 Serial / Stream Connection</div>
+              <div class="card-title flex-between">
+                <span>🔌 Rover Network & Serial Connection</span>
+                <span id="pill-sensor-wifi-status" class="status-pill status-offline">Wi-Fi: Offline</span>
+              </div>
+              
+              <!-- Wi-Fi Direct HTTP Polling Row -->
+              <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px; flex-wrap:wrap;">
+                <span style="font-size:12px; font-weight:600; color:#38bdf8;">🌐 Wi-Fi IP / Host:</span>
+                <input type="text" id="sensor-wifi-ip" class="form-input" style="flex:1; min-width:140px; font-weight:bold;" value="192.168.1.100" placeholder="192.168.1.x or IP">
+                <button id="btn-sensor-wifi-connect" class="btn btn-primary btn-sm">🌐 Connect Wi-Fi</button>
+                <button id="btn-sensor-wifi-disconnect" class="btn btn-outline btn-sm" style="display:none;">Disconnect</button>
+              </div>
+
+              <!-- Hardware Serial Connection Row -->
               <div class="serial-controls">
                 <select id="sensor-serial-port" class="form-input">
                   <option value="/dev/ttyUSB0">/dev/ttyUSB0 (ESP32 USB)</option>
@@ -222,44 +256,80 @@
                   <option value="115200">115200 Baud</option>
                   <option value="9600">9600 Baud</option>
                 </select>
-                <button id="btn-sensor-connect" class="btn btn-primary btn-sm">Connect Serial</button>
+                <button id="btn-sensor-connect" class="btn btn-outline btn-sm">Connect Serial</button>
               </div>
             </div>
 
-            <!-- DHT11 Climate Card -->
+            <!-- Climate & Atmosphere Card (DHT11 & BMP-280) -->
             <div class="card sensor-data-card">
               <div class="card-title flex-between">
-                <span>🌡️ DHT11 Temperature & Humidity</span>
+                <span>🌡️ Climate & Atmospheric (DHT11 & BMP-280)</span>
                 <span id="badge-dht-status" class="status-pill status-online">OK</span>
               </div>
               <div class="sensor-metrics-grid">
                 <div class="metric-box">
-                  <span class="metric-label">Temperature</span>
-                  <span id="val-temp" class="metric-val">24.50 °C</span>
-                  <span id="val-temp-f" class="metric-subval">(76.10 °F)</span>
+                  <span class="metric-label">DHT11 Temperature</span>
+                  <span id="val-temp" class="metric-val">24.5 °C</span>
+                  <span id="val-temp-f" class="metric-subval">(76.1 °F)</span>
                   <div class="meter-bar"><div id="meter-temp" class="meter-fill" style="width: 49%"></div></div>
                 </div>
                 <div class="metric-box">
-                  <span class="metric-label">Relative Humidity</span>
-                  <span id="val-humidity" class="metric-val">48.00 %</span>
-                  <span class="metric-subval">Comfort Zone</span>
+                  <span class="metric-label">DHT11 Humidity</span>
+                  <span id="val-humidity" class="metric-val">48.0 %</span>
+                  <span class="metric-subval">Relative Humidity</span>
                   <div class="meter-bar"><div id="meter-humidity" class="meter-fill" style="width: 48%"></div></div>
+                </div>
+                <div class="metric-box">
+                  <span class="metric-label">BMP-280 Temperature</span>
+                  <span id="val-bmp-temp" class="metric-val">24.8 °C</span>
+                  <span class="metric-subval">Precision Baro Temp</span>
+                  <div class="meter-bar"><div id="meter-bmp-temp" class="meter-fill" style="width: 50%; background:#f59e0b;"></div></div>
+                </div>
+                <div class="metric-box">
+                  <span class="metric-label">Barometric Pressure</span>
+                  <span id="val-pressure" class="metric-val">1013 hPa</span>
+                  <span id="val-pressure-sub" class="metric-subval">Sea-level reference</span>
+                  <div class="meter-bar"><div id="meter-pressure" class="meter-fill" style="width: 70%; background:#818cf8;"></div></div>
                 </div>
               </div>
             </div>
 
-            <!-- MQ-5 Combustible Gas Card -->
+            <!-- Environmental Hazards Card (Gas, Water, Flame) -->
             <div class="card sensor-data-card">
               <div class="card-title flex-between">
-                <span>💨 MQ-5 Gas & Air Quality Sensor</span>
-                <span id="badge-gas-status" class="status-pill status-online">Clean Air</span>
+                <span>⚠️ Environmental Hazards & Safety</span>
+                <span id="badge-hazard-status" class="status-pill status-online">Safe</span>
               </div>
-              <div class="sensor-single-metric">
-                <div class="metric-row">
-                  <span class="metric-label">Analog Gas Reading:</span>
-                  <span id="val-gas" class="readout-pill">415 / 4095</span>
+              <div class="sensor-metrics-grid">
+                <!-- MQ Gas -->
+                <div class="metric-box">
+                  <div class="flex-between">
+                    <span class="metric-label">💨 Combustible Gas:</span>
+                    <span id="badge-gas-status" class="status-pill status-online">Clean Air</span>
+                  </div>
+                  <span id="val-gas" class="metric-val">415 / 4095</span>
+                  <div class="meter-bar"><div id="meter-gas" class="meter-fill meter-gas-fill" style="width: 10%"></div></div>
                 </div>
-                <div class="meter-bar meter-lg"><div id="meter-gas" class="meter-fill meter-gas-fill" style="width: 10%"></div></div>
+                <!-- Water Sensor -->
+                <div class="metric-box">
+                  <div class="flex-between">
+                    <span class="metric-label">💧 Water Level SIG:</span>
+                    <span id="badge-water-status" class="status-pill status-online">Dry</span>
+                  </div>
+                  <span id="val-water" class="metric-val">120 / 4095</span>
+                  <div class="meter-bar"><div id="meter-water" class="meter-fill" style="width: 3%; background:#3b82f6;"></div></div>
+                </div>
+                <!-- Flame Sensor -->
+                <div class="metric-box" style="grid-column: span 2;">
+                  <div class="flex-between">
+                    <span class="metric-label">🔥 Flame Sensor DO:</span>
+                    <span id="badge-flame-status" class="status-pill status-online">✅ Clear</span>
+                  </div>
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px;">
+                    <span id="val-flame" class="readout-pill" style="font-weight:bold;">Pin DO: HIGH (No Fire Detected)</span>
+                    <span id="val-alert-state" class="status-pill status-online">Alert: OK</span>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -267,7 +337,10 @@
             <div class="card sensor-data-card">
               <div class="card-title flex-between">
                 <span>🧭 MPU6050 6-DOF IMU (Motion & Tilt)</span>
-                <span id="badge-imu-status" class="status-pill status-online">Active</span>
+                <div style="display:flex;gap:6px;align-items:center;">
+                  <button id="btn-tare-imu" class="btn btn-outline btn-xs" title="Tare IMU to Level Ground (Zero Pitch & Roll)">🎯 Tare Horizon</button>
+                  <span id="badge-imu-status" class="status-pill status-online">Active</span>
+                </div>
               </div>
               <div class="imu-grid">
                 <div class="imu-col">
@@ -290,13 +363,185 @@
               </div>
             </div>
 
+            <!-- GPS NEO-6M & System Status Card -->
+            <div class="card sensor-data-card">
+              <div class="card-title flex-between">
+                <span>🛰️ GPS NEO-6M Navigation & Rover Storage</span>
+                <span id="badge-gps-status" class="status-pill status-offline">No Fix</span>
+              </div>
+              <div class="sensor-metrics-grid">
+                <div class="metric-box">
+                  <span class="metric-label">Coordinates (Lat, Lng)</span>
+                  <span id="val-gps-coords" class="metric-val" style="font-size:14px;">17.385044, 78.486671</span>
+                  <span id="val-gps-sats" class="metric-subval">🛰️ 0 satellites locked</span>
+                </div>
+                <div class="metric-box">
+                  <span class="metric-label">microSD Logging</span>
+                  <span id="val-sd-status" class="metric-val" style="font-size:15px;">💾 SD: Ready</span>
+                  <span id="val-uptime" class="metric-subval">Uptime: 0s</span>
+                </div>
+              </div>
+            </div>
+
             <!-- Live ESP32 Serial Console Log -->
             <div class="card terminal-card">
               <div class="card-title flex-between">
-                <span>📜 ESP32 Live Telemetry Log</span>
+                <span>📜 Rover Live Telemetry Log</span>
                 <button id="btn-clear-sensor-log" class="btn btn-outline btn-xs">Clear Console</button>
               </div>
               <pre id="sensor-console-log" class="terminal-log">Connecting to ESP32 Telemetry Stream...</pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- PANEL 4: ESP32-CAM Visual SLAM (Sensor Bot) -->
+        <div id="panel-slam-control" class="tab-panel">
+          <div class="tile-header">
+            <h2>👁️ ESP32-CAM Visual SLAM & ToF Mapping</h2>
+            <div style="display:flex;gap:6px;">
+              <button id="btn-load-slam-view" class="btn btn-outline btn-sm" title="Focus and load Visual SLAM in 3D Viewport">👁️ 3D View</button>
+              <button id="btn-slam-reset" class="btn btn-danger btn-sm">🔄 Reset Map</button>
+            </div>
+          </div>
+
+          <div class="scroll-container">
+            <!-- Connection & Engine Status Card -->
+            <div class="card slam-conn-card">
+              <div class="card-title flex-between">
+                <span>📡 Camera Stream & SLAM Engine Connection</span>
+                <span id="pill-slam-status" class="status-pill status-online">Listening</span>
+              </div>
+              <div class="slam-engine-row" style="flex-wrap: wrap; gap: 8px;">
+                <div class="input-pill" style="flex: 1; min-width: 280px; display: flex; align-items: center; gap: 6px;">
+                  <span class="pill-label">Target:</span>
+                  <input type="text" id="input-slam-ip" class="input-text" style="background:#0f172a; color:#38bdf8; border:1px solid #334155; border-radius:4px; padding:3px 8px; font-weight:bold; font-size:12px; width:125px;" value="10.88.106.30" placeholder="IP or /dev/ttyUSB0" />
+                  <button id="btn-slam-connect" class="btn btn-primary btn-xs" title="Connect to ESP32 stream">🔗 Connect</button>
+                  <button id="btn-slam-quick-wifi" class="btn btn-outline btn-xs" title="Target default ESP32 IP">🌐 Wi-Fi</button>
+                  <button id="btn-slam-quick-serial" class="btn btn-outline btn-xs" title="Target /dev/ttyUSB0">🔌 USB</button>
+                  <button id="btn-slam-quick-auto" class="btn btn-outline btn-xs" title="Auto-detect hardware">🔍 Auto</button>
+                  <button id="btn-slam-disconnect" class="btn btn-outline btn-xs" style="display:none;" title="Disconnect stream">Disconnect</button>
+                </div>
+                <div class="input-pill">
+                  <span class="pill-label">Ingest:</span>
+                  <strong id="val-slam-ingest-ip">10.35.234.59:5000 (UDP)</strong>
+                </div>
+                <div class="input-pill">
+                  <span class="pill-label">Status:</span>
+                  <strong id="val-slam-engine-state">Active</strong>
+                </div>
+                <button id="btn-slam-toggle" class="btn btn-outline btn-xs">⏹️ Stop Engine</button>
+              </div>
+            </div>
+
+            <!-- Live Camera Feed & 2D Top-Down SLAM Map Card -->
+            <div class="card slam-feed-card">
+              <div class="card-title flex-between">
+                <span>📹 Visual Mapping Feeds</span>
+                <div class="view-toggle-group">
+                  <button id="btn-slam-view-cam" class="btn btn-xs btn-outline active">📹 Camera HUD</button>
+                  <button id="btn-slam-view-map" class="btn btn-xs btn-outline">🗺️ 2D Map</button>
+                  <button id="btn-slam-view-dual" class="btn btn-xs btn-outline">⚡ Dual View</button>
+                </div>
+              </div>
+
+              <div id="slam-viewports-container" class="slam-viewports-single">
+                <div id="slam-cam-viewport" class="slam-viewport-box">
+                  <img id="img-slam-cam" src="/api/slam/frame" alt="ESP32-CAM Live Feed" class="slam-video-feed">
+                  <span class="slam-feed-tag">Camera & Telemetry HUD</span>
+                </div>
+                <div id="slam-map-viewport" class="slam-viewport-box" style="display:none;">
+                  <img id="img-slam-map" src="/api/slam/map_2d" alt="2D SLAM Top-Down Map" class="slam-video-feed">
+                  <span class="slam-feed-tag">2D Top-Down Map</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Performance FPS Card -->
+            <div class="card sensor-data-card">
+              <div class="card-title">⚡ Real-Time Pipeline Rates</div>
+              <div class="slam-metrics-triplet">
+                <div class="metric-box">
+                  <span class="metric-label">UDP Ingest FPS</span>
+                  <span id="val-slam-udp-fps" class="metric-val">0.0</span>
+                  <span class="metric-subval">Network Stream</span>
+                </div>
+                <div class="metric-box">
+                  <span class="metric-label">VO Processing FPS</span>
+                  <span id="val-slam-vo-fps" class="metric-val">0.0</span>
+                  <span class="metric-subval">ORB Tracking</span>
+                </div>
+                <div class="metric-box">
+                  <span class="metric-label">Web Client FPS</span>
+                  <span id="val-slam-web-fps" class="metric-val">0.0</span>
+                  <span class="metric-subval">Dashboard Sync</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- VL53L1X ToF Distance Card -->
+            <div class="card sensor-data-card">
+              <div class="card-title flex-between">
+                <span>📏 VL53L1X Time-of-Flight Distance</span>
+                <span id="badge-slam-tof" class="status-pill status-offline">Awaiting</span>
+              </div>
+              <div class="sensor-single-metric">
+                <div class="metric-row">
+                  <span class="metric-label">Front Target Range:</span>
+                  <span id="val-slam-dist" class="readout-pill">0.00 m (0 mm)</span>
+                </div>
+                <div class="meter-bar meter-lg">
+                  <div id="meter-slam-dist" class="meter-fill meter-tof-fill" style="width: 0%"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Visual Odometry Tracking Card -->
+            <div class="card sensor-data-card">
+              <div class="card-title flex-between">
+                <span>🔍 Visual Odometry & Landmark Triangulation</span>
+                <span id="badge-slam-tracking" class="status-pill status-online">Tracking</span>
+              </div>
+              <div class="sensor-metrics-grid">
+                <div class="metric-box">
+                  <span class="metric-label">ORB Keypoints</span>
+                  <span id="val-slam-features" class="metric-val">0</span>
+                  <span class="metric-subval">Features Extracted</span>
+                </div>
+                <div class="metric-box">
+                  <span class="metric-label">Inlier Matches</span>
+                  <span id="val-slam-matches" class="metric-val">0</span>
+                  <span class="metric-subval">Epipolar Inliers</span>
+                </div>
+                <div class="metric-box">
+                  <span class="metric-label">Metric Scale</span>
+                  <span id="val-slam-scale" class="metric-val">0.050 m</span>
+                  <span class="metric-subval">ToF Constrained</span>
+                </div>
+                <div class="metric-box">
+                  <span class="metric-label">3D Map Landmarks</span>
+                  <span id="val-slam-points" class="metric-val">0</span>
+                  <span class="metric-subval">Voxel Deduplicated</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Robot Pose & Heading Card -->
+            <div class="card sensor-data-card">
+              <div class="card-title">🧭 6-DOF Robot Pose (World Frame)</div>
+              <div class="imu-grid">
+                <div class="imu-col">
+                  <h4>Position (m)</h4>
+                  <div class="axis-row"><span>X:</span><strong id="val-slam-pos-x">0.000</strong></div>
+                  <div class="axis-row"><span>Y:</span><strong id="val-slam-pos-y">0.000</strong></div>
+                  <div class="axis-row"><span>Z:</span><strong id="val-slam-pos-z">0.000</strong></div>
+                </div>
+                <div class="imu-col">
+                  <h4>Orientation</h4>
+                  <div class="axis-row"><span>Yaw:</span><strong id="val-slam-heading">0.0°</strong></div>
+                  <div class="axis-row"><span>Target:</span><strong>Forward +Z</strong></div>
+                  <div class="axis-row"><span>Frame:</span><strong>Camera Optical</strong></div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -305,8 +550,23 @@
       <!-- Right 3D Viewport Tile -->
       <section class="tile viewport-tile">
         <div class="tile-header">
-          <h2>🧊 Integrated 3D WebGL Viewport</h2>
+          <div class="viewport-title-group">
+            <h2>🧊 3D WebGL Digital Twin</h2>
+            <div class="model-loader-bar">
+              <label for="select-model-mode">📦 Load Mode:</label>
+              <select id="select-model-mode" class="form-select-sm">
+                <option value="auto">🔄 Auto (By Section)</option>
+                <option value="slam">👁️ Visual SLAM 3D Map</option>
+                <option value="quard">🤖 Quard Bot (Quadruped)</option>
+                <option value="arm">🦾 Robotic Arm (6-DOF)</option>
+                <option value="dual">⚡ Dual View (Both Bots)</option>
+                <option value="sensors">🧭 ESP32 IMU Sensor</option>
+              </select>
+              <span id="badge-model-status" class="model-status-badge">Loaded: 🦾 Arm</span>
+            </div>
+          </div>
           <div class="view-controls">
+            <button id="btn-quick-sync-vp" class="btn btn-outline btn-xs" title="Synchronize digital twin orientation with current robot stance">🎯 Twin Sync</button>
             <button id="btn-reset-cam" class="btn btn-outline btn-xs">📷 Reset View</button>
             <button id="btn-top-cam" class="btn btn-outline btn-xs">🔍 Top</button>
             <button id="btn-side-cam" class="btn btn-outline btn-xs">🔍 Side</button>
