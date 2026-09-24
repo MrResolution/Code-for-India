@@ -47,6 +47,14 @@ venv/
 # Archives (already extracted)
 # ============================================
 *.zip
+!robotic_arm_motherboard/*.zip
+
+# ============================================
+# KiCad EDA Cache & Backups
+# ============================================
+*-backups/
+fp-info-cache
+*.kicad_prl
 
 # ============================================
 # IDE / Editor

@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="800" height="640" viewBox="0 0 800 640" xmlns="http://www.w3.org/2000/svg">
+  <!-- Board Outline: 100mm x 80mm scaled to 800x640px -->
+  <rect x="0" y="0" width="800" height="640" rx="20" fill="#0b1320" stroke="#00e676" stroke-width="3"/>
+  
+  <!-- Main Titles -->
+  <text x="400" y="24" font-family="monospace" font-size="15" fill="#00e676" text-anchor="middle" font-weight="bold">ROBOMOTION — 5-DOF ROBOT ARM CARRIER MOTHERBOARD</text>
+  <text x="400" y="40" font-family="monospace" font-size="9.5" fill="#a5d6a7" text-anchor="middle">Modular Backplane | Plug Servos DIRECTLY into PCA9685 Module Headers | 100x80mm</text>
+  
+  <!-- 4 Corner M3 Mounting Holes -->
+  <circle cx="32" cy="32" r="14" fill="none" stroke="#e0e0e0" stroke-width="2"/>
+  <circle cx="32" cy="32" r="6" fill="#0b1320" stroke="#e0e0e0" stroke-width="1.5"/>
+  <text x="32" y="20" font-family="monospace" font-size="8" fill="#e0e0e0" text-anchor="middle">MH1 (M3)</text>
+  
+  <circle cx="768" cy="32" r="14" fill="none" stroke="#e0e0e0" stroke-width="2"/>
+  <circle cx="768" cy="32" r="6" fill="#0b1320" stroke="#e0e0e0" stroke-width="1.5"/>
+  <text x="768" y="20" font-family="monospace" font-size="8" fill="#e0e0e0" text-anchor="middle">MH2 (M3)</text>
+  
+  <circle cx="32" cy="608" r="14" fill="none" stroke="#e0e0e0" stroke-width="2"/>
+  <circle cx="32" cy="608" r="6" fill="#0b1320" stroke="#e0e0e0" stroke-width="1.5"/>
+  <text x="32" y="622" font-family="monospace" font-size="8" fill="#e0e0e0" text-anchor="middle">MH3 (M3)</text>
+  
+  <circle cx="768" cy="608" r="14" fill="none" stroke="#e0e0e0" stroke-width="2"/>
+  <circle cx="768" cy="608" r="6" fill="#0b1320" stroke="#e0e0e0" stroke-width="1.5"/>
+  <text x="768" y="622" font-family="monospace" font-size="8" fill="#e0e0e0" text-anchor="middle">MH4 (M3)</text>
+  
+  <!-- 1. ESP32 DevKit V1 Removable Socket (Top-Left) -->
+  <rect x="40" y="76" width="248" height="312" rx="6" fill="#1e293b" stroke="#38bdf8" stroke-width="2"/>
+  <text x="164" y="94" font-family="monospace" font-size="11" fill="#38bdf8" text-anchor="middle" font-weight="bold">ESP32 DEVKIT V1</text>
+  <text x="164" y="108" font-family="monospace" font-size="8.5" fill="#7dd3fc" text-anchor="middle">REMOVABLE SOCKET (25.4mm PITCH)</text>
+  
+  <!-- Antenna Keepout -->
+  <rect x="44" y="52" width="240" height="18" fill="none" stroke="#f87171" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <text x="164" y="65" font-family="monospace" font-size="8" fill="#f87171" text-anchor="middle">⚠ ANTENNA KEEPOUT ZONE</text>
+  
+  <!-- Left Row (1x15) -->
+  <rect x="64" y="120" width="16" height="240" rx="3" fill="#0f172a" stroke="#38bdf8" stroke-width="1"/>
+  <text x="72" y="240" font-family="monospace" font-size="7.5" fill="#38bdf8" text-anchor="middle" transform="rotate(-90 72 240)">J_ESP32_LEFT (1x15)</text>
+  
+  <!-- Right Row (1x15) -->
+  <rect x="267" y="120" width="16" height="240" rx="3" fill="#0f172a" stroke="#38bdf8" stroke-width="1"/>
+  <text x="275" y="240" font-family="monospace" font-size="7.5" fill="#38bdf8" text-anchor="middle" transform="rotate(-90 275 240)">J_ESP32_RIGHT (1x15)</text>
+  <text x="164" y="372" font-family="monospace" font-size="8" fill="#94a3b8" text-anchor="middle">USB Edge Access ↓</text>
+  
+  <!-- 2. High-Current Servo Power Stage (Upper-Center) -->
+  <rect x="330" y="56" width="230" height="260" rx="6" fill="#2d1212" stroke="#ef4444" stroke-width="2"/>
+  <text x="445" y="74" font-family="monospace" font-size="10.5" fill="#ef4444" text-anchor="middle" font-weight="bold">SERVO POWER STAGE</text>
+  
+  <!-- XT30 -->
+  <rect x="360" y="80" width="48" height="24" rx="3" fill="#7f1d1d" stroke="#ef4444" stroke-width="1.5"/>
+  <text x="384" y="96" font-family="monospace" font-size="8" fill="#fff" text-anchor="middle" font-weight="bold">XT30 5-6V</text>
+  
+  <text x="435" y="95" font-family="monospace" font-size="8" fill="#fca5a5">F1: 5A Polyfuse</text>
+  <text x="435" y="112" font-family="monospace" font-size="8" fill="#fca5a5">D1: SS310 Schottky</text>
+  <text x="350" y="145" font-family="monospace" font-size="8" fill="#fca5a5">C1: 1000µF Bulk Cap (16V)</text>
+  <text x="350" y="162" font-family="monospace" font-size="8" fill="#fca5a5">C2, C3: 10µF, 100nF Ceramic</text>
+  <text x="350" y="190" font-family="monospace" font-size="8" fill="#86efac">U1: AMS1117-3.3V LDO</text>
+  <text x="350" y="206" font-family="monospace" font-size="8" fill="#86efac">C4, C5, C6: 3.3V Filter Caps</text>
+  
+  <!-- Direct 2.0mm High Current feed arrow to PCA9685 -->
+  <line x1="480" y1="95" x2="570" y2="95" stroke="#ef4444" stroke-width="3"/>
+  <line x1="570" y1="95" x2="570" y2="128" stroke="#ef4444" stroke-width="3"/>
+  <line x1="570" y1="128" x2="640" y2="128" stroke="#ef4444" stroke-width="3"/>
+  <text x="560" y="145" font-family="monospace" font-size="7" fill="#ef4444">2.0mm Cu Bus (V+)</text>
+  
+  <!-- 3. PCA9685 REMOVABLE MODULE CARRIER AREA (Right Edge) -->
+  <rect x="570" y="66" width="204" height="500" rx="8" fill="#2d1c08" stroke="#fbbf24" stroke-width="2.5"/>
+  <text x="672" y="88" font-family="monospace" font-size="11" fill="#fbbf24" text-anchor="middle" font-weight="bold">PCA9685 MODULE</text>
+  <text x="672" y="102" font-family="monospace" font-size="8.5" fill="#fde68a" text-anchor="middle">[4x M2.5 STANDOFF MOUNT ON PCB]</text>
+  <text x="672" y="114" font-family="monospace" font-size="7.5" fill="#fcd34d" text-anchor="middle">55.88mm x 19.05mm Hole Spacing</text>
+  <text x="672" y="126" font-family="monospace" font-size="7.5" fill="#fcd34d" text-anchor="middle">USE 11mm M2.5 STANDOFFS</text>
+  
+  <!-- 4x M2.5 Standoff Mounting Holes on PCB -->
+  <circle cx="596" cy="92" r="11" fill="#78350f" stroke="#fbbf24" stroke-width="2"/>
+  <circle cx="596" cy="92" r="5" fill="#0b1320" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="596" y="112" font-family="monospace" font-size="6.5" fill="#fbbf24" text-anchor="middle">MH_PCA1</text>
+  
+  <circle cx="748" cy="92" r="11" fill="#78350f" stroke="#fbbf24" stroke-width="2"/>
+  <circle cx="748" cy="92" r="5" fill="#0b1320" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="748" y="112" font-family="monospace" font-size="6.5" fill="#fbbf24" text-anchor="middle">MH_PCA2</text>
+  
+  <circle cx="596" cy="540" r="11" fill="#78350f" stroke="#fbbf24" stroke-width="2"/>
+  <circle cx="596" cy="540" r="5" fill="#0b1320" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="596" y="530" font-family="monospace" font-size="6.5" fill="#fbbf24" text-anchor="middle">MH_PCA3</text>
+  
+  <circle cx="748" cy="540" r="11" fill="#78350f" stroke="#fbbf24" stroke-width="2"/>
+  <circle cx="748" cy="540" r="5" fill="#0b1320" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="748" y="530" font-family="monospace" font-size="6.5" fill="#fbbf24" text-anchor="middle">MH_PCA4</text>
+  
+  <!-- 1x6 Control Header J_PCA9685_CTRL -->
+  <rect x="622" y="128" width="100" height="16" rx="2" fill="#0f172a" stroke="#fbbf24" stroke-width="1"/>
+  <text x="672" y="139" font-family="monospace" font-size="6.5" fill="#fde68a" text-anchor="middle">J_PCA_CTRL (GND/OE/SCL/SDA/VCC/V+)</text>
+  
+  <!-- 1x6 Auxiliary Support Socket J_PCA9685_AUX -->
+  <rect x="622" y="504" width="100" height="16" rx="2" fill="#0f172a" stroke="#fbbf24" stroke-width="1"/>
+  <text x="672" y="515" font-family="monospace" font-size="6.5" fill="#fde68a" text-anchor="middle">J_PCA_AUX (Support &amp; Redundant V+/GND)</text>
+  
+  <!-- 16x3 SERVO HEADERS ON THE MODULE (FACING RIGHT EDGE) -->
+  <rect x="736" y="148" width="34" height="340" rx="4" fill="#3b2d11" stroke="#fbbf24" stroke-width="2"/>
+  <text x="753" y="318" font-family="monospace" font-size="8.5" fill="#fbbf24" text-anchor="middle" transform="rotate(90 753 318)">16x3 SERVO PINS (ON MODULE) ➜</text>
+  
+  <!-- Arrow showing direct servo connection off board edge -->
+  <text x="752" y="140" font-family="monospace" font-size="8" fill="#fde68a" text-anchor="middle">CH0</text>
+  <text x="752" y="498" font-family="monospace" font-size="8" fill="#fde68a" text-anchor="middle">CH15</text>
+  <text x="785" y="320" font-family="monospace" font-size="9" fill="#00e676" text-anchor="middle" transform="rotate(90 785 320)">PLUG SERVOS DIRECTLY HERE ➜ (EDGE ACCESSIBLE)</text>
+
+  <!-- 4. Channel Mapping Silkscreen along module -->
+  <g font-family="monospace" font-size="7" fill="#fde68a">
+    <text x="548" y="195">CH0  BASE</text>
+    <text x="548" y="215">CH1  SHLDR 1</text>
+    <text x="548" y="235">CH2  SHLDR 2</text>
+    <text x="548" y="255">CH3  ELBOW 1</text>
+    <text x="548" y="275">CH4  ELBOW 2</text>
+    <text x="548" y="295">CH5  WRIST</text>
+    <text x="548" y="315">CH6  GRIPPER</text>
+    <text x="548" y="335">CH7  LIDAR</text>
+    <text x="548" y="355">CH8-15 AUX</text>
+  </g>
+
+  <!-- 5. Sensors Section (Bottom-Left) -->
+  <rect x="40" y="420" width="248" height="110" rx="5" fill="#064e3b" stroke="#34d399" stroke-width="1.5"/>
+  <text x="164" y="438" font-family="monospace" font-size="9" fill="#34d399" text-anchor="middle" font-weight="bold">VL53L1X ToF &amp; I2C BUS</text>
+  <rect x="72" y="448" width="16" height="64" rx="2" fill="#022c22" stroke="#34d399" stroke-width="1"/>
+  <text x="80" y="480" font-family="monospace" font-size="6.5" fill="#a7f3d0" text-anchor="middle" transform="rotate(-90 80 480)">VL53 #1</text>
+  <rect x="144" y="448" width="16" height="64" rx="2" fill="#022c22" stroke="#34d399" stroke-width="1"/>
+  <text x="152" y="480" font-family="monospace" font-size="6.5" fill="#a7f3d0" text-anchor="middle" transform="rotate(-90 152 480)">VL53 #2</text>
+  <text x="210" y="465" font-family="monospace" font-size="7.5" fill="#6ee7b7">R1,R2: 4.7kΩ</text>
+  <rect x="248" y="448" width="16" height="52" rx="2" fill="#022c22" stroke="#34d399" stroke-width="1"/>
+  <text x="256" y="474" font-family="monospace" font-size="6.5" fill="#a7f3d0" text-anchor="middle" transform="rotate(-90 256 474)">I2C EXP</text>
+
+  <!-- Test points in bottom-left -->
+  <text x="164" y="555" font-family="monospace" font-size="7.5" fill="#94a3b8" text-anchor="middle">TP1:3V3 | TP2:5V | TP3:SRV_V+ | TP4:GND | TP5:SDA | TP6:SCL | TP7:OE</text>
+
+  <!-- 6. Expansion, Safety & Debug (Lower-Center) -->
+  <rect x="330" y="340" width="210" height="250" rx="5" fill="#1e1e38" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="435" y="360" font-family="monospace" font-size="9" fill="#a78bfa" text-anchor="middle" font-weight="bold">SAFETY &amp; EXPANSION</text>
+  <text x="345" y="388" font-family="monospace" font-size="7.5" fill="#c4b5fd">J_UART (4-pin): TX / RX / 3V3 / GND</text>
+  <text x="345" y="412" font-family="monospace" font-size="7.5" fill="#c4b5fd">J_GPIO_EXP (10-pin): Spare GPIOs</text>
+  <text x="345" y="440" font-family="monospace" font-size="7.5" fill="#f87171">⚡ J_ESTOP (2-pin): Emergency Stop</text>
+  <text x="345" y="465" font-family="monospace" font-size="7.5" fill="#fde047">J_SRV_EN (2-pin): Servo Enable</text>
+  <text x="345" y="490" font-family="monospace" font-size="7.5" fill="#c4b5fd">R7: 10kΩ OE Pullup</text>
+  <text x="345" y="525" font-family="monospace" font-size="7.5" fill="#93c5fd">Status LEDs: PWR / SRV / STAT / FAULT</text>
+</svg>

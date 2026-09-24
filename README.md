@@ -35,6 +35,12 @@ A complete robotics project featuring a **multi-DOF robotic arm with a parallel 
 ├── bts_motor_control/          # Dual BTS7960 43A H-Bridge Motor Controller
 │   ├── firmware/               # Modular & single-file C++ driver source
 │   └── README.md               # BTS7960 wiring pinout & Bluetooth protocol guide
+├── robotic_arm_motherboard/    # 100x80mm Modular Carrier PCB, Gerbers & 3D Bracket
+│   ├── robotic_arm_motherboard.kicad_pcb  # Carrier PCB (ESP32 + PCA9685 sockets)
+│   ├── robotic_arm_motherboard.kicad_sch  # KiCad schematic & power protection
+│   ├── pca9685_mount_bracket.stl         # 3D printable PCA9685 mount bracket
+│   ├── production_gerbers/                # RS-274X Gerbers & Excellon drill files
+│   └── README.md                          # Carrier board documentation & pinouts
 
 
 ├── scripts/                    # Utility scripts
