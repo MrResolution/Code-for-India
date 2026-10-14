@@ -4,19 +4,25 @@ from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 
+# Repo root: $ROBOT_PROJECT_DIR, else two levels above this file (urdf/unnamed/).
+PROJECT_DIR = os.environ.get(
+    'ROBOT_PROJECT_DIR',
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+URDF_DIR = os.path.join(PROJECT_DIR, 'urdf')
+
 def launch_setup(context, *args, **kwargs):
     robot = LaunchConfiguration('robot').perform(context).lower()
     simulate = LaunchConfiguration('simulate').perform(context).lower()
 
     if robot == 'quard':
-        urdf_file = '/home/sabo/Documents/learn_/Hardware/urdf/quard_bot/urdf/quard_bot.urdf'
-        rviz_config = '/home/sabo/Documents/learn_/Hardware/urdf/quard_bot/rviz/quard_bot.rviz'
+        urdf_file = os.path.join(URDF_DIR, 'quard_bot', 'urdf', 'quard_bot.urdf')
+        rviz_config = os.path.join(URDF_DIR, 'quard_bot', 'rviz', 'quard_bot.rviz')
     elif robot == 'dual':
-        urdf_file = '/home/sabo/Documents/learn_/Hardware/urdf/dual_robots.urdf'
-        rviz_config = '/home/sabo/Documents/learn_/Hardware/urdf/dual_robots.rviz'
+        urdf_file = os.path.join(URDF_DIR, 'dual_robots.urdf')
+        rviz_config = os.path.join(URDF_DIR, 'dual_robots.rviz')
     else:
-        urdf_file = '/home/sabo/Documents/learn_/Hardware/urdf/arm/urdf/arm.urdf'
-        rviz_config = '/home/sabo/Documents/learn_/Hardware/urdf/arm/rviz/arm.rviz'
+        urdf_file = os.path.join(URDF_DIR, 'arm', 'urdf', 'arm.urdf')
+        rviz_config = os.path.join(URDF_DIR, 'arm', 'rviz', 'arm.rviz')
 
     with open(urdf_file, 'r') as f:
         robot_desc = f.read()
@@ -38,7 +44,7 @@ def launch_setup(context, *args, **kwargs):
     if simulate == 'true':
         if robot != 'quard':
             nodes.append(ExecuteProcess(
-                cmd=['python3', '/home/sabo/Documents/learn_/Hardware/urdf/unnamed/arm_simulator.py'],
+                cmd=['python3', os.path.join(URDF_DIR, 'unnamed', 'arm_simulator.py')],
                 output='screen'
             ))
         nodes.append(Node(
@@ -56,7 +62,8 @@ def launch_setup(context, *args, **kwargs):
             output='screen',
             additional_env={
                 'ROBOT_TARGET': robot,
-                'RVIZ_CONFIG': rviz_config
+                'RVIZ_CONFIG': rviz_config,
+                'ROBOT_PROJECT_DIR': PROJECT_DIR
             }
         ))
 

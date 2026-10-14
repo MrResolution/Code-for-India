@@ -84,8 +84,28 @@ except ImportError:
         def __init__(self):
             self.data = ""
 
-CALIB_FILE_PATH = "/home/sabo/Documents/learn_/Hardware/servo_calibration.json"
-URDF_PATH = "/home/sabo/Documents/learn_/Hardware/urdf/arm/urdf/arm.urdf"
+def find_project_dir():
+    """Repository root (holds servo_calibration.json and urdf/).
+
+    Honours $ROBOT_PROJECT_DIR, otherwise walks up from this file, which works
+    from the source tree and from a colcon install inside ros2_ws/.
+    """
+    env_dir = os.environ.get("ROBOT_PROJECT_DIR")
+    if env_dir:
+        return os.path.abspath(env_dir)
+    d = os.path.dirname(os.path.abspath(__file__))
+    while True:
+        if os.path.isfile(os.path.join(d, "servo_calibration.json")) and os.path.isdir(os.path.join(d, "urdf")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            return os.getcwd()
+        d = parent
+
+
+PROJECT_DIR = find_project_dir()
+CALIB_FILE_PATH = os.path.join(PROJECT_DIR, "servo_calibration.json")
+URDF_PATH = os.path.join(PROJECT_DIR, "urdf", "arm", "urdf", "arm.urdf")
 
 # Default Homing Pose requested by user for the 5 URDF arm joints:
 DEFAULT_HOME_DEGS = {
@@ -625,15 +645,32 @@ class QuardBotWidget(QWidget):
         self.wave_step = 0
         self.wave_timer.timeout.connect(self._on_wave_timer_tick)
 
+        # Single ordered sender thread for /cmd requests (see send_command).
+        # Created before init_ui(), which may already send commands.
+        self._cmd_cv = threading.Condition()
+        self._cmd_queue = []
+
         self.init_ui()
         self.update_log_signal.connect(self.log_to_console)
         self.update_status_signal.connect(self.set_status)
+        threading.Thread(target=self._command_sender_loop, daemon=True).start()
 
         # Periodic Heartbeat check
         self.ping_timer = QTimer(self)
         self.ping_timer.timeout.connect(self.ping_quard_bot)
         self.ping_timer.start(5000)
         QTimer.singleShot(800, self.ping_quard_bot)
+
+        # The firmware stands the robot up after 2 s without a /cmd request
+        # (/status pings don't count), so re-send the active gait every second.
+        # Repeating the same mode does not restart the gait on the robot.
+        self.gait_keepalive_timer = QTimer(self)
+        self.gait_keepalive_timer.timeout.connect(self._send_gait_keepalive)
+        self.gait_keepalive_timer.start(1000)
+
+    def _send_gait_keepalive(self):
+        if self.active_gait in self.GAIT_PATTERNS:
+            self.send_command({'mode': self.active_gait}, quiet=True)
 
     def init_ui(self):
         main_layout = QHBoxLayout(self)
@@ -1165,7 +1202,10 @@ class QuardBotWidget(QWidget):
             self.wave_timer.stop()
             self.stand_pose()
 
-    def send_command(self, params):
+    def send_command(self, params, quiet=False):
+        """Queue a /cmd request. Requests go out one at a time, in order; while
+        one is in flight, newer angles for the same channel replace older ones
+        so a slider drag cannot leave the servo at a stale angle."""
         # Normalize params for backwards & forward compatibility
         norm_params = dict(params)
         if 'mode' in norm_params:
@@ -1188,23 +1228,38 @@ class QuardBotWidget(QWidget):
         if not host.startswith("http://") and not host.startswith("https://"):
             host = "http://" + host
         url = f"{host.rstrip('/')}/cmd?{urllib.parse.urlencode(norm_params)}"
+        entry = {"url": url, "params": params, "quiet": quiet}
 
-        def worker():
+        with self._cmd_cv:
+            last = self._cmd_queue[-1] if self._cmd_queue else None
+            if last and 'ch' in params and last["params"].get('ch') == params.get('ch'):
+                self._cmd_queue[-1] = entry
+            elif quiet and any(e["quiet"] for e in self._cmd_queue):
+                pass  # a keepalive is already waiting
+            else:
+                self._cmd_queue.append(entry)
+            self._cmd_cv.notify()
+
+    def _command_sender_loop(self):
+        while True:
+            with self._cmd_cv:
+                while not self._cmd_queue:
+                    self._cmd_cv.wait()
+                entry = self._cmd_queue.pop(0)
+            params = entry["params"]
             try:
-                req = urllib.request.Request(url)
+                req = urllib.request.Request(entry["url"])
                 with urllib.request.urlopen(req, timeout=1.5) as resp:
                     reply = resp.read().decode('utf-8', errors='ignore')
-                    try:
-                        self.update_status_signal.emit(True, {"type": "cmd", "params": params, "reply": reply})
-                    except (RuntimeError, Exception):
-                        pass
+                info = {"type": "ping" if entry["quiet"] else "cmd", "params": params, "reply": reply}
+                ok = True
             except Exception as e:
-                try:
-                    self.update_status_signal.emit(False, {"type": "cmd", "params": params, "error": str(e)})
-                except (RuntimeError, Exception):
-                    pass
-
-        threading.Thread(target=worker, daemon=True).start()
+                info = {"type": "cmd", "params": params, "error": str(e)}
+                ok = False
+            try:
+                self.update_status_signal.emit(ok, info)
+            except RuntimeError:
+                return  # widget destroyed
 
     def ping_quard_bot(self):
         host = self.input_host.text().strip()
@@ -1329,7 +1384,9 @@ class QuardBotWidget(QWidget):
         for ch in range(8):
             curr_deg = self.channel_sliders[ch].value()
             ref = 0.0 if curr_deg < 22.0 else 45.0
-            self.quard_offsets[str(ch)] = round(curr_deg - ref, 1)
+            # get_joint_radians() renders (slider + offset); choose the offset
+            # that makes the twin show the reference pose right now.
+            self.quard_offsets[str(ch)] = round(ref - curr_deg, 1)
             if hasattr(self, 'channel_trim_labels') and ch < len(self.channel_trim_labels):
                 self.channel_trim_labels[ch].setText(f"Δ{self.quard_offsets[str(ch)]:+.1f}°")
         self.save_quard_offsets()
@@ -2652,11 +2709,11 @@ class CalibratedJointPublisherGUI(QMainWindow):
 
         target_robot = os.environ.get("ROBOT_TARGET", "arm").lower()
         if target_robot == "quard":
-            default_rviz = "/home/sabo/Documents/learn_/Hardware/urdf/quard_bot/rviz/quard_bot.rviz"
+            default_rviz = os.path.join(PROJECT_DIR, "urdf", "quard_bot", "rviz", "quard_bot.rviz")
         elif target_robot == "dual":
-            default_rviz = "/home/sabo/Documents/learn_/Hardware/urdf/dual_robots.rviz"
+            default_rviz = os.path.join(PROJECT_DIR, "urdf", "dual_robots.rviz")
         else:
-            default_rviz = "/home/sabo/Documents/learn_/Hardware/urdf/arm/rviz/arm.rviz"
+            default_rviz = os.path.join(PROJECT_DIR, "urdf", "arm", "rviz", "arm.rviz")
         rviz_config = os.environ.get("RVIZ_CONFIG", default_rviz)
         self.rviz_process = QProcess(self)
 
@@ -2955,9 +3012,9 @@ class CalibratedJointPublisherGUI(QMainWindow):
         for j_name, w in self.joint_widgets.items():
             curr_deg = w.get_current_deg()
             home_deg = w.calib.get('home_deg', 90.0)
-            offset = round(curr_deg - home_deg, 1)
-            w.spin_sync.setValue(offset)
-            w.on_sync_offset_changed(offset)
+            # The twin shows (slider + sync); make it show the home pose now.
+            offset = round(home_deg - curr_deg, 1)
+            w.spin_sync.setValue(offset)  # valueChanged -> on_sync_offset_changed
         self.save_calibration()
         self.log_to_console("🎯 Synced all joints to physical reference pose and saved calibration.")
 
@@ -3014,9 +3071,15 @@ class CalibratedJointPublisherGUI(QMainWindow):
                 idx = msg.name.index(j_name)
                 if idx < len(msg.position):
                     rad_val = msg.position[idx]
+                    if not math.isfinite(rad_val):
+                        continue
                     r_min, r_max = w.rad_min, w.rad_max
                     ratio = (rad_val - r_min) / (r_max - r_min) if r_max != r_min else 0.5
-                    deg = max(0.0, min(180.0, ratio * 180.0))
+                    # Published angles are twin poses (slider + sync), the inverse of
+                    # get_current_rad(); drop the offset and respect the slider limits
+                    # so leaving gesture mode does not make the arm jump.
+                    deg = ratio * 180.0 - w.sync_offset_deg
+                    deg = max(w.spin_min.value(), min(w.spin_max.value(), deg))
                     w.slider.blockSignals(True)
                     w.slider.setValue(int(deg * 10))
                     w.label_val.setText(f"{deg:.1f}° ({rad_val:.3f} rad)")
