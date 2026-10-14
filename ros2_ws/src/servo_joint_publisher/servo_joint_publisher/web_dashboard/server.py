@@ -18,6 +18,7 @@ import json
 import math
 import time
 import threading
+import urllib.error
 import urllib.parse
 import urllib.request
 import re
@@ -122,6 +123,8 @@ class RobotState:
         self.sim_start_time = time.time()
         self.last_update = time.time()
         self.comm_mode = "SERIAL"
+        # True while the ROS 2 bridge node is spinning (arm commands reach hardware).
+        self.ros_bridge_active = False
         # Text commands for servo_serial_commander (CALIB:/SYNC:/MODE:),
         # drained by the ROS 2 bridge node onto /servo_calibration.
         self.commander_msgs = []
@@ -784,6 +787,12 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
                             if "mode" in params:
                                 robot_state.quardbot_mode = str(params["mode"])
                         self.send_json({"status": "ok", "reply": reply})
+                except urllib.error.HTTPError as e:
+                    # The robot answered (e.g. 400 "Bad Args"): it is online but
+                    # did not accept these parameters.
+                    with robot_state.lock:
+                        robot_state.quardbot_online = True
+                    self.send_json({"status": "rejected", "code": e.code, "message": str(e)})
                 except Exception as e:
                     self.send_json({"status": "error", "message": str(e)})
             elif path == "/api/quardbot/ping":
@@ -860,7 +869,9 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
                 "joints": robot_state.joint_positions,
                 "calibration": robot_state.calibration,
                 "simulating": robot_state.is_simulating,
-                "sim_speed": robot_state.sim_speed
+                "sim_speed": robot_state.sim_speed,
+                "comm_mode": robot_state.comm_mode,
+                "ros_bridge": robot_state.ros_bridge_active
             })
 
     def log_message(self, format, *args):
@@ -925,7 +936,11 @@ def start_ros2_node():
     try:
         rclpy.init()
         node = ROS2BridgeNode()
-        rclpy.spin(node)
+        robot_state.ros_bridge_active = True
+        try:
+            rclpy.spin(node)
+        finally:
+            robot_state.ros_bridge_active = False
         node.destroy_node()
         rclpy.shutdown()
     except Exception as e:

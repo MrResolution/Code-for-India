@@ -109,8 +109,180 @@ const postJointUpdate = createCoalescingPoster('/api/update_joints', (pending, u
   return merged;
 });
 
+// ── UI Helpers ───────────────────────────────────────────────────────────
+// Non-blocking notifications. alert() would freeze polling and the 3D render
+// loop while the dialog is open.
+function toast(message, type = 'info', timeoutMs = 3500) {
+  const stack = document.getElementById('toast-stack');
+  if (!stack) return;
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  const text = document.createElement('span');
+  text.textContent = message;
+  const close = document.createElement('button');
+  close.className = 'toast-close';
+  close.setAttribute('aria-label', 'Dismiss');
+  close.textContent = '✕';
+  el.append(text, close);
+  stack.appendChild(el);
+  while (stack.children.length > 4) stack.firstElementChild.remove();
+
+  const dismiss = () => {
+    el.classList.add('leaving');
+    setTimeout(() => el.remove(), 200);
+  };
+  close.addEventListener('click', dismiss);
+  if (timeoutMs > 0) setTimeout(dismiss, timeoutMs);
+}
+
+function postJSON(url, body) {
+  return fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {})
+  }).then(res => res.json());
+}
+
+function setPill(el, state, text) {
+  if (!el) return;
+  el.className = 'status-pill' + (state ? ` status-${state}` : '');
+  el.removeAttribute('style');
+  if (text !== undefined) el.innerText = text;
+}
+
+function setNodeBadge(badgeId, state, text) {
+  const badge = document.getElementById(badgeId);
+  if (!badge) return;
+  badge.className = `node-badge status-${state}`;
+  const strong = badge.querySelector('strong');
+  if (strong && text !== undefined) strong.innerText = text;
+}
+
+// Shows a spinner on a button until the promise settles.
+function withBusy(btn, promise) {
+  if (!btn) return promise;
+  btn.classList.add('is-busy');
+  btn.disabled = true;
+  return promise.finally(() => {
+    btn.classList.remove('is-busy');
+    btn.disabled = false;
+  });
+}
+
+function storageGet(key) {
+  try { return localStorage.getItem(key); } catch (e) { return null; }
+}
+
+function storageSet(key, value) {
+  try { localStorage.setItem(key, value); } catch (e) {}
+}
+
+// ── Theme ────────────────────────────────────────────────────────────────
+function isDarkTheme() {
+  const forced = document.documentElement.dataset.theme;
+  if (forced) return forced === 'dark';
+  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+
+let gridHelper = null;
+
+function applySceneTheme() {
+  if (!scene) return;
+  const dark = isDarkTheme();
+  const bg = getComputedStyle(document.documentElement).getPropertyValue('--viewport-bg').trim() || '#e9eef5';
+  scene.background = new THREE.Color(bg);
+  if (gridHelper) {
+    scene.remove(gridHelper);
+    gridHelper.geometry.dispose();
+  }
+  gridHelper = dark
+    ? new THREE.GridHelper(500, 50, 0x0ea5e9, 0x24324f)
+    : new THREE.GridHelper(500, 50, 0x0284c7, 0xcbd5e1);
+  gridHelper.position.y = -0.5;
+  scene.add(gridHelper);
+}
+
+function initTheme() {
+  const btn = document.getElementById('btn-theme');
+  if (btn) {
+    btn.addEventListener('click', () => {
+      const next = isDarkTheme() ? 'light' : 'dark';
+      document.documentElement.dataset.theme = next;
+      storageSet('dashboard-theme', next);
+      applySceneTheme();
+    });
+  }
+  if (window.matchMedia) {
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applySceneTheme);
+  }
+}
+
+// ── E-STOP (software stop) ───────────────────────────────────────────────
+// Halts the arm simulation, cancels smooth moves and Quard gaits, tells the
+// Quard Bot to stand, and locks motion controls until released. It does not
+// cut servo power; that needs a hardware switch.
+let estopEngaged = false;
+
+function engageEstop() {
+  estopEngaged = true;
+  document.body.classList.add('estop-engaged');
+  const btn = document.getElementById('btn-estop');
+  if (btn) {
+    btn.classList.add('engaged');
+    btn.innerText = '⛔ E-STOP ON';
+  }
+
+  cancelArmSmoothMove();
+  if (isSimulating) setArmSimulating(false);
+  stopQuardGait();
+  if (quardState.waveTimer) {
+    clearInterval(quardState.waveTimer);
+    quardState.waveTimer = null;
+  }
+  if (quardSmoothAnimId) {
+    cancelAnimationFrame(quardSmoothAnimId);
+    quardSmoothAnimId = null;
+  }
+  quardCmdQueue.length = 0;
+  sendQuardCmd({ mode: 'stand' }, true);
+  setGaitLabel('stand');
+  document.querySelectorAll('.btn-dpad').forEach(b => b.classList.toggle('active', b.dataset.cmd === 'stand'));
+}
+
+function releaseEstop() {
+  estopEngaged = false;
+  document.body.classList.remove('estop-engaged');
+  const btn = document.getElementById('btn-estop');
+  if (btn) {
+    btn.classList.remove('engaged');
+    btn.innerText = '⛔ E-STOP';
+  }
+  toast('E-STOP released. Motion controls unlocked.', 'success');
+}
+
+function initEstop() {
+  const btn = document.getElementById('btn-estop');
+  const release = document.getElementById('btn-estop-release');
+  if (btn) btn.addEventListener('click', () => (estopEngaged ? releaseEstop() : engageEstop()));
+  if (release) release.addEventListener('click', releaseEstop);
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !estopEngaged) {
+      e.preventDefault();
+      engageEstop();
+    }
+  });
+}
+
 // ── Twin Orientation Synchronization System ──────────────────────────────
 let syncCalibration = {};
+
+// Calibration entry for an arm joint; the wrist may be stored under its old name.
+function getJointCalibration(jointId) {
+  const direct = syncCalibration[jointId] || {};
+  const alias = jointId === 'turntable_link_joint_dup_3' ? (syncCalibration.wrist_twist_joint || {}) : {};
+  return Object.assign({}, alias, direct);
+}
 
 function getJointSyncOffset(jointId) {
   if (syncCalibration[jointId] && syncCalibration[jointId].sync_offset_deg !== undefined) {
@@ -141,6 +313,23 @@ function loadSyncCalibration(onDone) {
     .catch(() => {});
 }
 
+// Show the saved limits and home pose instead of the built-in defaults, so
+// Save Config does not overwrite the file with them.
+function applySavedJointCalibration() {
+  JOINTS.forEach(j => {
+    const cal = getJointCalibration(j.id);
+    const lo = parseFloat(cal.servo_min_deg);
+    const hi = parseFloat(cal.servo_max_deg);
+    const home = parseFloat(cal.home_deg);
+    if (Number.isFinite(lo) && Number.isFinite(hi) && lo < hi) {
+      document.getElementById(`spin-min-${j.id}`).value = lo.toFixed(1);
+      document.getElementById(`spin-max-${j.id}`).value = hi.toFixed(1);
+    }
+    if (Number.isFinite(home)) j.def = Math.max(0, Math.min(180, home));
+    updateLimitBand(j.id);
+  });
+}
+
 function updateSyncReadouts() {
   JOINTS.forEach(j => {
     const el = document.getElementById(`sync-val-${j.id}`);
@@ -166,15 +355,18 @@ function setJointSyncOffset(jointId, newOffset) {
 // Initialize Application
 document.addEventListener('DOMContentLoaded', () => {
   initThreeJS();
+  initTheme();
   buildJointControls();
   setupTabs();
   initModelLoadSystem();
   initQuardBotControls();
   initSensorControls();
   setupEventListeners();
-  loadSyncCalibration();
+  initEstop();
+  loadSyncCalibration(applySavedJointCalibration);
   startStatePolling();
   startSensorPolling();
+  restoreActiveTab();
 });
 
 // ── Three.js 3D Viewport Setup ─────────────────────────────────────────────
@@ -185,7 +377,6 @@ function initThreeJS() {
 
   // Scene
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xf1f5f9);
 
   // Camera
   camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
@@ -221,16 +412,19 @@ function initThreeJS() {
   dirLight2.position.set(-200, 100, -200);
   scene.add(dirLight2);
 
-  // Grid Floor Helper (Light Theme)
-  const gridHelper = new THREE.GridHelper(500, 50, 0x0284c7, 0xcbd5e1);
-  gridHelper.position.y = -0.5;
-  scene.add(gridHelper);
+  // Background + grid floor, coloured for the current theme
+  applySceneTheme();
 
   // Initialize procedural IMU Sensor Visual
   createSensorVisual();
 
-  // Window Resize Listener
-  window.addEventListener('resize', onWindowResize);
+  // The canvas also changes size when the responsive layout reflows, not only
+  // on window resize.
+  if (window.ResizeObserver) {
+    new ResizeObserver(onWindowResize).observe(container);
+  } else {
+    window.addEventListener('resize', onWindowResize);
+  }
 
   // Animation Render Loop
   animate();
@@ -238,12 +432,12 @@ function initThreeJS() {
 
 function createSensorVisual() {
   const boxGeom = new THREE.BoxGeometry(70, 12, 45);
-  const boxMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.2, metalness: 0.8 });
+  const boxMat = new THREE.MeshStandardMaterial({ color: 0x2f6f4f, roughness: 0.55, metalness: 0.15 }); // PCB green; no env map, so keep it matte
   const sensorMesh = new THREE.Mesh(boxGeom, boxMat);
   sensorMesh.castShadow = true;
 
   const chipGeom = new THREE.BoxGeometry(18, 4, 18);
-  const chipMat = new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.1, metalness: 0.9 });
+  const chipMat = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.4, metalness: 0.3 });
   const chipMesh = new THREE.Mesh(chipGeom, chipMat);
   chipMesh.position.set(0, 8, 0);
   sensorMesh.add(chipMesh);
@@ -750,9 +944,21 @@ function getSmoothJointDeg(jointId, defaultDeg = 90.0) {
   return renderedJointState[jointId];
 }
 
+let fpsFrames = 0;
+let fpsLastTime = performance.now();
+
 function animate() {
   requestAnimationFrame(animate);
   controls.update();
+
+  fpsFrames++;
+  const nowMs = performance.now();
+  if (nowMs - fpsLastTime >= 1000) {
+    const fpsEl = document.getElementById('lbl-fps');
+    if (fpsEl) fpsEl.innerText = Math.round(fpsFrames * 1000 / (nowMs - fpsLastTime));
+    fpsFrames = 0;
+    fpsLastTime = nowMs;
+  }
 
   const effectiveMode = getEffectiveModelMode();
 
@@ -827,6 +1033,7 @@ function animate() {
 
 function onWindowResize() {
   const container = document.getElementById('canvas-container');
+  if (!container.clientWidth || !container.clientHeight) return;
   camera.aspect = container.clientWidth / container.clientHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(container.clientWidth, container.clientHeight);
@@ -837,51 +1044,53 @@ function buildJointControls() {
   const container = document.getElementById('joints-list');
   container.innerHTML = '';
 
-  JOINTS.forEach((j) => {
+  JOINTS.forEach((j, idx) => {
     jointState[j.id] = j.def;
 
     const card = document.createElement('div');
     card.className = 'joint-card';
     card.id = `card-${j.id}`;
 
-    const radVal = degToRad(j.def, j.rad_min, j.rad_max);
-
     const syncOffset = getJointSyncOffset(j.id);
     const syncText = `${syncOffset >= 0 ? '+' : ''}${syncOffset.toFixed(1)}°`;
 
     card.innerHTML = `
       <div class="joint-card-header">
-        <span class="joint-name">🦾 ${j.name}</span>
-        <span class="joint-readout" id="readout-${j.id}">${j.def.toFixed(1)}° (${radVal.toFixed(3)} rad)</span>
+        <label class="joint-name" for="slider-${j.id}"><span class="joint-index">${idx + 1}</span>${j.name}</label>
+        <span class="joint-readout" id="readout-${j.id}"></span>
       </div>
       <div class="slider-row">
+        <div class="range-band" id="band-${j.id}" title="Saved safe range"></div>
         <input type="range" id="slider-${j.id}" min="0" max="1800" value="${j.def * 10}">
       </div>
+      <div class="slider-scale"><span>0°</span><span>90°</span><span>180°</span></div>
       <div class="limits-row">
-        <label>Min:</label>
+        <label for="spin-min-${j.id}">Min</label>
         <input type="number" id="spin-min-${j.id}" class="spinbox spinbox-min" value="${j.min.toFixed(1)}" step="1.0" min="0" max="180">
-        <button class="btn btn-outline btn-xs btn-set-low" data-joint="${j.id}">📍 Set Low</button>
-        <div style="flex:1"></div>
-        <label>Max:</label>
+        <button class="btn btn-outline btn-xs btn-set-low" data-joint="${j.id}" title="Use the current angle as the minimum">📍 Set Low</button>
+        <span class="spacer"></span>
+        <label for="spin-max-${j.id}">Max</label>
         <input type="number" id="spin-max-${j.id}" class="spinbox spinbox-max" value="${j.max.toFixed(1)}" step="1.0" min="0" max="180">
-        <button class="btn btn-outline btn-xs btn-set-high" data-joint="${j.id}">📍 Set High</button>
+        <button class="btn btn-outline btn-xs btn-set-high" data-joint="${j.id}" title="Use the current angle as the maximum">📍 Set High</button>
       </div>
-      <div class="sync-row" style="display:flex;align-items:center;gap:6px;margin-top:6px;padding-top:6px;border-top:1px dashed #cbd5e1;">
-        <span style="font-weight:600;color:#475569;font-size:11px;" title="Fine-tune 3D model orientation offset relative to physical servo">🎯 Sync:</span>
+      <div class="sync-row">
+        <span class="sync-label" title="Offset between the 3D model and the physical servo">🎯 Twin offset</span>
         <button class="btn btn-outline btn-xs btn-nudge" data-joint="${j.id}" data-nudge="-5">-5°</button>
         <button class="btn btn-outline btn-xs btn-nudge" data-joint="${j.id}" data-nudge="-1">-1°</button>
-        <span id="sync-val-${j.id}" class="readout-pill" style="font-size:11px;padding:2px 6px;min-width:44px;text-align:center;">${syncText}</span>
+        <span id="sync-val-${j.id}" class="readout-pill">${syncText}</span>
         <button class="btn btn-outline btn-xs btn-nudge" data-joint="${j.id}" data-nudge="1">+1°</button>
         <button class="btn btn-outline btn-xs btn-nudge" data-joint="${j.id}" data-nudge="5">+5°</button>
-        <button class="btn btn-outline btn-xs btn-zero-sync" data-joint="${j.id}" title="Reset sync offset to 0°">0°</button>
+        <button class="btn btn-outline btn-xs btn-zero-sync" data-joint="${j.id}" title="Reset offset to 0°">0°</button>
       </div>
     `;
 
     container.appendChild(card);
+    setJointReadout(j.id, j.def);
 
     // Event listener for Slider changes
     const slider = card.querySelector(`#slider-${j.id}`);
     slider.addEventListener('input', (e) => {
+      cancelArmSmoothMove();
       const val = parseFloat(e.target.value) / 10.0;
       onSliderChanged(j.id, val);
     });
@@ -890,12 +1099,20 @@ function buildJointControls() {
     card.querySelector('.btn-set-low').addEventListener('click', () => {
       const curr = jointState[j.id];
       card.querySelector(`#spin-min-${j.id}`).value = curr.toFixed(1);
+      updateLimitBand(j.id);
     });
 
     card.querySelector('.btn-set-high').addEventListener('click', () => {
       const curr = jointState[j.id];
       card.querySelector(`#spin-max-${j.id}`).value = curr.toFixed(1);
+      updateLimitBand(j.id);
     });
+
+    card.querySelectorAll('.spinbox').forEach(input => {
+      input.addEventListener('input', () => updateLimitBand(j.id));
+    });
+
+    updateLimitBand(j.id);
 
     // Nudge and Zero Sync handlers
     card.querySelectorAll('.btn-nudge').forEach(btn => {
@@ -917,17 +1134,90 @@ function buildJointControls() {
 
 const lastLocalJointEdit = {};
 
-function onSliderChanged(jointId, deg) {
-  jointState[jointId] = deg;
-  lastLocalJointEdit[jointId] = Date.now();
-
+function setJointReadout(jointId, deg) {
   const readout = document.getElementById(`readout-${jointId}`);
   const jointDef = JOINTS.find(j => j.id === jointId);
   const rad = degToRad(deg, jointDef ? jointDef.rad_min : -2.0, jointDef ? jointDef.rad_max : 2.0);
+  if (readout) readout.innerText = `${deg.toFixed(1)}° · ${rad.toFixed(3)} rad`;
 
-  if (readout) {
-    readout.innerText = `${deg.toFixed(1)}° (${rad.toFixed(3)} rad)`;
+  const card = document.getElementById(`card-${jointId}`);
+  if (card) {
+    const lim = getJointLimits(jointId);
+    const out = lim && (deg < lim.min - 0.05 || deg > lim.max + 0.05);
+    card.classList.toggle('out-of-range', Boolean(out));
+    if (readout) readout.title = out ? `Outside saved limits (${lim.min.toFixed(1)}° – ${lim.max.toFixed(1)}°)` : '';
   }
+}
+
+function getJointLimits(jointId) {
+  const minEl = document.getElementById(`spin-min-${jointId}`);
+  const maxEl = document.getElementById(`spin-max-${jointId}`);
+  if (!minEl || !maxEl) return null;
+  const min = parseFloat(minEl.value);
+  const max = parseFloat(maxEl.value);
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min >= max) return null;
+  return { min: Math.max(0, min), max: Math.min(180, max) };
+}
+
+function updateLimitBand(jointId) {
+  const band = document.getElementById(`band-${jointId}`);
+  const lim = getJointLimits(jointId);
+  if (band) {
+    band.style.display = lim ? '' : 'none';
+    if (lim) {
+      band.style.setProperty('--lo', lim.min / 180);
+      band.style.setProperty('--hi', lim.max / 180);
+    }
+  }
+  if (jointState[jointId] !== undefined) setJointReadout(jointId, jointState[jointId]);
+}
+
+function setSliderPosition(jointId, deg) {
+  const slider = document.getElementById(`slider-${jointId}`);
+  if (slider) slider.value = deg * 10;
+  setJointReadout(jointId, deg);
+}
+
+// Eased move of several arm joints (like the Qt GUI's Go Home), so the
+// physical servos are not slammed to a new pose.
+let armSmoothAnimId = null;
+
+function cancelArmSmoothMove() {
+  if (armSmoothAnimId) cancelAnimationFrame(armSmoothAnimId);
+  armSmoothAnimId = null;
+}
+
+function smoothMoveArm(targets, durationMs = 1500) {
+  cancelArmSmoothMove();
+  const start = {};
+  for (const id in targets) start[id] = jointState[id];
+  const t0 = performance.now();
+
+  const step = (now) => {
+    if (estopEngaged) {
+      armSmoothAnimId = null;
+      return;
+    }
+    const p = Math.min(1, (now - t0) / durationMs);
+    const e = 0.5 - 0.5 * Math.cos(p * Math.PI);
+    for (const id in targets) {
+      const deg = Math.round((start[id] + (targets[id] - start[id]) * e) * 10) / 10;
+      onSliderChanged(id, deg);
+      setSliderPosition(id, deg);
+    }
+    armSmoothAnimId = p < 1 ? requestAnimationFrame(step) : null;
+  };
+  armSmoothAnimId = requestAnimationFrame(step);
+}
+
+function onSliderChanged(jointId, deg) {
+  if (estopEngaged) {
+    setSliderPosition(jointId, jointState[jointId]);
+    return;
+  }
+  jointState[jointId] = deg;
+  lastLocalJointEdit[jointId] = Date.now();
+  setJointReadout(jointId, deg);
 
   // Push only the changed joint, so stale values of other joints held in
   // jointState can never overwrite the server's copy.
@@ -940,27 +1230,46 @@ function degToRad(deg, rMin, rMax) {
 }
 
 // ── Setup Action Bar Event Listeners ─────────────────────────────────────
+function setArmSimulating(on) {
+  isSimulating = on;
+  const btnSim = document.getElementById('btn-sim');
+  btnSim.innerText = isSimulating ? '⏸️ Stop Sim' : '▶️ Start Sim';
+  btnSim.className = isSimulating ? 'btn btn-danger btn-sm' : 'btn btn-warning btn-sm';
+
+  // Synchronize rendered angles so transition has zero initial displacement
+  for (let k in jointState) {
+    renderedJointState[k] = jointState[k];
+  }
+
+  return postJSON('/api/toggle_sim', {
+    simulating: isSimulating,
+    current_joints: jointState
+  }).catch(() => toast('Could not reach the server to toggle the simulation.', 'error'));
+}
+
+function syncCommModeUI(isWifi) {
+  const toggle = document.getElementById('toggle-comm-mode');
+  if (toggle) toggle.checked = isWifi;
+  document.getElementById('lbl-wifi').classList.toggle('active', isWifi);
+  document.getElementById('lbl-serial').classList.toggle('active', !isWifi);
+}
+
+function requestTare(target, btn) {
+  return withBusy(btn, postJSON('/api/tare_pose', { target: target }))
+    .then(data => {
+      if (data.status !== 'ok') throw new Error(data.message || 'server error');
+      syncCalibration = data.calibration || syncCalibration;
+      updateSyncReadouts();
+      return data;
+    });
+}
+
+// ── Setup Action Bar Event Listeners ─────────────────────────────────────
 function setupEventListeners() {
   // Start Sim Toggle
-  const btnSim = document.getElementById('btn-sim');
-  btnSim.addEventListener('click', () => {
-    isSimulating = !isSimulating;
-    btnSim.innerText = isSimulating ? '⏸️ Stop Sim' : '▶️ Start Sim';
-    btnSim.className = isSimulating ? 'btn btn-danger btn-sm' : 'btn btn-warning btn-sm';
-
-    // Synchronize rendered angles so transition has zero initial displacement
-    for (let k in jointState) {
-      renderedJointState[k] = jointState[k];
-    }
-
-    fetch('/api/toggle_sim', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        simulating: isSimulating,
-        current_joints: jointState
-      })
-    });
+  document.getElementById('btn-sim').addEventListener('click', () => {
+    cancelArmSmoothMove();
+    setArmSimulating(!isSimulating);
   });
 
   // Sim Speed Slider
@@ -968,34 +1277,42 @@ function setupEventListeners() {
   sliderSpeed.addEventListener('input', (e) => {
     const mult = (parseFloat(e.target.value) / 10.0).toFixed(1);
     document.getElementById('lbl-speed-val').innerText = `${mult}x`;
-
-    fetch('/api/toggle_sim', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ speed: mult })
-    });
+    postJSON('/api/toggle_sim', { speed: mult }).catch(() => {});
   });
 
-  // Go Home
+  // Go Home: eased move to the saved home pose
   document.getElementById('btn-home').addEventListener('click', () => {
+    if (isSimulating) setArmSimulating(false);
+    const targets = {};
+    JOINTS.forEach(j => { targets[j.id] = j.def; });
+    smoothMoveArm(targets);
+  });
+
+  // Set Home: current pose becomes the home pose (saved immediately)
+  document.getElementById('btn-set-home').addEventListener('click', (e) => {
+    const calib = {};
     JOINTS.forEach(j => {
-      onSliderChanged(j.id, j.def);
-      const slider = document.getElementById(`slider-${j.id}`);
-      if (slider) slider.value = j.def * 10;
+      j.def = Math.round(jointState[j.id] * 10) / 10;
+      calib[j.id] = { home_deg: j.def };
     });
+    withBusy(e.currentTarget, postJSON('/api/save_calibration', calib))
+      .then(data => {
+        if (data.status === 'ok') toast('📌 Current pose saved as home.', 'success');
+        else toast(`Home not saved: ${data.message || 'server error'}`, 'error');
+      })
+      .catch(() => toast('Home not saved: server unreachable.', 'error'));
   });
 
   // Center All
   document.getElementById('btn-center').addEventListener('click', () => {
-    JOINTS.forEach(j => {
-      onSliderChanged(j.id, 90.0);
-      const slider = document.getElementById(`slider-${j.id}`);
-      if (slider) slider.value = 900;
-    });
+    if (isSimulating) setArmSimulating(false);
+    const targets = {};
+    JOINTS.forEach(j => { targets[j.id] = 90.0; });
+    smoothMoveArm(targets);
   });
 
   // Save Config
-  document.getElementById('btn-save').addEventListener('click', () => {
+  document.getElementById('btn-save').addEventListener('click', (e) => {
     const calib = {};
     const invalid = [];
     JOINTS.forEach(j => {
@@ -1014,41 +1331,29 @@ function setupEventListeners() {
     });
 
     if (invalid.length > 0) {
-      alert(`⚠️ Not saved. Min/Max must be numbers with 0 ≤ Min < Max ≤ 180 for: ${invalid.join(', ')}`);
+      toast(`Not saved. Need 0 ≤ Min < Max ≤ 180 for: ${invalid.join(', ')}`, 'error', 6000);
       return;
     }
 
-    fetch('/api/save_calibration', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(calib)
-    }).then(res => res.json()).then(data => {
-      if (data.status === 'ok') {
-        alert('💾 Homing & Safety Limits saved successfully to servo_calibration.json!');
-      } else {
-        alert(`⚠️ Save failed: ${data.message || 'server error'}`);
-      }
-    }).catch(() => alert('⚠️ Save failed! Check server connection.'));
+    withBusy(e.currentTarget, postJSON('/api/save_calibration', calib))
+      .then(data => {
+        if (data.status === 'ok') {
+          JOINTS.forEach(j => { j.def = calib[j.id].home_deg; });
+          toast('💾 Limits and home pose saved to servo_calibration.json', 'success');
+        } else {
+          toast(`Save failed: ${data.message || 'server error'}`, 'error', 6000);
+        }
+      })
+      .catch(() => toast('Save failed: server unreachable.', 'error', 6000));
   });
 
   // 🎯 Sync Virtual to Physical Robot Arm
   const btnSyncArm = document.getElementById('btn-sync-all-arm');
   if (btnSyncArm) {
     btnSyncArm.addEventListener('click', () => {
-      fetch('/api/tare_pose', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target: 'arm' })
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.status === 'ok') {
-          syncCalibration = data.calibration || syncCalibration;
-          updateSyncReadouts();
-          alert('🎯 Virtual Twin synchronized with physical robot orientation!');
-        }
-      })
-      .catch(() => alert('⚠️ Sync request failed! Check server connection.'));
+      requestTare('arm', btnSyncArm)
+        .then(() => toast('🎯 Twin aligned to the physical arm.', 'success'))
+        .catch(err => toast(`Sync failed: ${err.message}`, 'error'));
     });
   }
 
@@ -1056,23 +1361,13 @@ function setupEventListeners() {
   const btnTareImu = document.getElementById('btn-tare-imu');
   if (btnTareImu) {
     btnTareImu.addEventListener('click', () => {
-      fetch('/api/tare_pose', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target: 'imu' })
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.status === 'ok') {
-          syncCalibration = data.calibration || syncCalibration;
-          const elP = document.getElementById('val-pitch');
-          const elR = document.getElementById('val-roll');
-          if (elP) elP.innerText = '0.0°';
-          if (elR) elR.innerText = '0.0°';
-          alert('🎯 IMU Horizon Tared! Virtual device is now leveled at 0.0° pitch & roll.');
-        }
-      })
-      .catch(() => alert('⚠️ IMU Tare request failed!'));
+      requestTare('imu', btnTareImu)
+        .then(() => {
+          document.getElementById('val-pitch').innerText = '0.0°';
+          document.getElementById('val-roll').innerText = '0.0°';
+          toast('🎯 IMU tared: pitch and roll now read 0.0°.', 'success');
+        })
+        .catch(err => toast(`IMU tare failed: ${err.message}`, 'error'));
     });
   }
 
@@ -1082,43 +1377,27 @@ function setupEventListeners() {
     btnQuickSync.addEventListener('click', () => {
       const mode = getEffectiveModelMode();
       const target = (mode === 'sensors') ? 'imu' : ((mode === 'quard') ? 'quard' : 'arm');
-      fetch('/api/tare_pose', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target: target })
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.status === 'ok') {
-          syncCalibration = data.calibration || syncCalibration;
-          updateSyncReadouts();
-          alert(`🎯 Digital Twin (${target.toUpperCase()}) synchronized with physical orientation!`);
-        }
-      })
-      .catch(() => alert('⚠️ Quick sync request failed!'));
+      requestTare(target, btnQuickSync)
+        .then(() => toast(`🎯 ${target.toUpperCase()} twin synchronized.`, 'success'))
+        .catch(err => toast(`Twin sync failed: ${err.message}`, 'error'));
     });
   }
 
   // Comm Mode Toggle Switch Listener
   const toggleCommMode = document.getElementById('toggle-comm-mode');
-  const lblWifi = document.getElementById('lbl-wifi');
-  const lblSerial = document.getElementById('lbl-serial');
-
   if (toggleCommMode) {
     toggleCommMode.addEventListener('change', (e) => {
       const isWifi = e.target.checked;
       const mode = isWifi ? 'WIFI' : 'SERIAL';
+      syncCommModeUI(isWifi);
+      commModeEditedAt = Date.now();
 
-      lblWifi.className = isWifi ? 'toggle-label active' : 'toggle-label';
-      lblSerial.className = isWifi ? 'toggle-label' : 'toggle-label active';
-
-      fetch('/api/comm_mode', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: mode })
-      }).then(res => res.json()).then(data => {
-        console.log(`[Dashboard] Comm mode set to ${mode}:`, data);
-      });
+      postJSON('/api/comm_mode', { mode: mode })
+        .then(data => {
+          if (data.status === 'ok') toast(`Arm link switched to ${isWifi ? 'Wi-Fi' : 'serial'}.`, 'info');
+          else toast(`Could not switch link: ${data.message || 'server error'}`, 'error');
+        })
+        .catch(() => toast('Could not switch link: server unreachable.', 'error'));
     });
   }
 
@@ -1179,6 +1458,34 @@ function setupEventListeners() {
 }
 
 // ── Real-time State Polling ──────────────────────────────────────────────
+let serverOnline = null;
+let stateFailures = 0;
+let commModeEditedAt = 0;
+
+function setServerOnline(online) {
+  if (online === serverOnline) return;
+  serverOnline = online;
+  document.body.classList.toggle('server-offline', !online);
+  if (!online) {
+    setNodeBadge('badge-arm', 'offline', 'Server offline');
+    setPill(document.getElementById('pill-arm-link'), 'offline', 'Server offline');
+  }
+}
+
+function updateArmLinkStatus(data) {
+  const viaWifi = String(data.comm_mode || '').toUpperCase() === 'WIFI';
+  const link = viaWifi ? 'Wi-Fi' : 'Serial';
+  if (data.ros_bridge === true) {
+    setNodeBadge('badge-arm', 'online', `ROS 2 · ${link}`);
+    setPill(document.getElementById('pill-arm-link'), 'online', `ROS 2 bridge · ${link}`);
+  } else if (data.ros_bridge === false) {
+    setNodeBadge('badge-arm', 'warn', 'UI only (no ROS)');
+    setPill(document.getElementById('pill-arm-link'), 'warn', 'No ROS 2 — not sent to arm');
+  }
+  // Don't fight a toggle the user flipped a moment ago.
+  if (data.comm_mode && Date.now() - commModeEditedAt > 1500) syncCommModeUI(viaWifi);
+}
+
 function startStatePolling() {
   // Chained timeouts (not setInterval) so a slow server never accumulates
   // overlapping /api/state requests.
@@ -1186,24 +1493,34 @@ function startStatePolling() {
     fetch('/api/state')
       .then(res => res.json())
       .then(data => {
+        stateFailures = 0;
+        setServerOnline(true);
+        updateArmLinkStatus(data);
+
+        if (typeof data.simulating === 'boolean' && data.simulating !== isSimulating) {
+          // Another client (or the server) changed it: follow without re-posting.
+          isSimulating = data.simulating;
+          const btnSim = document.getElementById('btn-sim');
+          btnSim.innerText = isSimulating ? '⏸️ Stop Sim' : '▶️ Start Sim';
+          btnSim.className = isSimulating ? 'btn btn-danger btn-sm' : 'btn btn-warning btn-sm';
+        }
+
         if (data.joints) {
           const now = Date.now();
           for (let k in data.joints) {
             // Don't let a poll that raced a local slider move snap it back.
-            if (!isSimulating && now - (lastLocalJointEdit[k] || 0) < 500) continue;
+            if (!isSimulating && (armSmoothAnimId || now - (lastLocalJointEdit[k] || 0) < 500)) continue;
             jointState[k] = data.joints[k];
-            // Update UI sliders if simulating
-            if (isSimulating) {
-              const slider = document.getElementById(`slider-${k}`);
-              const readout = document.getElementById(`readout-${k}`);
-              if (slider) slider.value = data.joints[k] * 10;
-              if (readout) readout.innerText = `${data.joints[k].toFixed(1)}°`;
-            }
+            // Keep sliders in step with the server (sim, or another client)
+            setSliderPosition(k, data.joints[k]);
           }
         }
       })
-      .catch(() => {})
-      .finally(() => setTimeout(poll, 40)); // ~25 Hz state sync
+      .catch(() => {
+        // One dropped request is noise; a few in a row means the server is gone.
+        if (++stateFailures >= 3) setServerOnline(false);
+      })
+      .finally(() => setTimeout(poll, serverOnline === false ? 1000 : 40)); // ~25 Hz state sync
   };
   poll();
 }
@@ -1222,12 +1539,36 @@ function setupTabs() {
 
   function setActive(tabName, btn, panel) {
     activeTab = tabName;
-    [btnArm, btnQuard, btnSensors].forEach(b => b && b.classList.remove('active'));
+    storageSet('dashboard-tab', tabName);
+    [btnArm, btnQuard, btnSensors].forEach(b => {
+      if (!b) return;
+      b.classList.remove('active');
+      b.setAttribute('aria-selected', 'false');
+      b.tabIndex = -1;
+    });
     [panelArm, panelQuard, panelSensors].forEach(p => p && p.classList.remove('active'));
 
-    if (btn) btn.classList.add('active');
+    if (btn) {
+      btn.classList.add('active');
+      btn.setAttribute('aria-selected', 'true');
+      btn.tabIndex = 0;
+    }
     if (panel) panel.classList.add('active');
   }
+
+  // Arrow keys move between tabs (WAI-ARIA tabs pattern)
+  const tabs = [btnArm, btnQuard, btnSensors].filter(Boolean);
+  tabs.forEach((b, i) => {
+    b.tabIndex = b.classList.contains('active') ? 0 : -1;
+    b.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+      e.preventDefault();
+      e.stopPropagation(); // not a Quard walk command
+      const next = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+      next.focus();
+      next.click();
+    });
+  });
 
   if (btnArm) {
     btnArm.addEventListener('click', () => {
@@ -1254,6 +1595,12 @@ function setupTabs() {
       }
     });
   }
+}
+
+function restoreActiveTab() {
+  const saved = storageGet('dashboard-tab');
+  const btn = saved && saved !== 'arm' ? document.getElementById(`tab-btn-${saved}`) : null;
+  if (btn) btn.click();
 }
 
 // ── Quard Bot Locomotion & PCA9685 Control System ────────────────────────
@@ -1288,10 +1635,10 @@ function buildQuardChannelSliders() {
     card.className = 'quard-channel-card';
     card.innerHTML = `
       <div class="quard-channel-header">
-        <span class="quard-channel-name">
-          <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background-color:${badgeColor};margin-right:6px;vertical-align:middle;box-shadow:0 0 4px ${badgeColor};"></span>
-          <strong>Ch ${c.ch}:</strong> ${c.name}
-        </span>
+        <label class="quard-channel-name" for="slider-quard-ch-${c.ch}">
+          <span class="channel-dot" style="background-color:${badgeColor}"></span>
+          <strong>Ch ${c.ch}</strong> ${c.name}
+        </label>
         <span class="quard-channel-val" id="readout-quard-ch-${c.ch}">${c.baseZero}°</span>
       </div>
       <div class="slider-row">
@@ -1310,6 +1657,12 @@ function buildQuardChannelSliders() {
 }
 
 function onQuardSliderChanged(ch, angle) {
+  if (estopEngaged) {
+    const slider = document.getElementById(`slider-quard-ch-${ch}`);
+    if (slider) slider.value = quardState.channels[ch];
+    document.getElementById(`readout-quard-ch-${ch}`).innerText = `${quardState.channels[ch]}°`;
+    return;
+  }
   quardState.channels[ch] = angle;
   const jInfo = CHANNEL_TO_JOINT[ch];
   if (jInfo) {
@@ -1317,7 +1670,8 @@ function onQuardSliderChanged(ch, angle) {
   }
   updateQuardKinematics();
   syncQuardJointsToServer();
-  sendQuardCmd({ ch: ch, angle: angle });
+  // The firmware reads the angle from 'deg' (or 'val'); without one it moves to 0°.
+  sendQuardCmd({ ch: ch, deg: angle });
 }
 
 let quardSmoothAnimId = null;
@@ -1382,7 +1736,20 @@ function stopQuardGait() {
     quardState.gaitTimer = null;
   }
   quardState.gaitMode = null;
+  setGaitLabel('stand');
 }
+
+function setGaitLabel(mode) {
+  const el = document.getElementById('lbl-gait-mode');
+  if (el) el.innerText = { forward: 'Walking forward', backward: 'Walking back', left: 'Turning left', right: 'Turning right' }[mode] || 'Stand';
+}
+
+// The firmware stands the robot up after 2 s without a /cmd request
+// (LOCOMOTION_WATCHDOG_MS), so keep re-sending the active gait once a second.
+// Repeating the same mode does not restart the gait on the robot.
+setInterval(() => {
+  if (quardState.gaitMode && !estopEngaged) sendQuardCmd({ mode: quardState.gaitMode }, false, true);
+}, 1000);
 
 function playQuardWaveAnimation() {
   if (quardState.waveTimer) clearInterval(quardState.waveTimer);
@@ -1418,6 +1785,7 @@ function playQuardWaveAnimation() {
 function startQuardGait(mode) {
   stopQuardGait();
   quardState.gaitMode = mode;
+  setGaitLabel(mode);
 
   let phase = 0;
   const stepDelay = 220; // Walking gait trot cycle
@@ -1562,7 +1930,8 @@ function setupQuardEventListeners() {
 // Keyboard WASD / Arrow locomotion controls for Quard Bot
 function setupQuardKeyboard() {
   window.addEventListener('keydown', (e) => {
-    if (activeTab !== 'quard') return;
+    if (activeTab !== 'quard' || estopEngaged) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
     if (['input', 'select', 'textarea'].includes(document.activeElement.tagName.toLowerCase())) return;
 
     let mode = null;
@@ -1588,32 +1957,50 @@ function setupQuardKeyboard() {
 const quardCmdQueue = [];
 let quardCmdInFlight = false;
 
-function sendQuardCmd(params) {
+function sendQuardCmd(params, force = false, keepalive = false) {
+  if (estopEngaged && !force) return;
   const host = document.getElementById('input-quard-host') ? document.getElementById('input-quard-host').value.trim() : 'http://sesame-robot.local';
-  const entry = { host: host, params: params };
+  const entry = { host: host, params: params, keepalive: keepalive };
+
+  // Only the newest gait/mode matters: drop older queued ones so a slow or
+  // unreachable robot does not replay stale walk commands later.
+  if (params.mode !== undefined) {
+    for (let i = quardCmdQueue.length - 1; i >= 0; i--) {
+      if (quardCmdQueue[i].params.mode !== undefined) quardCmdQueue.splice(i, 1);
+    }
+  }
 
   const last = quardCmdQueue[quardCmdQueue.length - 1];
   if (last && last.host === host && params.ch !== undefined && last.params.ch === params.ch) {
     quardCmdQueue[quardCmdQueue.length - 1] = entry;
+  } else if (keepalive && quardCmdQueue.length > 0) {
+    return; // something is already queued, which also resets the watchdog
   } else {
     quardCmdQueue.push(entry);
   }
   flushQuardCmdQueue();
 }
 
+let lastQuardRejectToast = 0;
+
 function flushQuardCmdQueue() {
   if (quardCmdInFlight || quardCmdQueue.length === 0) return;
   const entry = quardCmdQueue.shift();
   quardCmdInFlight = true;
 
-  fetch('/api/quardbot/cmd', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(entry)
-  })
-  .then(res => res.json())
+  postJSON('/api/quardbot/cmd', { host: entry.host, params: entry.params })
   .then(data => {
-    updateQuardStatusPill(data.status === 'ok');
+    if (data.status === 'rejected') {
+      // The robot answered, so it is online; it just did not accept this command.
+      updateQuardStatusPill(true);
+      if (Date.now() - lastQuardRejectToast > 3000) {
+        lastQuardRejectToast = Date.now();
+        const what = Object.keys(entry.params).join(', ');
+        toast(`Quard Bot rejected the command (${what}); the firmware may not support it.`, 'warn');
+      }
+    } else {
+      updateQuardStatusPill(data.status === 'ok');
+    }
   })
   .catch(err => {
     console.warn('[Dashboard] Quard Bot command error:', err);
@@ -1625,7 +2012,8 @@ function flushQuardCmdQueue() {
   });
 }
 
-function pingQuardBot() {
+function pingQuardBot(e) {
+  if (e && e.type === 'click') btnPingBusy(true);
   const host = document.getElementById('input-quard-host') ? document.getElementById('input-quard-host').value.trim() : 'http://sesame-robot.local';
 
   fetch('/api/quardbot/ping', {
@@ -1638,22 +2026,18 @@ function pingQuardBot() {
     const online = data.online === true;
     updateQuardStatusPill(online);
   })
-  .catch(() => updateQuardStatusPill(false));
+  .catch(() => updateQuardStatusPill(false))
+  .finally(() => btnPingBusy(false));
+}
+
+function btnPingBusy(on) {
+  const btn = document.getElementById('btn-quard-ping');
+  if (btn) btn.classList.toggle('is-busy', on);
 }
 
 function updateQuardStatusPill(online) {
-  const pill = document.getElementById('pill-quard-status');
-  const dot = document.getElementById('dot-quardbot');
-  const text = document.getElementById('status-quardbot-text');
-
-  if (pill) {
-    pill.className = online ? 'status-pill status-online' : 'status-pill status-offline';
-    pill.innerText = online ? 'Connected' : 'Offline';
-  }
-  if (dot && text) {
-    dot.parentElement.className = online ? 'node-badge status-online' : 'node-badge status-offline';
-    text.innerText = online ? 'Connected' : 'Disconnected';
-  }
+  setPill(document.getElementById('pill-quard-status'), online ? 'online' : 'offline', online ? 'Connected' : 'Offline');
+  setNodeBadge('badge-quardbot', online ? 'online' : 'offline', online ? 'Connected' : 'Offline');
 }
 
 // ── ESP32 Sensor Node Telemetry & Controls ────────────────────────────────
@@ -1668,7 +2052,7 @@ function initSensorControls() {
   if (btnWifiConnect) {
     btnWifiConnect.addEventListener('click', () => {
       const ip = (inputWifiIp ? inputWifiIp.value.trim() : '') || '192.168.1.100';
-      btnWifiConnect.innerText = '⏳ Connecting...';
+      btnWifiConnect.classList.add('is-busy');
       btnWifiConnect.disabled = true;
 
       fetch('/api/sensors/wifi_connect', {
@@ -1678,7 +2062,7 @@ function initSensorControls() {
       })
       .then(res => res.json())
       .then(data => {
-        btnWifiConnect.innerText = '🌐 Connect Wi-Fi';
+        btnWifiConnect.classList.remove('is-busy');
         btnWifiConnect.disabled = false;
         if (btnWifiDisconnect) btnWifiDisconnect.style.display = 'inline-block';
         const pill = document.getElementById('pill-sensor-wifi-status');
@@ -1687,9 +2071,10 @@ function initSensorControls() {
           pill.className = 'status-pill status-online';
         }
       })
-      .catch(err => {
-        btnWifiConnect.innerText = '🌐 Connect Wi-Fi';
+      .catch(() => {
+        btnWifiConnect.classList.remove('is-busy');
         btnWifiConnect.disabled = false;
+        toast('Could not reach the server.', 'error');
       });
     });
   }
@@ -1720,17 +2105,16 @@ function initSensorControls() {
         body: JSON.stringify({ port: port, baudrate: baud })
       })
       .then(res => res.json())
-      .then(data => {
-        alert(`🔌 Connecting to ESP32 on ${port} @ ${baud} baud...`);
-      });
+      .then(() => toast(`🔌 Reading sensor node on ${port} @ ${baud} baud…`, 'info'))
+      .catch(() => toast('Could not reach the server.', 'error'));
     });
   }
 
   if (btnSim) {
     btnSim.addEventListener('click', () => {
       sensorState.simulating = !sensorState.simulating;
-      btnSim.innerText = sensorState.simulating ? '▶️ Simulating Data' : '⏸️ Stop Simulation';
-      btnSim.className = sensorState.simulating ? 'btn btn-warning btn-sm' : 'btn btn-secondary btn-sm';
+      sensorSimEditedAt = Date.now();
+      updateSensorSimButton(sensorState.simulating);
 
       fetch('/api/sensors/sim', {
         method: 'POST',
@@ -1748,6 +2132,17 @@ function initSensorControls() {
   }
 }
 
+// The button names the action it performs, not the current state.
+function updateSensorSimButton(simulating) {
+  const btnSim = document.getElementById('btn-sensors-sim');
+  if (!btnSim) return;
+  btnSim.innerText = simulating ? '⏸️ Stop Simulation' : '▶️ Simulate Data';
+  btnSim.className = simulating ? 'btn btn-warning btn-sm' : 'btn btn-outline btn-sm';
+}
+
+let lastSensorLog = '';
+let sensorSimEditedAt = 0;
+
 function startSensorPolling() {
   setInterval(() => {
     fetch('/api/sensors/data')
@@ -1761,9 +2156,9 @@ function startSensorPolling() {
         const alertStr = String(data.alert || 'OK').toUpperCase();
         const isFire = (flameVal === 0 || alertStr === 'FIRE');
         const fireBanner = document.getElementById('banner-sensor-fire');
-        if (fireBanner) {
-          fireBanner.style.display = isFire ? 'block' : 'none';
-        }
+        if (fireBanner) fireBanner.classList.toggle('visible', isFire);
+        // A poll that left before the toggle POST landed would flip it back.
+        if (Date.now() - sensorSimEditedAt > 1000) updateSensorSimButton(Boolean(data.simulating));
 
         // 2. DHT11 Climate & BMP280
         const tempC = data.temp_dht !== undefined ? data.temp_dht : (data.temperature || 24.5);
@@ -1798,15 +2193,7 @@ function startSensorPolling() {
           meterPressure.style.width = `${pPct}%`;
         }
 
-        if (badgeDht) {
-          if (data.dht_error) {
-            badgeDht.className = 'status-pill status-offline';
-            badgeDht.innerText = 'DHT ERROR';
-          } else {
-            badgeDht.className = 'status-pill status-online';
-            badgeDht.innerText = 'OK';
-          }
-        }
+        setPill(badgeDht, data.dht_error ? 'offline' : 'online', data.dht_error ? 'DHT ERROR' : 'OK');
 
         // 3. Hazards: Gas, Water, Flame
         const gasVal = data.gas !== undefined ? data.gas : 415;
@@ -1834,60 +2221,31 @@ function startSensorPolling() {
             meterGas.className = 'meter-fill meter-gas-fill';
           }
         }
-        if (badgeGas) {
-          if (gasVal > 2500) {
-            badgeGas.className = 'status-pill status-offline';
-            badgeGas.innerText = '🔴 HAZARD!';
-          } else if (gasVal > 1500) {
-            badgeGas.className = 'status-pill';
-            badgeGas.style.backgroundColor = '#78350f';
-            badgeGas.style.color = '#fde047';
-            badgeGas.innerText = '🟡 Moderate';
-          } else {
-            badgeGas.className = 'status-pill status-online';
-            badgeGas.innerText = '🟢 Clean Air';
-          }
-        }
+        if (gasVal > 2500) setPill(badgeGas, 'offline', 'Hazard');
+        else if (gasVal > 1500) setPill(badgeGas, 'warn', 'Moderate');
+        else setPill(badgeGas, 'online', 'Clean Air');
 
         if (elWater) elWater.innerText = `${waterVal} / 4095`;
         if (meterWater) {
           const wPct = Math.min(100, Math.max(0, (waterVal / 4095) * 100));
           meterWater.style.width = `${wPct.toFixed(1)}%`;
         }
-        if (badgeWater) {
-          if (waterVal > 2000) {
-            badgeWater.className = 'status-pill';
-            badgeWater.style.backgroundColor = '#1e3a8a';
-            badgeWater.style.color = '#93c5fd';
-            badgeWater.innerText = '🌊 Submerged';
-          } else if (waterVal > 600) {
-            badgeWater.className = 'status-pill';
-            badgeWater.style.backgroundColor = '#0c4a6e';
-            badgeWater.style.color = '#38bdf8';
-            badgeWater.innerText = '💧 Moisture';
-          } else {
-            badgeWater.className = 'status-pill status-online';
-            badgeWater.innerText = '🟢 Dry';
-          }
-        }
+        if (waterVal > 2000) setPill(badgeWater, 'warn', 'Submerged');
+        else if (waterVal > 600) setPill(badgeWater, 'info', 'Moisture');
+        else setPill(badgeWater, 'online', 'Dry');
 
         if (elFlame) {
-          elFlame.innerText = (flameVal === 0) ? 'Pin DO: LOW (🔥 Fire Detected!)' : 'Pin DO: HIGH (Clear)';
-          elFlame.style.color = (flameVal === 0) ? '#ef4444' : '#10b981';
+          elFlame.innerText = (flameVal === 0) ? 'Pin DO: LOW (🔥 Fire detected)' : 'Pin DO: HIGH (Clear)';
+          elFlame.className = 'readout-pill ' + (flameVal === 0 ? 'bad' : 'ok');
         }
-        if (badgeFlame) {
-          if (flameVal === 0) {
-            badgeFlame.className = 'status-pill status-offline';
-            badgeFlame.innerText = '🚨 FIRE ALERT!';
-          } else {
-            badgeFlame.className = 'status-pill status-online';
-            badgeFlame.innerText = '✅ Clear';
-          }
-        }
-        if (valAlert) {
-          valAlert.innerText = `Alert: ${alertStr}`;
-          valAlert.className = (alertStr === 'FIRE') ? 'status-pill status-offline' : 'status-pill status-online';
-        }
+        setPill(badgeFlame, flameVal === 0 ? 'offline' : 'online', flameVal === 0 ? '🚨 FIRE' : '✅ Clear');
+        setPill(valAlert, alertStr === 'OK' ? 'online' : 'offline', `Alert: ${alertStr}`);
+
+        // Card-level summary of all three hazard sensors
+        const badgeHazard = document.getElementById('badge-hazard-status');
+        if (isFire || gasVal > 2500) setPill(badgeHazard, 'offline', 'Danger');
+        else if (gasVal > 1500 || waterVal > 2000) setPill(badgeHazard, 'warn', 'Caution');
+        else setPill(badgeHazard, 'online', 'Safe');
 
         // 4. MPU6050 IMU
         const accel = data.accel || { x: 0.12, y: -0.05, z: 9.81 };
@@ -1929,17 +2287,14 @@ function startSensorPolling() {
           elGpsCoords.innerText = gpsValid ? `${lat.toFixed(6)}, ${lng.toFixed(6)}` : 'No Fix / Searching...';
         }
         if (elGpsSats) {
-          elGpsSats.innerText = `🛰️ ${sats} satellites locked`;
+          elGpsSats.innerText = `🛰️ ${sats} satellite${sats === 1 ? '' : 's'}`;
         }
-        if (badgeGps) {
-          badgeGps.className = gpsValid ? 'status-pill status-online' : 'status-pill status-offline';
-          badgeGps.innerText = gpsValid ? '3D Fix' : 'No Fix';
-        }
+        setPill(badgeGps, gpsValid ? 'online' : 'offline', gpsValid ? '3D Fix' : 'No Fix');
 
         const sdOk = data.sd_ok !== undefined ? data.sd_ok : true;
         if (elSdStatus) {
-          elSdStatus.innerText = sdOk ? '💾 SD: Ready (/log.csv)' : '❌ No SD Card';
-          elSdStatus.style.color = sdOk ? '#10b981' : '#ef4444';
+          elSdStatus.innerText = sdOk ? '💾 Ready (/log.csv)' : '❌ No SD card';
+          elSdStatus.className = 'metric-val sm ' + (sdOk ? 'ok' : 'bad');
         }
         if (elUptime) {
           const uptimeSec = Math.floor((data.uptime_ms || 0) / 1000);
@@ -1950,41 +2305,29 @@ function startSensorPolling() {
 
         // Update Wi-Fi status pill
         const pillWifi = document.getElementById('pill-sensor-wifi-status');
-        if (pillWifi) {
-          if (data.wifi_connected) {
-            pillWifi.className = 'status-pill status-online';
-            pillWifi.innerText = `Wi-Fi: Online (${data.wifi_ip || ''})`;
-          } else if (!data.connected && !data.simulating) {
-            pillWifi.className = 'status-pill status-offline';
-            pillWifi.innerText = 'Wi-Fi: Offline';
-          }
-        }
+        if (data.wifi_connected) setPill(pillWifi, 'online', `Wi-Fi: ${data.wifi_ip || 'online'}`);
+        else if (data.connected) setPill(pillWifi, 'info', `Serial: ${data.port || ''}`);
+        else if (data.simulating) setPill(pillWifi, 'warn', 'Simulated data');
+        else setPill(pillWifi, 'offline', 'Wi-Fi: Offline');
 
         // Update Console Log
         const elConsole = document.getElementById('sensor-console-log');
         if (elConsole && data.raw_log && data.raw_log.length > 0) {
-          elConsole.innerText = data.raw_log.slice(-30).join('\n');
-          elConsole.scrollTop = elConsole.scrollHeight;
+          const text = data.raw_log.slice(-30).join('\n');
+          if (text !== lastSensorLog) {
+            lastSensorLog = text;
+            // Only follow the tail if the user hasn't scrolled up to read.
+            const atBottom = elConsole.scrollHeight - elConsole.scrollTop - elConsole.clientHeight < 24;
+            elConsole.innerText = text;
+            if (atBottom) elConsole.scrollTop = elConsole.scrollHeight;
+          }
         }
 
         // Update Top Header Badge
-        const textNode = document.getElementById('status-sensornode-text');
-        const dotNode = document.getElementById('dot-sensornode');
-        if (textNode && dotNode) {
-          if (data.wifi_connected) {
-            textNode.innerText = 'Wi-Fi Online';
-            dotNode.parentElement.className = 'node-badge status-online';
-          } else if (data.connected) {
-            textNode.innerText = 'Hardware Serial';
-            dotNode.parentElement.className = 'node-badge status-online';
-          } else if (data.simulating) {
-            textNode.innerText = 'Simulating';
-            dotNode.parentElement.className = 'node-badge status-online';
-          } else {
-            textNode.innerText = 'Disconnected';
-            dotNode.parentElement.className = 'node-badge status-offline';
-          }
-        }
+        if (data.wifi_connected) setNodeBadge('badge-sensornode', 'online', 'Wi-Fi');
+        else if (data.connected) setNodeBadge('badge-sensornode', 'online', 'Serial');
+        else if (data.simulating) setNodeBadge('badge-sensornode', 'warn', 'Simulated');
+        else setNodeBadge('badge-sensornode', 'offline', 'Disconnected');
       })
       .catch(err => {});
   }, 200); // 5 Hz telemetry sync
