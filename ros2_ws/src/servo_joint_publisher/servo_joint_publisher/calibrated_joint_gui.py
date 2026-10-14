@@ -33,10 +33,10 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QSlider, QDoubleSpinBox, QPushButton, QGroupBox,
     QScrollArea, QMessageBox, QSplitter, QTextEdit, QLineEdit,
-    QTabWidget, QGridLayout, QComboBox
+    QTabWidget, QGridLayout, QComboBox, QShortcut
 )
-from PyQt5.QtCore import Qt, QTimer, QProcess, QProcessEnvironment, pyqtSignal, QCoreApplication, QUrl
-from PyQt5.QtGui import QFont, QWindow, QTextCursor, QPainter, QPen, QBrush, QColor, QPainterPath, QRadialGradient, QLinearGradient
+from PyQt5.QtCore import Qt, QTimer, QProcess, QProcessEnvironment, pyqtSignal, QCoreApplication, QUrl, QSettings
+from PyQt5.QtGui import QFont, QWindow, QTextCursor, QPainter, QPen, QBrush, QColor, QPainterPath, QRadialGradient, QLinearGradient, QPalette, QKeySequence
 
 try:
     QCoreApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
@@ -119,6 +119,115 @@ DEFAULT_HOME_DEGS = {
 }
 
 
+# ── Dashboard theme ───────────────────────────────────────────────────────
+# Shared colours for the whole window. Many widgets still carry their own
+# inline styles; these set the defaults (labels, scroll bars, tool tips, status
+# bar, splitters) and the toolbar buttons so everything reads as one app.
+THEME = {
+    'window': '#1b1d22',
+    'surface': '#24272e',
+    'sunken': '#15171b',
+    'border': '#343842',
+    'text': '#e6e8ec',
+    'muted': '#9aa1ad',
+    'accent': '#0ea5e9',
+    'accent_hover': '#0284c7',
+}
+
+APP_QSS = f"""
+    QLabel {{ background: transparent; }}
+    QToolTip {{
+        background-color: {THEME['surface']}; color: {THEME['text']};
+        border: 1px solid {THEME['border']}; padding: 4px 6px;
+    }}
+    QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0; }}
+    QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 0; }}
+    QScrollBar::handle:vertical {{ background: #3a3f4b; border-radius: 5px; min-height: 28px; }}
+    QScrollBar::handle:horizontal {{ background: #3a3f4b; border-radius: 5px; min-width: 28px; }}
+    QScrollBar::handle:hover {{ background: #4b5263; }}
+    QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
+    QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
+    QSplitter::handle {{ background: {THEME['border']}; }}
+    QSplitter::handle:hover {{ background: {THEME['accent']}; }}
+    QStatusBar {{ background: {THEME['sunken']}; color: {THEME['muted']}; border-top: 1px solid {THEME['border']}; }}
+    QStatusBar QLabel {{ padding: 0 8px; }}
+    QDoubleSpinBox, QSpinBox, QLineEdit, QComboBox, QTextEdit {{
+        selection-background-color: {THEME['accent']}; selection-color: #ffffff;
+    }}
+"""
+
+
+def apply_app_theme(app):
+    """Fusion style + dark palette + base stylesheet. Safe to call twice."""
+    if app is None or app.property("robot_theme_applied"):
+        return
+    app.setStyle("Fusion")
+    pal = QPalette()
+    pal.setColor(QPalette.Window, QColor(THEME['window']))
+    pal.setColor(QPalette.WindowText, QColor(THEME['text']))
+    pal.setColor(QPalette.Base, QColor(THEME['sunken']))
+    pal.setColor(QPalette.AlternateBase, QColor(THEME['surface']))
+    pal.setColor(QPalette.Text, QColor(THEME['text']))
+    pal.setColor(QPalette.Button, QColor(THEME['surface']))
+    pal.setColor(QPalette.ButtonText, QColor(THEME['text']))
+    pal.setColor(QPalette.ToolTipBase, QColor(THEME['surface']))
+    pal.setColor(QPalette.ToolTipText, QColor(THEME['text']))
+    pal.setColor(QPalette.Highlight, QColor(THEME['accent']))
+    pal.setColor(QPalette.HighlightedText, QColor('#ffffff'))
+    pal.setColor(QPalette.PlaceholderText, QColor(THEME['muted']))
+    for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
+        pal.setColor(QPalette.Disabled, role, QColor('#6b7280'))
+    app.setPalette(pal)
+    app.setStyleSheet(APP_QSS)
+    app.setProperty("robot_theme_applied", True)
+
+
+# (background, hover, text, border) per button role
+_BUTTON_KINDS = {
+    'primary': ('#0284c7', '#0369a1', '#ffffff', '#0284c7'),
+    'success': ('#16a34a', '#15803d', '#ffffff', '#16a34a'),
+    'warning': ('#d97706', '#b45309', '#ffffff', '#d97706'),
+    'danger':  ('#dc2626', '#b91c1c', '#ffffff', '#dc2626'),
+    'purple':  ('#7c3aed', '#6d28d9', '#ffffff', '#7c3aed'),
+    'neutral': ('#2c3039', '#363b46', THEME['text'], THEME['border']),
+}
+
+
+def button_qss(kind='neutral', checked=None, padding='6px 12px'):
+    """Stylesheet for a toolbar button; `checked` styles a checkable button's on state."""
+    bg, hover, fg, border = _BUTTON_KINDS[kind]
+    qss = (f"QPushButton {{ background-color: {bg}; color: {fg}; border: 1px solid {border}; "
+           f"border-radius: 6px; padding: {padding}; font-weight: bold; }} "
+           f"QPushButton:hover {{ background-color: {hover}; }} "
+           f"QPushButton:disabled {{ background-color: #23262d; color: #6b7280; border-color: #2c3039; }}")
+    if checked:
+        cbg, chover, cfg, cborder = _BUTTON_KINDS[checked]
+        qss += (f" QPushButton:checked {{ background-color: {cbg}; color: {cfg}; border-color: {cborder}; }}"
+                f" QPushButton:checked:hover {{ background-color: {chover}; }}")
+    return qss
+
+
+def section_label(text):
+    """Small upper-case caption used to group toolbar rows."""
+    lbl = QLabel(text.upper())
+    lbl.setStyleSheet(f"color: {THEME['muted']}; font-size: 10px; font-weight: bold; letter-spacing: 1px;")
+    lbl.setFixedWidth(92)
+    return lbl
+
+
+# Readable name and wiring hint for each arm joint (URDF names are opaque).
+JOINT_LABELS = {
+    'turntable_link_joint_dup':   ("Base Turntable Yaw", ""),
+    'turntable_link_joint':       ("Shoulder Pitch", "dual servos · GPIO 19 & 21"),
+    'turntable_link_joint_dup_1': ("Elbow 1 Pitch", ""),
+    'turntable_link_joint_dup_2': ("Elbow 2 Pitch", ""),
+    'turntable_link_joint_dup_3': ("Wrist Twist / Roll", "GPIO 27"),
+    'wrist_twist_joint':          ("Wrist Twist / Roll", "GPIO 27"),
+    'grip':                       ("End-Effector Gripper", "GPIO 26"),
+    'gripper':                    ("End-Effector Gripper", "GPIO 26"),
+}
+
+
 class CalibratedJointWidget(QGroupBox):
     """Widget row for a single joint with slider, readouts, Set Low/Set High, and Homing support."""
 
@@ -143,50 +252,42 @@ class CalibratedJointWidget(QGroupBox):
             self.calib['home_deg'] = def_home
         self.sync_offset_deg = float(self.calib.get('sync_offset_deg', 0.0))
 
-        if joint_name == 'turntable_link_joint':
-            self.setTitle(f"🦾 Joint: {joint_name} (Shoulder Pitch — Dual Servos: GPIO 19 & 21)")
-        elif joint_name == 'turntable_link_joint_dup':
-            self.setTitle(f"🦾 Joint: {joint_name} (Base Turntable Yaw)")
-        elif joint_name == 'turntable_link_joint_dup_1':
-            self.setTitle(f"🦾 Joint: {joint_name} (Elbow 1 Pitch)")
-        elif joint_name == 'turntable_link_joint_dup_2':
-            self.setTitle(f"🦾 Joint: {joint_name} (Elbow 2 Pitch)")
-        elif joint_name in ('wrist_twist_joint', 'turntable_link_joint_dup_3'):
-            self.setTitle(f"🦾 Joint: {joint_name} (Wrist Twist / Roll — GPIO 27)")
-        elif joint_name in ('grip', 'gripper'):
-            self.setTitle(f"🦾 Joint: {joint_name} (End-Effector Gripper — GPIO 26)")
-        else:
-            self.setTitle(f"🦾 Joint: {joint_name}")
-        self.setStyleSheet("""
-            QGroupBox {
+        friendly, hint = JOINT_LABELS.get(joint_name, (joint_name, ""))
+        self.setTitle(f"🦾 {friendly}")
+        self.setStyleSheet(f"""
+            QGroupBox {{
                 font-weight: bold;
                 font-size: 13px;
-                border: 1px solid #444;
-                border-radius: 6px;
-                margin-top: 8px;
+                border: 1px solid {THEME['border']};
+                border-radius: 8px;
+                margin-top: 10px;
                 padding-top: 10px;
-                background-color: #2b2b2b;
-                color: #e0e0e0;
-            }
-            QGroupBox::title {
+                background-color: {THEME['surface']};
+                color: {THEME['text']};
+            }}
+            QGroupBox::title {{
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
-                padding: 0 5px;
-                color: #4da6ff;
-            }
+                left: 8px;
+                padding: 0 4px;
+                color: #7dd3fc;
+            }}
         """)
 
+        layout = QVBoxLayout()
         layout = QVBoxLayout()
 
         # ── Row 1: Joint Name & Readout ──────────────────────────────────
         row1 = QHBoxLayout()
-        self.label_name = QLabel(joint_name)
-        self.label_name.setFont(QFont("Monospace", 10, QFont.Bold))
-        self.label_name.setStyleSheet("color: #ffffff;")
+        # URDF name (and wiring hint) as a quiet caption; the title carries the readable name
+        self.label_name = QLabel(f"{joint_name}  ·  {hint}" if hint else joint_name)
+        self.label_name.setFont(QFont("Monospace", 9))
+        self.label_name.setStyleSheet(f"color: {THEME['muted']};")
+        self.label_name.setToolTip(f"URDF joint: {joint_name}")
 
         self.label_val = QLabel("90.0° (0.000 rad)")
         self.label_val.setFont(QFont("Monospace", 10, QFont.Bold))
-        self.label_val.setStyleSheet("color: #00ffcc; background: #1e1e1e; padding: 3px 8px; border-radius: 4px;")
+        self.label_val.setStyleSheet(f"color: #5eead4; background: {THEME['sunken']}; border: 1px solid {THEME['border']}; padding: 3px 8px; border-radius: 4px;")
 
         row1.addWidget(self.label_name)
         row1.addStretch()
@@ -203,23 +304,25 @@ class CalibratedJointWidget(QGroupBox):
 
         self.slider.setStyleSheet("""
             QSlider::groove:horizontal {
-                border: 1px solid #555;
-                height: 8px;
-                background: #3a3a3a;
-                border-radius: 4px;
+                border: none;
+                height: 6px;
+                background: #3a3f4b;
+                border-radius: 3px;
             }
             QSlider::sub-page:horizontal {
-                background: #007acc;
-                border-radius: 4px;
+                background: #0ea5e9;
+                border-radius: 3px;
             }
             QSlider::handle:horizontal {
                 background: #ffffff;
-                border: 1px solid #777;
-                width: 18px;
-                margin-top: -5px;
-                margin-bottom: -5px;
+                border: 2px solid #0ea5e9;
+                width: 14px;
+                margin-top: -6px;
+                margin-bottom: -6px;
                 border-radius: 9px;
             }
+            QSlider::handle:horizontal:disabled { border-color: #6b7280; }
+            QSlider::sub-page:horizontal:disabled { background: #4b5263; }
         """)
         self.slider.valueChanged.connect(self.on_slider_changed)
         row2.addWidget(self.slider)
@@ -228,8 +331,8 @@ class CalibratedJointWidget(QGroupBox):
         # ── Row 3: Limits & "Set Low" / "Set High" Buttons ───────────────
         row3 = QHBoxLayout()
 
-        lbl_min = QLabel("Min:")
-        lbl_min.setStyleSheet("color: #aaaaaa;")
+        lbl_min = QLabel("Min")
+        lbl_min.setStyleSheet(f"color: {THEME['muted']}; font-weight: bold;")
         self.spin_min = QDoubleSpinBox()
         self.spin_min.setRange(0.0, 180.0)
         self.spin_min.setValue(self.calib['servo_min_deg'])
@@ -241,14 +344,14 @@ class CalibratedJointWidget(QGroupBox):
         self.btn_set_low = QPushButton("📍 Set Low")
         self.btn_set_low.setToolTip("Set current slider position as Minimum Safety Limit")
         self.btn_set_low.setStyleSheet("""
-            QPushButton { background-color: #8b0000; color: white; font-weight: bold; border-radius: 4px; padding: 4px 8px; }
-            QPushButton:hover { background-color: #a52a2a; }
-            QPushButton:pressed { background-color: #660000; }
+            QPushButton { background-color: #3b1d22; color: #fca5a5; font-weight: bold; border: 1px solid #7f1d1d; border-radius: 5px; padding: 4px 10px; }
+            QPushButton:hover { background-color: #4c1d24; }
+            QPushButton:pressed { background-color: #2a1418; }
         """)
         self.btn_set_low.clicked.connect(self.set_low_limit)
 
-        lbl_max = QLabel("Max:")
-        lbl_max.setStyleSheet("color: #aaaaaa;")
+        lbl_max = QLabel("Max")
+        lbl_max.setStyleSheet(f"color: {THEME['muted']}; font-weight: bold;")
         self.spin_max = QDoubleSpinBox()
         self.spin_max.setRange(0.0, 180.0)
         self.spin_max.setValue(self.calib['servo_max_deg'])
@@ -260,16 +363,16 @@ class CalibratedJointWidget(QGroupBox):
         self.btn_set_high = QPushButton("📍 Set High")
         self.btn_set_high.setToolTip("Set current slider position as Maximum Safety Limit")
         self.btn_set_high.setStyleSheet("""
-            QPushButton { background-color: #006400; color: white; font-weight: bold; border-radius: 4px; padding: 4px 8px; }
-            QPushButton:hover { background-color: #2e8b57; }
-            QPushButton:pressed { background-color: #004d00; }
+            QPushButton { background-color: #13301f; color: #86efac; font-weight: bold; border: 1px solid #166534; border-radius: 5px; padding: 4px 10px; }
+            QPushButton:hover { background-color: #173d27; }
+            QPushButton:pressed { background-color: #0d2316; }
         """)
         self.btn_set_high.clicked.connect(self.set_high_limit)
 
         row3.addWidget(lbl_min)
         row3.addWidget(self.spin_min)
         row3.addWidget(self.btn_set_low)
-        row3.addSpacing(15)
+        row3.addStretch(1)
         row3.addWidget(lbl_max)
         row3.addWidget(self.spin_max)
         row3.addWidget(self.btn_set_high)
@@ -277,8 +380,8 @@ class CalibratedJointWidget(QGroupBox):
 
         # ── Row 4: Twin Sync & Alignment Offset ───────────────────────────
         row4 = QHBoxLayout()
-        lbl_sync = QLabel("🎯 Sync:")
-        lbl_sync.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 11px;")
+        lbl_sync = QLabel("🎯 Twin offset")
+        lbl_sync.setStyleSheet(f"color: {THEME['muted']}; font-weight: bold; font-size: 11px;")
         lbl_sync.setToolTip("Fine-tune 3D virtual orientation offset relative to physical servo")
 
         self.spin_sync = QDoubleSpinBox()
@@ -296,9 +399,9 @@ class CalibratedJointWidget(QGroupBox):
         btn_sync_zero = QPushButton("0°")
 
         nudge_style = """
-            QPushButton { background-color: #1e293b; color: #e2e8f0; font-weight: bold; border: 1px solid #475569; border-radius: 3px; padding: 2px 5px; font-size: 10px; }
-            QPushButton:hover { background-color: #334155; }
-            QPushButton:pressed { background-color: #0f172a; }
+            QPushButton { background-color: #2c3039; color: #e6e8ec; font-weight: bold; border: 1px solid #3a3f4b; border-radius: 4px; padding: 3px 8px; font-size: 11px; }
+            QPushButton:hover { background-color: #363b46; }
+            QPushButton:pressed { background-color: #1f2228; }
         """
         for b in [btn_nudge_m5, btn_nudge_m1, btn_nudge_p1, btn_nudge_p5, btn_sync_zero]:
             b.setStyleSheet(nudge_style)
@@ -316,6 +419,7 @@ class CalibratedJointWidget(QGroupBox):
         row4.addWidget(btn_nudge_p1)
         row4.addWidget(btn_nudge_p5)
         row4.addWidget(btn_sync_zero)
+        row4.addStretch(1)
         layout.addLayout(row4)
 
         self.setLayout(layout)
@@ -684,7 +788,7 @@ class QuardBotWidget(QWidget):
         left_layout.setSpacing(8)
 
         # 1. Network Connection Card with Telemetry
-        conn_box = QGroupBox("🌐 Quard Bot Network Target & Live Telemetry")
+        conn_box = QGroupBox("🌐 Quard Bot Network Target && Live Telemetry")
         conn_box.setStyleSheet("""
             QGroupBox { font-weight: bold; font-size: 13px; border: 1px solid #444; border-radius: 6px; margin-top: 6px; padding-top: 10px; background-color: #2b2b2b; color: #4da6ff; }
             QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; color: #4da6ff; }
@@ -802,7 +906,7 @@ class QuardBotWidget(QWidget):
         left_layout.addWidget(dpad_box)
 
         # 4. Quick Stances & Trims Card
-        presets_box = QGroupBox("⚡ Stance Presets & Zero-Tare Trims")
+        presets_box = QGroupBox("⚡ Stance Presets && Zero-Tare Trims")
         presets_box.setStyleSheet("""
             QGroupBox { font-weight: bold; font-size: 13px; border: 1px solid #444; border-radius: 6px; margin-top: 6px; padding-top: 10px; background-color: #2b2b2b; color: #34d399; }
             QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; color: #34d399; }
@@ -892,7 +996,8 @@ class QuardBotWidget(QWidget):
 
         ch_scroll = QScrollArea()
         ch_scroll.setWidgetResizable(True)
-        ch_scroll.setStyleSheet("border: none; background: transparent;")
+        ch_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        ch_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         ch_container = QWidget()
         ch_layout = QVBoxLayout(ch_container)
         ch_layout.setContentsMargins(0, 0, 0, 0)
@@ -915,13 +1020,15 @@ class QuardBotWidget(QWidget):
 
         for ch, name, def_val in channels_info:
             row = QWidget()
-            row.setStyleSheet("background-color: #18181b; border: 1px solid #27272a; border-radius: 4px; padding: 2px 4px;")
+            row.setObjectName("quardChannelRow")
+            row.setAttribute(Qt.WA_StyledBackground, True)
+            row.setStyleSheet("QWidget#quardChannelRow { background-color: #18181b; border: 1px solid #27272a; border-radius: 6px; }")
             r_layout = QHBoxLayout(row)
             r_layout.setContentsMargins(6, 3, 6, 3)
 
             lbl_name = QLabel(f"Ch {ch}: {name}")
             lbl_name.setFont(QFont("SansSerif", 9, QFont.Bold))
-            lbl_name.setStyleSheet("color: #e4e4e7; min-width: 175px;")
+            lbl_name.setStyleSheet("color: #e4e4e7; min-width: 150px;")
 
             slider = QSlider(Qt.Horizontal)
             slider.setRange(0, 180)
@@ -955,7 +1062,7 @@ class QuardBotWidget(QWidget):
         right_layout.addWidget(pca_box, 2)
 
         # 6. Console Log Box
-        log_box = QGroupBox("📟 Quard Bot Console & Communication Log")
+        log_box = QGroupBox("📟 Quard Bot Console && Communication Log")
         log_box.setStyleSheet("""
             QGroupBox { font-weight: bold; font-size: 12px; border: 1px solid #333; border-radius: 6px; margin-top: 6px; padding-top: 8px; background-color: #141414; color: #f59e0b; }
             QGroupBox::title { subcontrol-origin: margin; padding: 0 4px; color: #f59e0b; }
@@ -1509,7 +1616,7 @@ class ESP32SensorNodeWidget(QWidget):
         main_layout.addWidget(self.lbl_fire_banner)
 
         # ── 1. Dual Connection Box: Wi-Fi (HTTP /data) & USB Serial ────────
-        conn_box = QGroupBox("🔌 Rover Wi-Fi & Serial Connection")
+        conn_box = QGroupBox("🔌 Rover Wi-Fi && Serial Connection")
         conn_box.setStyleSheet("""
             QGroupBox { font-weight: bold; font-size: 13px; border: 1px solid #444; border-radius: 6px; margin-top: 6px; padding-top: 10px; background-color: #242424; color: #38bdf8; }
             QGroupBox::title { subcontrol-origin: margin; padding: 0 6px; color: #38bdf8; }
@@ -1588,6 +1695,7 @@ class ESP32SensorNodeWidget(QWidget):
         # ── 2. Scrollable Sensor Cards Area ────────────────────────────────
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setStyleSheet("QScrollArea { border: none; background-color: transparent; }")
 
         container = QWidget()
@@ -1596,7 +1704,7 @@ class ESP32SensorNodeWidget(QWidget):
         grid_layout.setSpacing(8)
 
         # ── Card A: Climate (DHT11 & BMP-280) ──────────────────────────────
-        climate_box = QGroupBox("🌡️ Climate & Atmospheric (DHT11 & BMP-280)")
+        climate_box = QGroupBox("🌡️ Climate && Atmospheric (DHT11 && BMP-280)")
         climate_box.setStyleSheet("""
             QGroupBox { font-weight: bold; font-size: 12px; border: 1px solid #3f3f46; border-radius: 6px; margin-top: 6px; padding-top: 10px; background-color: #27272a; color: #38bdf8; }
             QGroupBox::title { subcontrol-origin: margin; padding: 0 4px; color: #38bdf8; }
@@ -1674,7 +1782,7 @@ class ESP32SensorNodeWidget(QWidget):
         grid_layout.addWidget(hazard_box, 0, 1)
 
         # ── Card C: MPU-6050 6-DOF IMU ────────────────────────────────────
-        mpu_box = QGroupBox("🧭 MPU6050 6-DOF IMU (Motion & Tilt)")
+        mpu_box = QGroupBox("🧭 MPU6050 6-DOF IMU (Motion && Tilt)")
         mpu_box.setStyleSheet("""
             QGroupBox { font-weight: bold; font-size: 12px; border: 1px solid #3f3f46; border-radius: 6px; margin-top: 6px; padding-top: 10px; background-color: #27272a; color: #a78bfa; }
             QGroupBox::title { subcontrol-origin: margin; padding: 0 4px; color: #a78bfa; }
@@ -1710,7 +1818,7 @@ class ESP32SensorNodeWidget(QWidget):
         grid_layout.addWidget(mpu_box, 1, 0)
 
         # ── Card D: GPS NEO-6M Navigation & System ────────────────────────
-        gps_box = QGroupBox("🛰️ GPS NEO-6M Navigation & Node Status")
+        gps_box = QGroupBox("🛰️ GPS NEO-6M Navigation && Node Status")
         gps_box.setStyleSheet("""
             QGroupBox { font-weight: bold; font-size: 12px; border: 1px solid #3f3f46; border-radius: 6px; margin-top: 6px; padding-top: 10px; background-color: #27272a; color: #4ade80; }
             QGroupBox::title { subcontrol-origin: margin; padding: 0 4px; color: #4ade80; }
@@ -2274,9 +2382,15 @@ class CalibratedJointPublisherGUI(QMainWindow):
         self.ros_node = ros_node
         self.ros_node.gui_ref = self
 
-        self.setWindowTitle("Robot Arm Dashboard — Integrated Control, 3D Viewport & Connection Monitor")
+        self.setWindowTitle("Robotics Control Center — Arm · Quard Bot · Rover")
         self.resize(1400, 860)
-        self.setStyleSheet("background-color: #1e1e1e; color: #ffffff;")
+        self.setMinimumSize(1000, 640)
+        # Theme lives on the QApplication (a selector-less window stylesheet
+        # painted a dark box behind every label).
+        apply_app_theme(QApplication.instance())
+        self.estop_engaged = False
+        # INI everywhere (~/.config/CodeForIndia/RobotDashboard.conf on Linux)
+        self.settings = QSettings(QSettings.IniFormat, QSettings.UserScope, "CodeForIndia", "RobotDashboard")
 
         self.calib_data = self.load_calibration()
         self.joints_dict = self.parse_urdf_joints(URDF_PATH)
@@ -2290,91 +2404,77 @@ class CalibratedJointPublisherGUI(QMainWindow):
         control_layout = QVBoxLayout()
         control_layout.setContentsMargins(8, 8, 8, 8)
 
-        # ── Top Control Bar 1: Actions & Home Buttons ─────────────────────
-        top_bar1 = QHBoxLayout()
-
+        # ── Toolbar: motion row + calibration row ─────────────────────────
+        # Colour marks what moves the robot or saves; everything else is neutral.
         self.btn_sim = QPushButton("▶️ Start Sim")
         self.btn_sim.setCheckable(True)
-        self.btn_sim.setStyleSheet("""
-            QPushButton { background-color: #d97706; color: white; font-weight: bold; border-radius: 4px; padding: 6px 10px; }
-            QPushButton:hover { background-color: #b45309; }
-            QPushButton:checked { background-color: #dc2626; }
-        """)
+        self.btn_sim.setToolTip("Sweep every joint through its limits (sinusoidal demo motion)")
+        self.btn_sim.setStyleSheet(button_qss('warning', checked='danger'))
         self.btn_sim.clicked.connect(self.toggle_simulation)
 
         btn_home = QPushButton("🏠 Go Home")
         btn_home.setToolTip("Smoothly return all joints to home position over 2 seconds")
-        btn_home.setStyleSheet("""
-            QPushButton { background-color: #0284c7; color: white; font-weight: bold; border-radius: 4px; padding: 6px 10px; }
-            QPushButton:hover { background-color: #0369a1; }
-        """)
+        btn_home.setStyleSheet(button_qss('primary'))
         btn_home.clicked.connect(self.go_to_home_pose_smooth)
+
+        btn_center = QPushButton("⊕ Center All")
+        btn_center.setToolTip("Move every joint to 90°")
+        btn_center.setStyleSheet(button_qss('neutral'))
+        btn_center.clicked.connect(self.center_all)
+
+        self.btn_gesture = QPushButton("✋ Gesture Mode")
+        self.btn_gesture.setCheckable(True)
+        self.btn_gesture.setToolTip("Toggle real-time computer vision body gesture teleoperation (webcam)")
+        self.btn_gesture.setStyleSheet(button_qss('neutral', checked='success'))
+        self.btn_gesture.clicked.connect(self.toggle_gesture_mode)
 
         btn_set_home = QPushButton("📌 Set Home")
         btn_set_home.setToolTip("Save current slider positions as default Homing Pose")
-        btn_set_home.setStyleSheet("""
-            QPushButton { background-color: #7c3aed; color: white; font-weight: bold; border-radius: 4px; padding: 6px 10px; }
-            QPushButton:hover { background-color: #6d28d9; }
-        """)
+        btn_set_home.setStyleSheet(button_qss('neutral'))
         btn_set_home.clicked.connect(self.set_current_as_home_pose)
 
-        btn_center = QPushButton("🎯 Center All")
-        btn_center.setStyleSheet("""
-            QPushButton { background-color: #475569; color: white; font-weight: bold; border-radius: 4px; padding: 6px 10px; }
-            QPushButton:hover { background-color: #334155; }
-        """)
-        btn_center.clicked.connect(self.center_all)
+        btn_sync_phys = QPushButton("🎯 Sync to Physical")
+        btn_sync_phys.setToolTip("Tare/Sync virtual arm to physical position: sets sync offset so 3D model matches physical pose")
+        btn_sync_phys.setStyleSheet(button_qss('neutral'))
+        btn_sync_phys.clicked.connect(self.sync_all_joints_to_physical)
 
         self.btn_comm_mode = QPushButton("📡 Comm: WiFi")
         self.btn_comm_mode.setCheckable(True)
         self.btn_comm_mode.setChecked(False) # False = WiFi, True = Serial
         self.btn_comm_mode.setToolTip("Toggle ESP32 control mode between Wi-Fi UDP and USB Serial")
-        self.btn_comm_mode.setStyleSheet("""
-            QPushButton { background-color: #0284c7; color: white; font-weight: bold; border-radius: 4px; padding: 6px 10px; }
-            QPushButton:hover { background-color: #0369a1; }
-            QPushButton:checked { background-color: #d97706; }
-        """)
+        self.btn_comm_mode.setStyleSheet(button_qss('neutral', checked='neutral'))
         self.btn_comm_mode.clicked.connect(self.toggle_comm_mode)
 
         btn_save = QPushButton("💾 Save Config")
-        btn_save.setStyleSheet("""
-            QPushButton { background-color: #16a34a; color: white; font-weight: bold; border-radius: 4px; padding: 6px 10px; }
-            QPushButton:hover { background-color: #15803d; }
-        """)
+        btn_save.setToolTip("Save limits, home pose and sync offsets (Ctrl+S)")
+        btn_save.setStyleSheet(button_qss('success'))
         btn_save.clicked.connect(self.save_calibration)
 
-        self.btn_gesture = QPushButton("✋ Gesture Mode")
-        self.btn_gesture.setCheckable(True)
-        self.btn_gesture.setToolTip("Toggle real-time computer vision body gesture teleoperation (webcam)")
-        self.btn_gesture.setStyleSheet("""
-            QPushButton { background-color: #8b5cf6; color: white; font-weight: bold; border-radius: 4px; padding: 6px 10px; }
-            QPushButton:hover { background-color: #7c3aed; }
-            QPushButton:checked { background-color: #10b981; }
-        """)
-        self.btn_gesture.clicked.connect(self.toggle_gesture_mode)
+        # Locked while E-STOP is engaged
+        self.motion_buttons = [self.btn_sim, btn_home, btn_center, self.btn_gesture]
 
-        btn_sync_phys = QPushButton("🎯 Sync to Physical")
-        btn_sync_phys.setToolTip("Tare/Sync virtual arm to physical position: sets sync offset so 3D model matches physical pose")
-        btn_sync_phys.setStyleSheet("""
-            QPushButton { background-color: #0284c7; color: white; font-weight: bold; border-radius: 4px; padding: 6px 10px; }
-            QPushButton:hover { background-color: #0369a1; }
-        """)
-        btn_sync_phys.clicked.connect(self.sync_all_joints_to_physical)
+        motion_row = QHBoxLayout()
+        motion_row.setSpacing(6)
+        motion_row.addWidget(section_label("Motion"))
+        for b in (self.btn_sim, btn_home, btn_center, self.btn_gesture):
+            motion_row.addWidget(b)
+        motion_row.addStretch()
+        control_layout.addLayout(motion_row)
 
-        top_bar1.addWidget(self.btn_sim)
-        top_bar1.addWidget(self.btn_gesture)
-        top_bar1.addWidget(btn_home)
-        top_bar1.addWidget(btn_set_home)
-        top_bar1.addWidget(btn_center)
-        top_bar1.addWidget(self.btn_comm_mode)
-        top_bar1.addWidget(btn_sync_phys)
-        top_bar1.addStretch()
-        top_bar1.addWidget(btn_save)
-        control_layout.addLayout(top_bar1)
+        calib_row = QHBoxLayout()
+        calib_row.setSpacing(6)
+        calib_row.addWidget(section_label("Calibration"))
+        for b in (btn_set_home, btn_sync_phys, self.btn_comm_mode):
+            calib_row.addWidget(b)
+        calib_row.addStretch()
+        calib_row.addWidget(btn_save)
+        control_layout.addLayout(calib_row)
 
         # ── Top Control Bar 2: Simulation Speed Slider ────────────────────
         speed_widget = QWidget()
-        speed_widget.setStyleSheet("background-color: #262626; border-radius: 6px;")
+        speed_widget.setObjectName("speedBar")
+        speed_widget.setAttribute(Qt.WA_StyledBackground, True)
+        speed_widget.setStyleSheet(f"QWidget#speedBar {{ background-color: {THEME['surface']}; border: 1px solid {THEME['border']}; border-radius: 6px; }}")
         top_bar2 = QHBoxLayout()
         top_bar2.setContentsMargins(10, 6, 10, 6)
 
@@ -2406,7 +2506,7 @@ class CalibratedJointPublisherGUI(QMainWindow):
         # ── Scroll Area for Joint Rows ───────────────────────────────────
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("border: none; background-color: #1e1e1e;")
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
         scroll_content = QWidget()
         scroll_layout = QVBoxLayout()
@@ -2417,12 +2517,12 @@ class CalibratedJointPublisherGUI(QMainWindow):
             self.joint_widgets[j_name] = w
             scroll_layout.addWidget(w)
 
+        scroll_layout.addStretch(1)
         scroll_content.setLayout(scroll_layout)
         scroll.setWidget(scroll_content)
-        control_layout.addWidget(scroll, 2)
 
         # ── Bottom Section: Integrated Serial & Wi-Fi Monitor Console ────
-        console_group = QGroupBox("📟 Hardware Serial & Wi-Fi Monitor Console")
+        console_group = QGroupBox("📟 Hardware Serial && Wi-Fi Monitor Console")
         console_group.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
@@ -2502,7 +2602,18 @@ class CalibratedJointPublisherGUI(QMainWindow):
         console_layout.addLayout(cmd_row)
 
         console_group.setLayout(console_layout)
-        control_layout.addWidget(console_group, 1)
+        console_group.setMinimumHeight(130)
+
+        # Joints and console share a draggable divider (the console used to
+        # take a third of the height and leave room for only ~3 joints).
+        self.arm_splitter = QSplitter(Qt.Vertical)
+        self.arm_splitter.addWidget(scroll)
+        self.arm_splitter.addWidget(console_group)
+        self.arm_splitter.setChildrenCollapsible(False)
+        self.arm_splitter.setStretchFactor(0, 3)
+        self.arm_splitter.setStretchFactor(1, 1)
+        self.arm_splitter.setSizes([560, 200])
+        control_layout.addWidget(self.arm_splitter, 1)
 
         control_widget.setLayout(control_layout)
 
@@ -2581,10 +2692,56 @@ class CalibratedJointPublisherGUI(QMainWindow):
 
         main_splitter.addWidget(rviz_container)
 
-        # Set Splitter ratios (540px left control tabs, 860px right 3D viewport)
-        main_splitter.setSizes([540, 860])
+        # Set Splitter ratios (left control tabs, right 3D viewport)
+        main_splitter.setSizes([860, 540])
+        main_splitter.setChildrenCollapsible(False)
+        self.main_splitter = main_splitter
 
-        self.setCentralWidget(main_splitter)
+        # ── Header: title, ROS status, E-STOP ─────────────────────────────
+        header = QWidget()
+        header.setObjectName("appHeader")
+        header.setAttribute(Qt.WA_StyledBackground, True)
+        header.setStyleSheet(f"QWidget#appHeader {{ background-color: {THEME['sunken']}; border-bottom: 1px solid {THEME['border']}; }}")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(12, 6, 12, 6)
+        lbl_brand = QLabel("🦾 Robotics Control Center")
+        lbl_brand.setStyleSheet(f"color: {THEME['text']}; font-size: 15px; font-weight: bold;")
+        header_layout.addWidget(lbl_brand)
+        lbl_ros = QLabel("ROS 2 Jazzy · publishing /joint_states" if ROS2_AVAILABLE else "⚠️ ROS 2 not found: UI only, nothing reaches the robots")
+        lbl_ros.setStyleSheet(
+            "background-color: #0c4a6e; color: #7dd3fc; padding: 3px 10px; border-radius: 10px; font-weight: bold; font-size: 11px;"
+            if ROS2_AVAILABLE else
+            "background-color: #78350f; color: #fde68a; padding: 3px 10px; border-radius: 10px; font-weight: bold; font-size: 11px;")
+        header_layout.addWidget(lbl_ros)
+        header_layout.addStretch(1)
+        lbl_keys = QLabel("Esc = E-STOP · Ctrl+S = save")
+        lbl_keys.setStyleSheet(f"color: {THEME['muted']}; font-size: 11px;")
+        header_layout.addWidget(lbl_keys)
+        self.btn_estop = QPushButton("⛔ E-STOP")
+        self.btn_estop.setToolTip("Stop all motion and lock the motion controls (Esc). Software stop only: it does not cut servo power.")
+        self.btn_estop.setCursor(Qt.PointingHandCursor)
+        self.btn_estop.setStyleSheet(button_qss('danger', padding='7px 18px') + " QPushButton { font-size: 13px; }")
+        self.btn_estop.clicked.connect(lambda: self.release_estop() if self.estop_engaged else self.engage_estop())
+        header_layout.addWidget(self.btn_estop)
+
+        self.lbl_estop_banner = QLabel("⛔  E-STOP ENGAGED — sim, homing and gesture control stopped, Quard Bot told to stand, controls locked. Press Release to continue.")
+        self.lbl_estop_banner.setAlignment(Qt.AlignCenter)
+        self.lbl_estop_banner.setStyleSheet("background-color: #b91c1c; color: #ffffff; font-weight: bold; padding: 6px;")
+        self.lbl_estop_banner.hide()
+
+        central = QWidget()
+        central_layout = QVBoxLayout(central)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.setSpacing(0)
+        central_layout.addWidget(header)
+        central_layout.addWidget(self.lbl_estop_banner)
+        central_layout.addWidget(main_splitter, 1)
+        self.setCentralWidget(central)
+
+        self.statusBar().showMessage("Ready", 3000)
+        QShortcut(QKeySequence("Ctrl+S"), self, activated=self.save_calibration)
+        esc = QShortcut(QKeySequence(Qt.Key_Escape), self, activated=self.engage_estop)
+        esc.setContext(Qt.ApplicationShortcut)
 
         target_robot = os.environ.get("ROBOT_TARGET", "arm").lower()
         if target_robot == "quard":
@@ -2629,6 +2786,7 @@ class CalibratedJointPublisherGUI(QMainWindow):
             ('wrist_twist_joint',          0.20, math.pi / 2),
         ]
 
+        self.restore_ui_state()
         self.log_to_console("🚀 Dashboard Hardware & Wi-Fi Monitor Initialized.")
 
     def update_connection_status(self, status_str):
@@ -2936,6 +3094,9 @@ class CalibratedJointPublisherGUI(QMainWindow):
 
     def keyPressEvent(self, event):
         """Capture keyboard events for Quard Bot locomotion when Quard Bot tab is active."""
+        if getattr(self, 'estop_engaged', False):
+            super().keyPressEvent(event)
+            return
         if hasattr(self, 'tabs') and self.tabs.currentIndex() == 1 and hasattr(self, 'quard_bot_widget'):
             key = event.key()
             if key in (Qt.Key_W, Qt.Key_Up):
@@ -3047,7 +3208,7 @@ class CalibratedJointPublisherGUI(QMainWindow):
             with open(CALIB_FILE_PATH, 'w') as f:
                 json.dump(calib_out, f, indent=2)
             self.log_to_console(f"💾 Calibration Config saved to {CALIB_FILE_PATH}")
-            QMessageBox.information(self, "Success", f"Homing, Safety & Sync Calibration saved to:\n{CALIB_FILE_PATH}")
+            self.statusBar().showMessage(f"💾 Saved limits, home pose and sync offsets to {CALIB_FILE_PATH}", 6000)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save calibration:\n{e}")
 
@@ -3111,8 +3272,92 @@ class CalibratedJointPublisherGUI(QMainWindow):
                 self.gesture_process.kill()
                 self.gesture_process.waitForFinished(1000)
 
+    def engage_estop(self):
+        """Software E-STOP: stop every motion source and lock the motion controls.
+
+        Joint states keep publishing, so the arm holds its current pose. This
+        does not cut servo power; that needs a hardware switch.
+        """
+        if self.estop_engaged:
+            return
+        self.estop_engaged = True
+
+        if self.is_simulating:
+            self.btn_sim.setChecked(False)
+            self.toggle_simulation(False)
+        if self.is_homing:
+            self.is_homing = False
+        if self.is_gesture_mode:
+            self.btn_gesture.setChecked(False)
+            self.toggle_gesture_mode(False)
+
+        q = getattr(self, 'quard_bot_widget', None)
+        if q:
+            for t in ('gait_timer', 'wave_timer', 'smooth_timer'):
+                timer = getattr(q, t, None)
+                if timer is not None and timer.isActive():
+                    timer.stop()
+            q.active_gait = None
+            q.send_command({'mode': 'stand'})  # now, not after the stand animation
+            q.stand_pose()
+            q.setEnabled(False)
+
+        for w in self.joint_widgets.values():
+            w.setEnabled(False)
+        for b in self.motion_buttons:
+            b.setEnabled(False)
+
+        self.lbl_estop_banner.show()
+        self.btn_estop.setText("✅ Release E-STOP")
+        self.btn_estop.setStyleSheet(button_qss('neutral', padding='7px 18px') + " QPushButton { font-size: 13px; color: #fca5a5; border-color: #dc2626; }")
+        self.log_to_console("⛔ E-STOP engaged: all motion stopped, controls locked.")
+        self.statusBar().showMessage("⛔ E-STOP engaged", 0)
+
+    def release_estop(self):
+        if not self.estop_engaged:
+            return
+        self.estop_engaged = False
+        for w in self.joint_widgets.values():
+            w.setEnabled(True)
+        for b in self.motion_buttons:
+            b.setEnabled(True)
+        if getattr(self, 'quard_bot_widget', None):
+            self.quard_bot_widget.setEnabled(True)
+        self.lbl_estop_banner.hide()
+        self.btn_estop.setText("⛔ E-STOP")
+        self.btn_estop.setStyleSheet(button_qss('danger', padding='7px 18px') + " QPushButton { font-size: 13px; }")
+        self.log_to_console("✅ E-STOP released: controls unlocked.")
+        self.statusBar().showMessage("E-STOP released", 4000)
+
+    def restore_ui_state(self):
+        """Window size, splitter positions and (unless ROBOT_TARGET picks one) the last tab."""
+        geom = self.settings.value("geometry")
+        if geom is not None:
+            self.restoreGeometry(geom)
+        for key, splitter in (("main_splitter", self.main_splitter), ("arm_splitter", self.arm_splitter)):
+            state = self.settings.value(key)
+            if state is not None:
+                splitter.restoreState(state)
+        if "ROBOT_TARGET" not in os.environ:
+            try:
+                idx = int(self.settings.value("tab", 0))
+            except (TypeError, ValueError):
+                idx = 0
+            if 0 <= idx < self.tabs.count():
+                self.tabs.setCurrentIndex(idx)
+
+    def save_ui_state(self):
+        self.settings.setValue("geometry", self.saveGeometry())
+        self.settings.setValue("main_splitter", self.main_splitter.saveState())
+        self.settings.setValue("arm_splitter", self.arm_splitter.saveState())
+        self.settings.setValue("tab", self.tabs.currentIndex())
+
     def closeEvent(self, event):
         """Clean up gesture teleop and child processes on dashboard window exit."""
+        try:
+            self.save_ui_state()
+        except Exception:
+            pass
         if hasattr(self, 'rviz_process') and self.rviz_process and self.rviz_process.state() != QProcess.NotRunning:
             try:
                 self.rviz_process.terminate()
@@ -3370,6 +3615,7 @@ def main(args=None):
     ros_node = CalibratedGUINode()
 
     app = QApplication(sys.argv)
+    apply_app_theme(app)
     gui = CalibratedJointPublisherGUI(ros_node)
 
     if '--sim' in sys.argv or '-s' in sys.argv:
