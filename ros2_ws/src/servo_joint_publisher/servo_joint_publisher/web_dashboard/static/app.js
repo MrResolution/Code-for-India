@@ -42,16 +42,8 @@ let quardState = {
   waveTimer: null
 };
 
-let sensorState = {
-  temperature: 24.5,
-  humidity: 48.0,
-  pitch: 0,
-  roll: 0,
-  gas: 415,
-  simulating: true,
-  connected: false,
-  raw_log: []
-};
+// Latest rover readings from /api/sensors/data (null = not received yet)
+let sensorState = {};
 
 // ── Model Load & Dual View Management System ──────────────────────────────
 const modelLoadSystem = {
@@ -994,10 +986,10 @@ function animate() {
     if (robotMeshes.sensorGroup) {
       robotMeshes.sensorGroup.visible = true;
       const imuOff = getImuOffsets();
-      const rawPitch = sensorState.raw_pitch !== undefined ? sensorState.raw_pitch : (sensorState.pitch || 0);
-      const rawRoll = sensorState.raw_roll !== undefined ? sensorState.raw_roll : (sensorState.roll || 0);
-      const pRad = (rawPitch - (imuOff.pitch || 0)) * (Math.PI / 180.0);
-      const rRad = (rawRoll - (imuOff.roll || 0)) * (Math.PI / 180.0);
+      // No reading yet: draw it level, rather than the tare offset applied to nothing
+      const hasImu = Number.isFinite(sensorState.raw_pitch) && Number.isFinite(sensorState.raw_roll);
+      const pRad = hasImu ? (sensorState.raw_pitch - (imuOff.pitch || 0)) * (Math.PI / 180.0) : 0;
+      const rRad = hasImu ? (sensorState.raw_roll - (imuOff.roll || 0)) * (Math.PI / 180.0) : 0;
       robotMeshes.sensorGroup.rotation.x = pRad;
       robotMeshes.sensorGroup.rotation.z = -rRad;
     }
@@ -1903,9 +1895,7 @@ function renderSensorLink(sl) {
   const src = sl.source;
   const target = sl.target || '';
   if (src === 'off') {
-    kind = null; label = 'Off'; detail = 'No data source. Connect Wi-Fi or Serial, or simulate.';
-  } else if (src === 'sim') {
-    kind = 'info'; label = 'Simulated'; detail = 'Demo values, not from the rover';
+    kind = null; label = 'Not connected'; detail = 'No data source. Connect the rover over Wi-Fi or Serial.';
   } else if (sl.phase === 'live' && sl.last_rx_age !== null && sl.last_rx_age < 5) {
     kind = 'online'; label = 'Live';
     detail = `${target} · ${sl.rate} ${src === 'wifi' ? 'updates' : 'lines'}/s · last ${ageText(sl.last_rx_age)}`;
@@ -1921,7 +1911,7 @@ function renderSensorLink(sl) {
   }
   setPill(document.getElementById('pill-sensor-wifi-status'), kind, label);
   setText('sensor-link-detail', detail);
-  const badge = { online: ['online', src === 'wifi' ? 'Wi-Fi' : 'Serial'], info: ['warn', src === 'sim' ? 'Simulated' : label],
+  const badge = { online: ['online', src === 'wifi' ? 'Wi-Fi' : 'Serial'], info: ['warn', label],
                   warn: ['warn', label], offline: ['offline', label] }[kind] || ['offline', 'Off'];
   setNodeBadge('badge-sensornode', badge[0], badge[1]);
 
@@ -1930,16 +1920,11 @@ function renderSensorLink(sl) {
     const wifiBtn = document.getElementById('btn-sensor-wifi-connect');
     const wifiOff = document.getElementById('btn-sensor-wifi-disconnect');
     const serBtn = document.getElementById('btn-sensor-connect');
-    const simBtn = document.getElementById('btn-sensors-sim');
     if (wifiBtn) wifiBtn.hidden = src === 'wifi';
     if (wifiOff) { wifiOff.hidden = src !== 'wifi'; wifiOff.style.display = ''; }
     if (serBtn) {
       serBtn.textContent = src === 'serial' ? '⏹ Disconnect Serial' : 'Connect Serial';
       serBtn.className = src === 'serial' ? 'btn btn-danger btn-sm' : 'btn btn-outline btn-sm';
-    }
-    if (simBtn) {
-      simBtn.textContent = src === 'sim' ? '⏸️ Stop Simulation' : '▶️ Simulate Data';
-      simBtn.className = src === 'sim' ? 'btn btn-warning btn-sm' : 'btn btn-outline btn-sm';
     }
   }
 }
@@ -2720,7 +2705,6 @@ function quardConsoleSubmit(text) {
 // ── ESP32 Sensor Node Telemetry & Controls ────────────────────────────────
 function initSensorControls() {
   const btnConnect = document.getElementById('btn-sensor-connect');
-  const btnSim = document.getElementById('btn-sensors-sim');
   const btnWifiConnect = document.getElementById('btn-sensor-wifi-connect');
   const btnWifiDisconnect = document.getElementById('btn-sensor-wifi-disconnect');
   const inputWifiIp = document.getElementById('sensor-wifi-ip');
@@ -2770,15 +2754,19 @@ function initSensorControls() {
     });
   }
 
-  if (btnSim) {
-    btnSim.addEventListener('click', () => {
-      const simulating = !(lastLinks && lastLinks.sensors && lastLinks.sensors.source === 'sim');
-      postJSON('/api/sensors/sim', { simulating }).catch(() => toast('Could not reach the server.', 'error'));
-    });
-  }
 }
 
 function startSensorPolling() {
+  // Readings the rover hasn't sent are null on the server and shown as "--":
+  // nothing on this panel is made up.
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const show = (id, text) => { const el = document.getElementById(id); if (el) el.innerText = text; };
+  const meter = (id, pct) => {
+    const el = document.getElementById(id);
+    if (el) el.style.width = pct === null ? '0%' : `${Math.min(100, Math.max(0, pct)).toFixed(1)}%`;
+  };
+  const noData = (el) => setPill(el, null, 'No data');
+
   setInterval(() => {
     fetch('/api/sensors/data')
       .then(res => res.json())
@@ -2786,156 +2774,123 @@ function startSensorPolling() {
         if (!data) return;
         sensorState = data;
 
-        // 1. Emergency Fire Alert Banner
-        const flameVal = data.flame !== undefined ? data.flame : 1;
-        const alertStr = String(data.alert || 'OK').toUpperCase();
-        const isFire = (flameVal === 0 || alertStr === 'FIRE');
+        // 1. Emergency fire alert: only on a real LOW flame pin or FIRE alert
+        const flame = num(data.flame);
+        const alertStr = data.alert === null || data.alert === undefined ? null : String(data.alert).toUpperCase();
+        const isFire = flame === 0 || alertStr === 'FIRE';
         const fireBanner = document.getElementById('banner-sensor-fire');
         if (fireBanner) fireBanner.classList.toggle('visible', isFire);
 
-        // 2. DHT11 Climate & BMP280
-        const tempC = data.temp_dht !== undefined ? data.temp_dht : (data.temperature || 24.5);
-        const tempF = (tempC * 9/5) + 32;
-        const hum = data.humidity !== undefined ? data.humidity : 48.0;
-        const tempBMP = data.temp_bmp !== undefined ? data.temp_bmp : 24.8;
-        const pressure = data.pressure !== undefined ? data.pressure : 1013.25;
-
-        const elTemp = document.getElementById('val-temp');
-        const elTempF = document.getElementById('val-temp-f');
-        const elHum = document.getElementById('val-humidity');
-        const elBmpTemp = document.getElementById('val-bmp-temp');
-        const elPressure = document.getElementById('val-pressure');
-        const meterTemp = document.getElementById('meter-temp');
-        const meterHum = document.getElementById('meter-humidity');
-        const meterBmpTemp = document.getElementById('meter-bmp-temp');
-        const meterPressure = document.getElementById('meter-pressure');
+        // 2. Climate (DHT11 & BMP280)
+        const tempC = num(data.temp_dht) !== null ? num(data.temp_dht) : num(data.temperature);
+        const hum = num(data.humidity);
+        const tempBMP = num(data.temp_bmp);
+        const pressure = num(data.pressure);
+        show('val-temp', tempC === null ? '-- °C' : `${tempC.toFixed(1)} °C`);
+        show('val-temp-f', tempC === null ? ' ' : `(${(tempC * 9 / 5 + 32).toFixed(1)} °F)`);
+        show('val-humidity', hum === null ? '-- %' : `${hum.toFixed(1)} %`);
+        show('val-bmp-temp', tempBMP === null ? '-- °C' : `${tempBMP.toFixed(1)} °C`);
+        show('val-pressure', pressure === null ? '-- hPa' : `${pressure.toFixed(1)} hPa`);
+        meter('meter-temp', tempC === null ? null : (tempC / 50) * 100);
+        meter('meter-humidity', hum);
+        meter('meter-bmp-temp', tempBMP === null ? null : (tempBMP / 50) * 100);
+        meter('meter-pressure', pressure === null ? null : pressure - 950);   // 950–1050 hPa scale
         const badgeDht = document.getElementById('badge-dht-status');
+        if (data.dht_error) setPill(badgeDht, 'offline', 'DHT ERROR');
+        else if (tempC === null && tempBMP === null) noData(badgeDht);
+        else setPill(badgeDht, 'online', 'OK');
 
-        if (elTemp) elTemp.innerText = `${tempC.toFixed(1)} °C`;
-        if (elTempF) elTempF.innerText = `(${tempF.toFixed(1)} °F)`;
-        if (elHum) elHum.innerText = `${hum.toFixed(1)} %`;
-        if (elBmpTemp) elBmpTemp.innerText = `${tempBMP.toFixed(1)} °C`;
-        if (elPressure) elPressure.innerText = `${pressure.toFixed(1)} hPa`;
-
-        if (meterTemp) meterTemp.style.width = `${Math.min(100, Math.max(0, (tempC / 50) * 100))}%`;
-        if (meterHum) meterHum.style.width = `${Math.min(100, Math.max(0, hum))}%`;
-        if (meterBmpTemp) meterBmpTemp.style.width = `${Math.min(100, Math.max(0, (tempBMP / 50) * 100))}%`;
-        if (meterPressure) {
-          // Normalize pressure range roughly 950 - 1050 hPa
-          const pPct = Math.min(100, Math.max(0, ((pressure - 950) / 100) * 100));
-          meterPressure.style.width = `${pPct}%`;
-        }
-
-        setPill(badgeDht, data.dht_error ? 'offline' : 'online', data.dht_error ? 'DHT ERROR' : 'OK');
-
-        // 3. Hazards: Gas, Water, Flame
-        const gasVal = data.gas !== undefined ? data.gas : 415;
-        const waterVal = data.water !== undefined ? data.water : 120;
-
-        const elGas = document.getElementById('val-gas');
-        const meterGas = document.getElementById('meter-gas');
+        // 3. Hazards: gas, water, flame
+        const gas = num(data.gas);
+        const water = num(data.water);
         const badgeGas = document.getElementById('badge-gas-status');
-        const elWater = document.getElementById('val-water');
-        const meterWater = document.getElementById('meter-water');
         const badgeWater = document.getElementById('badge-water-status');
-        const elFlame = document.getElementById('val-flame');
-        const badgeFlame = document.getElementById('badge-flame-status');
-        const valAlert = document.getElementById('val-alert-state');
-
-        if (elGas) elGas.innerText = `${gasVal} / 4095`;
+        show('val-gas', gas === null ? '-- / 4095' : `${gas} / 4095`);
+        meter('meter-gas', gas === null ? null : (gas / 4095) * 100);
+        const meterGas = document.getElementById('meter-gas');
         if (meterGas) {
-          const pct = Math.min(100, Math.max(0, (gasVal / 4095) * 100));
-          meterGas.style.width = `${pct.toFixed(1)}%`;
-          if (gasVal > 2500) {
-            meterGas.className = 'meter-fill meter-gas-danger';
-          } else if (gasVal > 1500) {
-            meterGas.className = 'meter-fill meter-gas-warning';
-          } else {
-            meterGas.className = 'meter-fill meter-gas-fill';
-          }
+          meterGas.className = 'meter-fill ' + (gas === null ? 'meter-gas-fill'
+            : gas > 2500 ? 'meter-gas-danger' : gas > 1500 ? 'meter-gas-warning' : 'meter-gas-fill');
         }
-        if (gasVal > 2500) setPill(badgeGas, 'offline', 'Hazard');
-        else if (gasVal > 1500) setPill(badgeGas, 'warn', 'Moderate');
+        if (gas === null) noData(badgeGas);
+        else if (gas > 2500) setPill(badgeGas, 'offline', 'Hazard');
+        else if (gas > 1500) setPill(badgeGas, 'warn', 'Moderate');
         else setPill(badgeGas, 'online', 'Clean Air');
 
-        if (elWater) elWater.innerText = `${waterVal} / 4095`;
-        if (meterWater) {
-          const wPct = Math.min(100, Math.max(0, (waterVal / 4095) * 100));
-          meterWater.style.width = `${wPct.toFixed(1)}%`;
-        }
-        if (waterVal > 2000) setPill(badgeWater, 'warn', 'Submerged');
-        else if (waterVal > 600) setPill(badgeWater, 'info', 'Moisture');
+        show('val-water', water === null ? '-- / 4095' : `${water} / 4095`);
+        meter('meter-water', water === null ? null : (water / 4095) * 100);
+        if (water === null) noData(badgeWater);
+        else if (water > 2000) setPill(badgeWater, 'warn', 'Submerged');
+        else if (water > 600) setPill(badgeWater, 'info', 'Moisture');
         else setPill(badgeWater, 'online', 'Dry');
 
+        const elFlame = document.getElementById('val-flame');
+        const badgeFlame = document.getElementById('badge-flame-status');
         if (elFlame) {
-          elFlame.innerText = (flameVal === 0) ? 'Pin DO: LOW (🔥 Fire detected)' : 'Pin DO: HIGH (Clear)';
-          elFlame.className = 'readout-pill ' + (flameVal === 0 ? 'bad' : 'ok');
+          elFlame.innerText = flame === null ? 'Pin DO: --' : flame === 0 ? 'Pin DO: LOW (🔥 Fire detected)' : 'Pin DO: HIGH (Clear)';
+          elFlame.className = 'readout-pill ' + (flame === null ? '' : flame === 0 ? 'bad' : 'ok');
         }
-        setPill(badgeFlame, flameVal === 0 ? 'offline' : 'online', flameVal === 0 ? '🚨 FIRE' : '✅ Clear');
-        setPill(valAlert, alertStr === 'OK' ? 'online' : 'offline', `Alert: ${alertStr}`);
+        if (flame === null) noData(badgeFlame);
+        else setPill(badgeFlame, flame === 0 ? 'offline' : 'online', flame === 0 ? '🚨 FIRE' : '✅ Clear');
+        const valAlert = document.getElementById('val-alert-state');
+        if (alertStr === null) setPill(valAlert, null, 'Alert: --');
+        else setPill(valAlert, alertStr === 'OK' ? 'online' : 'offline', `Alert: ${alertStr}`);
 
-        // Card-level summary of all three hazard sensors
+        // Card-level summary of the hazard sensors
         const badgeHazard = document.getElementById('badge-hazard-status');
-        if (isFire || gasVal > 2500) setPill(badgeHazard, 'offline', 'Danger');
-        else if (gasVal > 1500 || waterVal > 2000) setPill(badgeHazard, 'warn', 'Caution');
+        if (isFire || (gas !== null && gas > 2500)) setPill(badgeHazard, 'offline', 'Danger');
+        else if ((gas !== null && gas > 1500) || (water !== null && water > 2000)) setPill(badgeHazard, 'warn', 'Caution');
+        else if (gas === null && water === null && flame === null) noData(badgeHazard);
         else setPill(badgeHazard, 'online', 'Safe');
 
         // 4. MPU6050 IMU
-        const accel = data.accel || { x: 0.12, y: -0.05, z: 9.81 };
-        const gyro = data.gyro || { x: 0.01, y: 0.00, z: -0.02 };
-        const pitch = data.pitch !== undefined ? data.pitch : 0.0;
-        const roll = data.roll !== undefined ? data.roll : 0.0;
+        const accel = data.accel && typeof data.accel === 'object' ? data.accel : null;
+        const gyro = data.gyro && typeof data.gyro === 'object' ? data.gyro : null;
+        const pitch = num(data.pitch);
+        const roll = num(data.roll);
+        const fx = (o, k, d) => (o && num(o[k]) !== null ? o[k].toFixed(d) : '--');
+        show('val-accel-x', fx(accel, 'x', 2));
+        show('val-accel-y', fx(accel, 'y', 2));
+        show('val-accel-z', fx(accel, 'z', 2));
+        show('val-gyro-x', fx(gyro, 'x', 3));
+        show('val-gyro-y', fx(gyro, 'y', 3));
+        show('val-gyro-z', fx(gyro, 'z', 3));
+        show('val-pitch', pitch === null ? '--' : `${pitch.toFixed(1)}°`);
+        show('val-roll', roll === null ? '--' : `${roll.toFixed(1)}°`);
+        const badgeImu = document.getElementById('badge-imu-status');
+        if (accel || gyro) setPill(badgeImu, 'online', 'Live'); else noData(badgeImu);
 
-        const elAx = document.getElementById('val-accel-x');
-        const elAy = document.getElementById('val-accel-y');
-        const elAz = document.getElementById('val-accel-z');
-        const elGx = document.getElementById('val-gyro-x');
-        const elGy = document.getElementById('val-gyro-y');
-        const elGz = document.getElementById('val-gyro-z');
-        const elPitch = document.getElementById('val-pitch');
-        const elRoll = document.getElementById('val-roll');
-
-        if (elAx) elAx.innerText = accel.x.toFixed(2);
-        if (elAy) elAy.innerText = accel.y.toFixed(2);
-        if (elAz) elAz.innerText = accel.z.toFixed(2);
-        if (elGx) elGx.innerText = gyro.x.toFixed(3);
-        if (elGy) elGy.innerText = gyro.y.toFixed(3);
-        if (elGz) elGz.innerText = gyro.z.toFixed(3);
-        if (elPitch) elPitch.innerText = `${pitch.toFixed(1)}°`;
-        if (elRoll) elRoll.innerText = `${roll.toFixed(1)}°`;
-
-        // 5. GPS & SD Status
-        const gpsValid = Boolean(data.gps_valid);
-        const sats = data.gps_sats !== undefined ? data.gps_sats : 0;
-        const lat = data.lat !== undefined ? data.lat : 0.0;
-        const lng = data.lng !== undefined ? data.lng : 0.0;
-
-        const elGpsCoords = document.getElementById('val-gps-coords');
-        const elGpsSats = document.getElementById('val-gps-sats');
+        // 5. GPS & SD status
+        const gpsValid = data.gps_valid;
+        const sats = num(data.gps_sats);
+        const lat = num(data.lat);
+        const lng = num(data.lng);
         const badgeGps = document.getElementById('badge-gps-status');
+        if (gpsValid === true && lat !== null && lng !== null) {
+          show('val-gps-coords', `${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+          setPill(badgeGps, 'online', '3D Fix');
+        } else if (gpsValid === false) {
+          show('val-gps-coords', 'No fix / searching…');
+          setPill(badgeGps, 'offline', 'No Fix');
+        } else {
+          show('val-gps-coords', '--');
+          noData(badgeGps);
+        }
+        show('val-gps-sats', sats === null ? '🛰️ -- satellites' : `🛰️ ${sats} satellite${sats === 1 ? '' : 's'}`);
+
         const elSdStatus = document.getElementById('val-sd-status');
-        const elUptime = document.getElementById('val-uptime');
-
-        if (elGpsCoords) {
-          elGpsCoords.innerText = gpsValid ? `${lat.toFixed(6)}, ${lng.toFixed(6)}` : 'No Fix / Searching...';
-        }
-        if (elGpsSats) {
-          elGpsSats.innerText = `🛰️ ${sats} satellite${sats === 1 ? '' : 's'}`;
-        }
-        setPill(badgeGps, gpsValid ? 'online' : 'offline', gpsValid ? '3D Fix' : 'No Fix');
-
-        const sdOk = data.sd_ok !== undefined ? data.sd_ok : true;
         if (elSdStatus) {
-          elSdStatus.innerText = sdOk ? '💾 Ready (/log.csv)' : '❌ No SD card';
-          elSdStatus.className = 'metric-val sm ' + (sdOk ? 'ok' : 'bad');
+          if (data.sd_ok === true) { elSdStatus.innerText = '💾 Ready (/log.csv)'; elSdStatus.className = 'metric-val sm ok'; }
+          else if (data.sd_ok === false) { elSdStatus.innerText = '❌ No SD card'; elSdStatus.className = 'metric-val sm bad'; }
+          else { elSdStatus.innerText = '--'; elSdStatus.className = 'metric-val sm'; }
         }
-        if (elUptime) {
-          const uptimeSec = Math.floor((data.uptime_ms || 0) / 1000);
-          const mins = Math.floor(uptimeSec / 60);
-          const secs = uptimeSec % 60;
-          elUptime.innerText = `Uptime: ${mins}m ${secs}s`;
+        const uptimeMs = num(data.uptime_ms);
+        if (uptimeMs === null) {
+          show('val-uptime', 'Uptime: --');
+        } else {
+          const uptimeSec = Math.floor(uptimeMs / 1000);
+          show('val-uptime', `Uptime: ${Math.floor(uptimeSec / 60)}m ${uptimeSec % 60}s`);
         }
-
       })
       .catch(err => {});
   }, 200); // 5 Hz telemetry sync

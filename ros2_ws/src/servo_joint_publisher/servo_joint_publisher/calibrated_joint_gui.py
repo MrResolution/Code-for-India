@@ -30,7 +30,6 @@ import urllib.request
 import urllib.parse
 import threading
 import re
-import random
 import html
 import glob
 import socket
@@ -2221,6 +2220,43 @@ class QuardBotWidget(QWidget):
                 print(f"Error saving quard_offsets: {e}")
 
 
+# Rover readings before (or between) real data: None means "no reading", shown
+# as "--" instead of a made-up value.
+EMPTY_SENSOR_READINGS = {
+    "temperature": None, "temp_dht": None, "humidity": None, "temp_bmp": None, "pressure": None,
+    "dht_error": None, "accel": None, "gyro": None, "pitch": None, "roll": None,
+    "raw_pitch": None, "raw_roll": None, "gas": None, "water": None, "flame": None,
+    "air_quality": None, "lat": None, "lng": None, "gps_valid": None, "gps_sats": None,
+    "alert": None, "sd_ok": None, "uptime_ms": None,
+}
+
+
+def _reading(d, keys, cast=float):
+    """First present, finite value among keys in a rover JSON reply, else None."""
+    for k in keys:
+        if d.get(k) is None:
+            continue
+        try:
+            v = float(d[k])
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(v):
+            return None
+        return int(v) if cast is int else v
+    return None
+
+
+# Badge styles for the rover read-outs
+_BADGE_QSS = {
+    'none': "background-color: #2c3039; color: #9aa1ad; font-weight: bold; padding: 3px 6px; border-radius: 4px;",
+    'ok':   "background-color: #064e3b; color: #34d399; font-weight: bold; padding: 3px 6px; border-radius: 4px;",
+    'warn': "background-color: #78350f; color: #fde047; font-weight: bold; padding: 3px 6px; border-radius: 4px;",
+    'bad':  "background-color: #991b1b; color: #ffffff; font-weight: bold; padding: 3px 6px; border-radius: 4px;",
+    'info': "background-color: #0c4a6e; color: #38bdf8; font-weight: bold; padding: 3px 6px; border-radius: 4px;",
+}
+_VALUE_QSS = "background-color: #18181b; padding: 4px 8px; border-radius: 4px;"
+
+
 class ESP32SensorNodeWidget(QWidget):
     update_data_signal = pyqtSignal(dict)
     link_signal = pyqtSignal(int, str, str)   # generation, state, detail (from worker threads)
@@ -2229,41 +2265,14 @@ class ESP32SensorNodeWidget(QWidget):
         super().__init__(parent)
         self.main_gui = parent
 
-        self.sensor_state = {
-            "temp_dht": 24.5,
-            "humidity": 48.0,
-            "temp_bmp": 24.8,
-            "pressure": 1013.25,
-            "temperature": 24.5,
-            "dht_error": False,
-            "bmp_error": False,
-            "gas": 415,
-            "water": 120,
-            "flame": 1,
-            "ax": 120, "ay": -50, "az": 16384,
-            "gx": 10, "gy": 0, "gz": -20,
-            "accel": {"x": 0.12, "y": -0.05, "z": 9.81},
-            "gyro": {"x": 0.01, "y": 0.00, "z": -0.02},
-            "pitch": -0.3,
-            "roll": 0.7,
-            "raw_pitch": -0.3,
-            "raw_roll": 0.7,
-            "lat": 17.385044,
-            "lng": 78.486671,
-            "gps_valid": False,
-            "gps_sats": 0,
-            "alert": "OK",
-            "sd_ok": True,
-            "uptime_ms": 0,
-            "air_quality": "Clean",
+        self.sensor_state = dict(EMPTY_SENSOR_READINGS, **{
             "connected": False,
             "wifi_connected": False,
             "wifi_ip": "192.168.1.100",
-            "simulating": True,
             "port": "/dev/ttyUSB0",
             "baudrate": 115200,
             "raw_log": []
-        }
+        })
 
         self.serial_thread = None
         self.wifi_thread = None
@@ -2272,14 +2281,14 @@ class ESP32SensorNodeWidget(QWidget):
         self.update_data_signal.connect(self.on_data_updated)
         self.link_signal.connect(self._on_link_signal)
 
-        # Data source: 'sim', 'wifi', 'serial' or 'off'. Bumping _gen tells the
+        # Data source: 'wifi', 'serial' or 'off'. Bumping _gen tells the
         # previous source's worker thread to stop.
-        self.source = 'sim'
+        self.source = 'off'
         self._gen = 0
         self.active_url = None
         self.active_port = None
         self.active_baud = None
-        self.link_phase = 'sim'
+        self.link_phase = 'off'
         self.link_error = ''
         self.last_rx = 0.0
         self.phase_since = time.time()
@@ -2290,14 +2299,12 @@ class ESP32SensorNodeWidget(QWidget):
         self.init_ui()
         self.refresh_port_list()
 
-        # Timer to drive simulation when hardware is not connected
-        self.sim_timer = QTimer(self)
-        self.sim_timer.timeout.connect(self.sim_tick)
-        self.sim_timer.start(1000)
         self.link_timer = QTimer(self)
         self.link_timer.timeout.connect(self._refresh_link)
         self.link_timer.start(1000)
-        self.set_source('sim')
+        self.on_data_updated(self.sensor_state)
+        self._refresh_link()
+        self.console.log("No rover data yet: connect it over Wi-Fi or Serial", 'info')
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -2318,7 +2325,7 @@ class ESP32SensorNodeWidget(QWidget):
         self.lbl_fire_banner.setVisible(False)
         main_layout.addWidget(self.lbl_fire_banner)
 
-        # ── 1. Connection card: simulated, Wi-Fi (HTTP /data) or USB serial ─
+        # ── 1. Connection card: Wi-Fi (HTTP /data) or USB serial ───────────
         conn_box = QGroupBox("🔌 Rover Connection")
         conn_box.setStyleSheet("""
             QGroupBox { font-weight: bold; font-size: 13px; border: 1px solid #444; border-radius: 6px; margin-top: 6px; padding-top: 10px; background-color: #242424; color: #38bdf8; }
@@ -2360,19 +2367,15 @@ class ESP32SensorNodeWidget(QWidget):
         self.combo_baud.addItems(["115200", "9600", "57600", "230400"])
         self.btn_connect = QPushButton("🔌 Connect Serial")
         self.btn_connect.clicked.connect(self.toggle_serial_connection)
-        self.btn_sim = QPushButton("▶ Simulate")
-        self.btn_sim.setToolTip("Show demo values instead of rover data")
-        self.btn_sim.clicked.connect(self.toggle_sim)
         serial_row.addWidget(lbl_port)
         serial_row.addWidget(self.combo_port, 1)
         serial_row.addWidget(btn_rescan)
         serial_row.addWidget(self.combo_baud)
         serial_row.addWidget(self.btn_connect)
-        serial_row.addWidget(self.btn_sim)
         conn_layout.addLayout(serial_row)
 
         status_row = QHBoxLayout()
-        self.lbl_status = StatusPill("Simulated", 'busy')
+        self.lbl_status = StatusPill("Not connected", 'idle')
         self.lbl_link_detail = muted_label()
         status_row.addWidget(self.lbl_status)
         status_row.addWidget(self.lbl_link_detail, 1)
@@ -2400,30 +2403,30 @@ class ESP32SensorNodeWidget(QWidget):
         c_layout = QGridLayout(climate_box)
 
         c_layout.addWidget(QLabel("DHT11 Temp:"), 0, 0)
-        self.lbl_temp_val = QLabel("24.50 °C (76.10 °F)")
+        self.lbl_temp_val = QLabel("--")
         self.lbl_temp_val.setFont(QFont("Monospace", 12, QFont.Bold))
         self.lbl_temp_val.setStyleSheet("color: #38bdf8; background-color: #18181b; padding: 4px 8px; border-radius: 4px;")
         c_layout.addWidget(self.lbl_temp_val, 0, 1)
 
         c_layout.addWidget(QLabel("DHT11 Humidity:"), 1, 0)
-        self.lbl_hum_val = QLabel("48.00 %")
+        self.lbl_hum_val = QLabel("--")
         self.lbl_hum_val.setFont(QFont("Monospace", 12, QFont.Bold))
         self.lbl_hum_val.setStyleSheet("color: #34d399; background-color: #18181b; padding: 4px 8px; border-radius: 4px;")
         c_layout.addWidget(self.lbl_hum_val, 1, 1)
 
         c_layout.addWidget(QLabel("BMP280 Temp:"), 2, 0)
-        self.lbl_bmp_temp_val = QLabel("24.80 °C")
+        self.lbl_bmp_temp_val = QLabel("--")
         self.lbl_bmp_temp_val.setFont(QFont("Monospace", 12, QFont.Bold))
         self.lbl_bmp_temp_val.setStyleSheet("color: #f59e0b; background-color: #18181b; padding: 4px 8px; border-radius: 4px;")
         c_layout.addWidget(self.lbl_bmp_temp_val, 2, 1)
 
         c_layout.addWidget(QLabel("Barometric Pressure:"), 3, 0)
-        self.lbl_pressure_val = QLabel("1013.25 hPa")
+        self.lbl_pressure_val = QLabel("--")
         self.lbl_pressure_val.setFont(QFont("Monospace", 12, QFont.Bold))
         self.lbl_pressure_val.setStyleSheet("color: #e0e7ff; background-color: #18181b; padding: 4px 8px; border-radius: 4px;")
         c_layout.addWidget(self.lbl_pressure_val, 3, 1)
 
-        self.lbl_dht_status = QLabel("DHT11: OK | BMP280: OK")
+        self.lbl_dht_status = QLabel("No climate data")
         self.lbl_dht_status.setStyleSheet("background-color: #064e3b; color: #34d399; font-weight: bold; padding: 3px 6px; border-radius: 4px;")
         c_layout.addWidget(self.lbl_dht_status, 4, 0, 1, 2)
 
@@ -2438,32 +2441,32 @@ class ESP32SensorNodeWidget(QWidget):
         h_layout = QGridLayout(hazard_box)
 
         h_layout.addWidget(QLabel("MQ Gas Reading:"), 0, 0)
-        self.lbl_gas_val = QLabel("415 / 4095")
+        self.lbl_gas_val = QLabel("--")
         self.lbl_gas_val.setFont(QFont("Monospace", 12, QFont.Bold))
         self.lbl_gas_val.setStyleSheet("color: #fbbf24; background-color: #18181b; padding: 4px 8px; border-radius: 4px;")
         h_layout.addWidget(self.lbl_gas_val, 0, 1)
 
-        self.lbl_gas_badge = QLabel("🟢 Clean Air")
+        self.lbl_gas_badge = QLabel("No data")
         self.lbl_gas_badge.setStyleSheet("background-color: #064e3b; color: #34d399; font-weight: bold; padding: 3px 6px; border-radius: 4px;")
         h_layout.addWidget(self.lbl_gas_badge, 0, 2)
 
         h_layout.addWidget(QLabel("Water Level SIG:"), 1, 0)
-        self.lbl_water_val = QLabel("120 / 4095")
+        self.lbl_water_val = QLabel("--")
         self.lbl_water_val.setFont(QFont("Monospace", 12, QFont.Bold))
         self.lbl_water_val.setStyleSheet("color: #60a5fa; background-color: #18181b; padding: 4px 8px; border-radius: 4px;")
         h_layout.addWidget(self.lbl_water_val, 1, 1)
 
-        self.lbl_water_badge = QLabel("🟢 Dry")
+        self.lbl_water_badge = QLabel("No data")
         self.lbl_water_badge.setStyleSheet("background-color: #064e3b; color: #34d399; font-weight: bold; padding: 3px 6px; border-radius: 4px;")
         h_layout.addWidget(self.lbl_water_badge, 1, 2)
 
         h_layout.addWidget(QLabel("Flame Sensor DO:"), 2, 0)
-        self.lbl_flame_val = QLabel("HIGH (Clear)")
+        self.lbl_flame_val = QLabel("--")
         self.lbl_flame_val.setFont(QFont("Monospace", 12, QFont.Bold))
         self.lbl_flame_val.setStyleSheet("color: #a7f3d0; background-color: #18181b; padding: 4px 8px; border-radius: 4px;")
         h_layout.addWidget(self.lbl_flame_val, 2, 1)
 
-        self.lbl_flame_badge = QLabel("✅ Clear")
+        self.lbl_flame_badge = QLabel("No data")
         self.lbl_flame_badge.setStyleSheet("background-color: #064e3b; color: #34d399; font-weight: bold; padding: 3px 6px; border-radius: 4px;")
         h_layout.addWidget(self.lbl_flame_badge, 2, 2)
 
@@ -2478,19 +2481,19 @@ class ESP32SensorNodeWidget(QWidget):
         m_layout = QGridLayout(mpu_box)
 
         m_layout.addWidget(QLabel("Accel (m/s²):"), 0, 0)
-        self.lbl_accel_val = QLabel("X: 0.12  |  Y: -0.05  |  Z: 9.81")
+        self.lbl_accel_val = QLabel("--")
         self.lbl_accel_val.setFont(QFont("Monospace", 11, QFont.Bold))
         self.lbl_accel_val.setStyleSheet("color: #a78bfa; background-color: #18181b; padding: 4px 8px; border-radius: 4px;")
         m_layout.addWidget(self.lbl_accel_val, 0, 1)
 
         m_layout.addWidget(QLabel("Gyro (rad/s):"), 1, 0)
-        self.lbl_gyro_val = QLabel("X: 0.010 |  Y: 0.000  |  Z: -0.020")
+        self.lbl_gyro_val = QLabel("--")
         self.lbl_gyro_val.setFont(QFont("Monospace", 11, QFont.Bold))
         self.lbl_gyro_val.setStyleSheet("color: #a78bfa; background-color: #18181b; padding: 4px 8px; border-radius: 4px;")
         m_layout.addWidget(self.lbl_gyro_val, 1, 1)
 
         m_layout.addWidget(QLabel("Estimated Tilt:"), 2, 0)
-        self.lbl_tilt_val = QLabel("Pitch: -0.3°   |   Roll: 0.7°")
+        self.lbl_tilt_val = QLabel("--")
         self.lbl_tilt_val.setFont(QFont("Monospace", 11, QFont.Bold))
         self.lbl_tilt_val.setStyleSheet("color: #38bdf8; background-color: #0c4a6e; padding: 4px 8px; border-radius: 4px;")
         m_layout.addWidget(self.lbl_tilt_val, 2, 1)
@@ -2514,29 +2517,29 @@ class ESP32SensorNodeWidget(QWidget):
         g_layout = QGridLayout(gps_box)
 
         g_layout.addWidget(QLabel("GPS Fix:"), 0, 0)
-        self.lbl_gps_status = QLabel("🔴 Searching / No Fix")
+        self.lbl_gps_status = QLabel("No data")
         self.lbl_gps_status.setStyleSheet("background-color: #451a1a; color: #f87171; font-weight: bold; padding: 3px 6px; border-radius: 4px;")
         g_layout.addWidget(self.lbl_gps_status, 0, 1)
 
         g_layout.addWidget(QLabel("Satellites:"), 0, 2)
-        self.lbl_gps_sats = QLabel("0 sats")
+        self.lbl_gps_sats = QLabel("--")
         self.lbl_gps_sats.setFont(QFont("Monospace", 11, QFont.Bold))
         self.lbl_gps_sats.setStyleSheet("color: #d1d5db; background-color: #18181b; padding: 3px 6px; border-radius: 4px;")
         g_layout.addWidget(self.lbl_gps_sats, 0, 3)
 
         g_layout.addWidget(QLabel("Coordinates:"), 1, 0)
-        self.lbl_gps_coords = QLabel("Lat: 0.000000 | Lng: 0.000000")
+        self.lbl_gps_coords = QLabel("--")
         self.lbl_gps_coords.setFont(QFont("Monospace", 11, QFont.Bold))
         self.lbl_gps_coords.setStyleSheet("color: #4ade80; background-color: #18181b; padding: 4px 8px; border-radius: 4px;")
         g_layout.addWidget(self.lbl_gps_coords, 1, 1, 1, 3)
 
         g_layout.addWidget(QLabel("microSD Storage:"), 2, 0)
-        self.lbl_sd_status = QLabel("💾 SD: Ready (/log.csv)")
+        self.lbl_sd_status = QLabel("No data")
         self.lbl_sd_status.setStyleSheet("background-color: #064e3b; color: #34d399; font-weight: bold; padding: 3px 6px; border-radius: 4px;")
         g_layout.addWidget(self.lbl_sd_status, 2, 1)
 
         g_layout.addWidget(QLabel("Alert / Uptime:"), 2, 2)
-        self.lbl_system_status = QLabel("Alert: OK | Uptime: 0s")
+        self.lbl_system_status = QLabel("--")
         self.lbl_system_status.setFont(QFont("Monospace", 10, QFont.Bold))
         self.lbl_system_status.setStyleSheet("color: #38bdf8; background-color: #18181b; padding: 3px 6px; border-radius: 4px;")
         g_layout.addWidget(self.lbl_system_status, 2, 3)
@@ -2569,7 +2572,7 @@ class ESP32SensorNodeWidget(QWidget):
             return f"Wi-Fi {self.active_url}"
         if self.source == 'serial':
             return f"{self.active_port} @ {self.active_baud}"
-        return "simulated data" if self.source == 'sim' else "nothing"
+        return "nothing"
 
     def refresh_port_list(self, report=False):
         """Fill the port list; preselect a port the arm commander isn't using."""
@@ -2606,9 +2609,10 @@ class ESP32SensorNodeWidget(QWidget):
         self.phase_since = time.time()
         self._stale_logged = False
         st = self.sensor_state
-        st['simulating'] = src == 'sim'
+        st.update(EMPTY_SENSOR_READINGS)    # old readings are not from the new source
         st['wifi_connected'] = src == 'wifi'
         st['connected'] = src == 'serial'
+        self.on_data_updated(st)
         if src == 'wifi':
             self.active_url = self._wifi_url(self.txt_wifi_ip.text())
             _ui_settings().setValue("rover/wifi_host", self.txt_wifi_ip.text().strip())
@@ -2617,17 +2621,12 @@ class ESP32SensorNodeWidget(QWidget):
         elif src == 'serial':
             self.console.log(f"Opening {self.active_port} @ {self.active_baud} …", 'info')
             threading.Thread(target=self._serial_worker, args=(gen, self.active_port, self.active_baud), daemon=True).start()
-        elif src == 'sim':
-            self.console.log("Showing simulated data (not from the rover)", 'info')
         else:
             self.console.log("Rover data source off", 'info')
         self._refresh_link()
 
     def toggle_wifi_connection(self):
         self.set_source('off' if self.source == 'wifi' else 'wifi')
-
-    def toggle_sim(self):
-        self.set_source('off' if self.source == 'sim' else 'sim')
 
     def toggle_serial_connection(self):
         if self.source == 'serial':
@@ -2746,9 +2745,7 @@ class ESP32SensorNodeWidget(QWidget):
         now = time.time()
         src = self.source
         if src == 'off':
-            kind, label, detail = 'idle', "Off", "No data source. Choose Wi-Fi, Serial or Simulate."
-        elif src == 'sim':
-            kind, label, detail = 'busy', "Simulated", "Demo values, not from the rover"
+            kind, label, detail = 'idle', "Not connected", "No data source. Connect the rover over Wi-Fi or Serial."
         else:
             target = self.source_label()
             phase = self.link_phase
@@ -2778,168 +2775,68 @@ class ESP32SensorNodeWidget(QWidget):
         self.lbl_link_detail.setToolTip(detail)
         if src != self._btn_key:
             self._btn_key = src
-            wifi_on, ser_on, sim_on = src == 'wifi', src == 'serial', src == 'sim'
+            wifi_on, ser_on = src == 'wifi', src == 'serial'
             self.btn_wifi_connect.setText("⏹ Disconnect Wi-Fi" if wifi_on else "🌐 Connect Wi-Fi")
             self.btn_wifi_connect.setStyleSheet(button_qss('danger' if wifi_on else 'primary', padding='5px 12px'))
             self.btn_connect.setText("⏹ Disconnect Serial" if ser_on else "🔌 Connect Serial")
             self.btn_connect.setStyleSheet(button_qss('danger' if ser_on else 'primary', padding='5px 12px'))
-            self.btn_sim.setText("⏸ Stop Simulation" if sim_on else "▶ Simulate")
-            self.btn_sim.setStyleSheet(button_qss('warning' if sim_on else 'neutral', padding='5px 12px'))
 
     def parse_sensor_json(self, raw_str):
-        """Apply a /data JSON reply. Returns False if it isn't a JSON object."""
+        """Apply a /data JSON reply. Only fields present in the reply change;
+        nothing is filled in. Returns False if it isn't a JSON object."""
         try:
             d = json.loads(raw_str)
         except Exception:
             return False
         if not isinstance(d, dict):
             return False
+        st = self.sensor_state
+        st["raw_log"].append(f"[JSON] {raw_str[:90]}...")
+        if len(st["raw_log"]) > 100:
+            st["raw_log"].pop(0)
 
-        self.sensor_state["raw_log"].append(f"[JSON] {raw_str[:90]}...")
-        if len(self.sensor_state["raw_log"]) > 100:
-            self.sensor_state["raw_log"].pop(0)
+        for key, keys, cast in (("temp_dht", ("temp_dht", "temperature"), float),
+                                ("humidity", ("humidity",), float),
+                                ("temp_bmp", ("temp_bmp",), float),
+                                ("pressure", ("pressure",), float),
+                                ("gas", ("air", "gas"), int),
+                                ("water", ("water",), int),
+                                ("flame", ("flame",), int),
+                                ("lat", ("lat",), float),
+                                ("lng", ("lng",), float),
+                                ("gps_sats", ("gps_sats",), int),
+                                ("uptime_ms", ("uptime_ms",), int)):
+            v = _reading(d, keys, cast)
+            if v is not None:
+                st[key] = v
+        if st["temp_dht"] is not None:
+            st["temperature"] = st["temp_dht"]
+        if st["gas"] is not None:
+            st["air_quality"] = "Clean" if st["gas"] < 600 else ("Moderate" if st["gas"] < 1500 else "Danger")
+        for key in ("gps_valid", "sd_ok", "dht_error"):
+            if key in d and d[key] is not None:
+                st[key] = bool(d[key])
+        if d.get("alert") is not None:
+            st["alert"] = str(d["alert"]).upper()
 
-        # Climate
-        t_dht = float(d.get("temp_dht", self.sensor_state["temp_dht"]))
-        hum = float(d.get("humidity", self.sensor_state["humidity"]))
-        t_bmp = float(d.get("temp_bmp", self.sensor_state["temp_bmp"]))
-        pres = float(d.get("pressure", self.sensor_state["pressure"]))
-        self.sensor_state["temp_dht"] = t_dht
-        self.sensor_state["temperature"] = t_dht
-        self.sensor_state["humidity"] = hum
-        self.sensor_state["temp_bmp"] = t_bmp
-        self.sensor_state["pressure"] = pres
-
-        # Hazards
-        gas_val = int(d.get("air", d.get("gas", self.sensor_state["gas"])))
-        water_val = int(d.get("water", self.sensor_state["water"]))
-        flame_val = int(d.get("flame", self.sensor_state["flame"]))
-        self.sensor_state["gas"] = gas_val
-        self.sensor_state["water"] = water_val
-        self.sensor_state["flame"] = flame_val
-
-        # Gas Quality
-        if gas_val < 600:
-            self.sensor_state["air_quality"] = "Clean"
-        elif gas_val < 1500:
-            self.sensor_state["air_quality"] = "Moderate"
-        else:
-            self.sensor_state["air_quality"] = "Danger"
-
-        # IMU Accel & Gyro
-        ax = float(d.get("ax", 0))
-        ay = float(d.get("ay", 0))
-        az = float(d.get("az", 16384))
-        gx = float(d.get("gx", 0))
-        gy = float(d.get("gy", 0))
-        gz = float(d.get("gz", 0))
-
-        # Convert MPU6050 raw LSB (16384 LSB/g) to m/s² if large integer
-        if abs(az) > 50 or abs(ax) > 50 or abs(ay) > 50:
-            ax_mps2 = (ax / 16384.0) * 9.80665
-            ay_mps2 = (ay / 16384.0) * 9.80665
-            az_mps2 = (az / 16384.0) * 9.80665
-            gx_rad = (gx / 131.0) * (math.pi / 180.0)
-            gy_rad = (gy / 131.0) * (math.pi / 180.0)
-            gz_rad = (gz / 131.0) * (math.pi / 180.0)
-        else:
-            ax_mps2, ay_mps2, az_mps2 = ax, ay, az
-            gx_rad, gy_rad, gz_rad = gx, gy, gz
-
-        self.sensor_state["accel"] = {"x": round(ax_mps2, 2), "y": round(ay_mps2, 2), "z": round(az_mps2, 2)}
-        self.sensor_state["gyro"] = {"x": round(gx_rad, 3), "y": round(gy_rad, 3), "z": round(gz_rad, 3)}
-
-        # Pitch & Roll
-        if az_mps2 != 0 or ay_mps2 != 0 or ax_mps2 != 0:
-            pitch_rad = math.atan2(ay_mps2, math.sqrt(ax_mps2**2 + az_mps2**2))
-            roll_rad = math.atan2(-ax_mps2, az_mps2)
-            raw_p = round(pitch_rad * (180.0 / math.pi), 1)
-            raw_r = round(roll_rad * (180.0 / math.pi), 1)
-            self.sensor_state["raw_pitch"] = raw_p
-            self.sensor_state["raw_roll"] = raw_r
-            p_off = float(self.imu_offsets.get("pitch", 0.0))
-            r_off = float(self.imu_offsets.get("roll", 0.0))
-            self.sensor_state["pitch"] = round(raw_p - p_off, 1)
-            self.sensor_state["roll"] = round(raw_r - r_off, 1)
-
-        # GPS & System
-        self.sensor_state["lat"] = float(d.get("lat", self.sensor_state["lat"]))
-        self.sensor_state["lng"] = float(d.get("lng", self.sensor_state["lng"]))
-        self.sensor_state["gps_valid"] = bool(d.get("gps_valid", False))
-        self.sensor_state["gps_sats"] = int(d.get("gps_sats", 0))
-        self.sensor_state["alert"] = str(d.get("alert", "OK"))
-        self.sensor_state["sd_ok"] = bool(d.get("sd_ok", True))
-        self.sensor_state["uptime_ms"] = int(d.get("uptime_ms", 0))
+        accel = [_reading(d, (k,)) for k in ("ax", "ay", "az")]
+        if None not in accel:
+            ax, ay, az = accel
+            if abs(az) > 50 or abs(ax) > 50 or abs(ay) > 50:   # raw MPU6050 LSB (16384/g)
+                ax, ay, az = ((v / 16384.0) * 9.80665 for v in (ax, ay, az))
+            st["accel"] = {"x": round(ax, 2), "y": round(ay, 2), "z": round(az, 2)}
+            if ax or ay or az:
+                raw_p = round(math.degrees(math.atan2(ay, math.sqrt(ax ** 2 + az ** 2))), 1)
+                raw_r = round(math.degrees(math.atan2(-ax, az)), 1)
+                st["raw_pitch"], st["raw_roll"] = raw_p, raw_r
+                st["pitch"] = round(raw_p - float(self.imu_offsets.get("pitch", 0.0)), 1)
+                st["roll"] = round(raw_r - float(self.imu_offsets.get("roll", 0.0)), 1)
+        gyro = [_reading(d, (k,)) for k in ("gx", "gy", "gz")]
+        if None not in gyro:
+            if any(abs(v) > 50 for v in gyro):                   # raw LSB (131 per deg/s)
+                gyro = [math.radians(v / 131.0) for v in gyro]
+            st["gyro"] = {"x": round(gyro[0], 3), "y": round(gyro[1], 3), "z": round(gyro[2], 3)}
         return True
-
-    def sim_tick(self):
-        if self.source != 'sim':
-            return
-
-        t = time.time()
-        temp_d = round(24.5 + 1.2 * math.sin(0.2 * t), 2)
-        hum = round(48.0 + 3.5 * math.cos(0.15 * t), 2)
-        temp_b = round(24.8 + 0.9 * math.sin(0.25 * t), 2)
-        pres = round(1013.25 + 2.5 * math.sin(0.1 * t), 2)
-
-        ax = round(0.4 * math.sin(0.5 * t), 2)
-        ay = round(0.3 * math.cos(0.4 * t), 2)
-        az = round(9.81 + 0.1 * math.sin(0.8 * t), 2)
-        gx = round(0.02 * math.sin(0.6 * t), 3)
-        gy = round(0.01 * math.cos(0.5 * t), 3)
-        gz = round(-0.01 * math.sin(0.3 * t), 3)
-
-        gas = int(410 + 25 * math.sin(0.1 * t) + random.randint(-4, 4))
-        water = int(120 + 15 * math.sin(0.05 * t) + random.randint(-2, 2))
-        uptime = int(t * 1000) % 10000000
-
-        block = [
-            "-----------------------------------",
-            f"DHT11   temp: {temp_d:.1f} C   hum: {hum:.1f} %",
-            f"BMP280  temp: {temp_b:.1f} C   pres: {pres:.1f} hPa",
-            f"Gas:    {gas}   Water: {water}",
-            "Flame:  clear",
-            f"Accel:  X={int(ax*1671)} Y={int(ay*1671)} Z={int(az*1671)}",
-            f"Gyro:   X={int(gx*7500)} Y={int(gy*7500)} Z={int(gz*7500)}",
-            "GPS:    17.38504, 78.48667   sats: 7",
-            "Alert:  OK",
-            "-----------------------------------"
-        ]
-
-        self.sensor_state["temp_dht"] = temp_d
-        self.sensor_state["temperature"] = temp_d
-        self.sensor_state["humidity"] = hum
-        self.sensor_state["temp_bmp"] = temp_b
-        self.sensor_state["pressure"] = pres
-        self.sensor_state["gas"] = gas
-        self.sensor_state["water"] = water
-        self.sensor_state["flame"] = 1
-        self.sensor_state["alert"] = "OK"
-        self.sensor_state["accel"] = {"x": ax, "y": ay, "z": az}
-        self.sensor_state["gyro"] = {"x": gx, "y": gy, "z": gz}
-        self.sensor_state["lat"] = 17.385044
-        self.sensor_state["lng"] = 78.486671
-        self.sensor_state["gps_valid"] = True
-        self.sensor_state["gps_sats"] = 7
-        self.sensor_state["sd_ok"] = True
-        self.sensor_state["uptime_ms"] = uptime
-
-        pitch_rad = math.atan2(ay, math.sqrt(ax**2 + az**2))
-        roll_rad = math.atan2(-ax, az)
-        self.sensor_state["raw_pitch"] = round(pitch_rad * (180.0 / math.pi), 1)
-        self.sensor_state["raw_roll"] = round(roll_rad * (180.0 / math.pi), 1)
-        p_off = float(self.imu_offsets.get("pitch", 0.0))
-        r_off = float(self.imu_offsets.get("roll", 0.0))
-        self.sensor_state["pitch"] = round(self.sensor_state["raw_pitch"] - p_off, 1)
-        self.sensor_state["roll"] = round(self.sensor_state["raw_roll"] - r_off, 1)
-
-        for line in block:
-            self.sensor_state["raw_log"].append(line)
-            self.console.log(line, 'data')
-        if len(self.sensor_state["raw_log"]) > 100:
-            self.sensor_state["raw_log"] = self.sensor_state["raw_log"][-100:]
-
-        self.update_data_signal.emit(self.sensor_state)
 
     def parse_sensor_line(self, line):
         line = line.strip()
@@ -3035,107 +2932,116 @@ class ESP32SensorNodeWidget(QWidget):
         if m_al:
             self.sensor_state["alert"] = m_al.group(1).upper()
 
-    def on_data_updated(self, data):
-        # 1. Fire Alert Banner & Flame Status
-        flame_val = data.get("flame", 1)
-        alert_state = str(data.get("alert", "OK")).upper()
-        is_fire = (flame_val == 0 or alert_state == "FIRE")
+    @staticmethod
+    def _badge(label, text, kind):
+        label.setText(text)
+        label.setStyleSheet(_BADGE_QSS[kind])
 
+    def on_data_updated(self, data):
+        """Show the latest readings; anything not received yet shows as "--"."""
+        def num(key):
+            v = data.get(key)
+            return v if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
+
+        # 1. Fire banner & flame: only on a real LOW pin or FIRE alert
+        flame = num("flame")
+        alert = data.get("alert")
+        alert_up = str(alert).upper() if alert is not None else None
+        is_fire = flame == 0 or alert_up == "FIRE"
         self.lbl_fire_banner.setVisible(is_fire)
-        if is_fire:
+        if flame is None:
+            self.lbl_flame_val.setText("--")
+            self.lbl_flame_val.setStyleSheet("color: #9aa1ad; " + _VALUE_QSS)
+            self._badge(self.lbl_flame_badge, "No data", 'none')
+        elif flame == 0:
             self.lbl_flame_val.setText("LOW (🔥 FIRE!)")
             self.lbl_flame_val.setStyleSheet("color: #f87171; background-color: #450a0a; padding: 4px 8px; border-radius: 4px;")
-            self.lbl_flame_badge.setText("🚨 FIRE ALERT!")
-            self.lbl_flame_badge.setStyleSheet("background-color: #991b1b; color: #ffffff; font-weight: bold; padding: 3px 6px; border-radius: 4px;")
+            self._badge(self.lbl_flame_badge, "🚨 FIRE ALERT!", 'bad')
         else:
             self.lbl_flame_val.setText("HIGH (Clear)")
-            self.lbl_flame_val.setStyleSheet("color: #a7f3d0; background-color: #18181b; padding: 4px 8px; border-radius: 4px;")
-            self.lbl_flame_badge.setText("✅ Clear")
-            self.lbl_flame_badge.setStyleSheet("background-color: #064e3b; color: #34d399; font-weight: bold; padding: 3px 6px; border-radius: 4px;")
+            self.lbl_flame_val.setStyleSheet("color: #a7f3d0; " + _VALUE_QSS)
+            self._badge(self.lbl_flame_badge, "✅ Clear", 'ok')
 
         # 2. Climate (DHT11 & BMP-280)
-        tempC = data.get("temp_dht", data.get("temperature", 24.5))
-        tempF = (tempC * 9/5) + 32
-        hum = data.get("humidity", 48.0)
-        tempBMP = data.get("temp_bmp", 24.8)
-        press = data.get("pressure", 1013.25)
-
-        self.lbl_temp_val.setText(f"{tempC:.1f} °C ({tempF:.1f} °F)")
-        self.lbl_hum_val.setText(f"{hum:.1f} %")
-        self.lbl_bmp_temp_val.setText(f"{tempBMP:.1f} °C")
-        self.lbl_pressure_val.setText(f"{press:.1f} hPa")
-
-        # 3. Hazards (MQ Gas, Water)
-        gas_val = data.get("gas", 415)
-        self.lbl_gas_val.setText(f"{gas_val} / 4095")
-        if gas_val > 2500:
-            self.lbl_gas_badge.setText("🔴 HAZARD!")
-            self.lbl_gas_badge.setStyleSheet("background-color: #991b1b; color: #ffffff; font-weight: bold; padding: 3px 6px; border-radius: 4px;")
-        elif gas_val > 1500:
-            self.lbl_gas_badge.setText("🟡 Moderate")
-            self.lbl_gas_badge.setStyleSheet("background-color: #78350f; color: #fde047; font-weight: bold; padding: 3px 6px; border-radius: 4px;")
+        temp_c = num("temp_dht") if num("temp_dht") is not None else num("temperature")
+        hum, temp_bmp, press = num("humidity"), num("temp_bmp"), num("pressure")
+        self.lbl_temp_val.setText("--" if temp_c is None else f"{temp_c:.1f} °C ({temp_c * 9 / 5 + 32:.1f} °F)")
+        self.lbl_hum_val.setText("--" if hum is None else f"{hum:.1f} %")
+        self.lbl_bmp_temp_val.setText("--" if temp_bmp is None else f"{temp_bmp:.1f} °C")
+        self.lbl_pressure_val.setText("--" if press is None else f"{press:.1f} hPa")
+        if data.get("dht_error"):
+            self._badge(self.lbl_dht_status, "DHT11: ERROR", 'bad')
+        elif temp_c is None and temp_bmp is None:
+            self._badge(self.lbl_dht_status, "No climate data", 'none')
         else:
-            self.lbl_gas_badge.setText("🟢 Clean Air")
-            self.lbl_gas_badge.setStyleSheet("background-color: #064e3b; color: #34d399; font-weight: bold; padding: 3px 6px; border-radius: 4px;")
+            self._badge(self.lbl_dht_status, f"DHT11: {'OK' if temp_c is not None else '--'} | "
+                                             f"BMP280: {'OK' if temp_bmp is not None else '--'}", 'ok')
 
-        water_val = data.get("water", 120)
-        self.lbl_water_val.setText(f"{water_val} / 4095")
-        if water_val > 2000:
-            self.lbl_water_badge.setText("🌊 Submerged")
-            self.lbl_water_badge.setStyleSheet("background-color: #1e3a8a; color: #93c5fd; font-weight: bold; padding: 3px 6px; border-radius: 4px;")
-        elif water_val > 600:
-            self.lbl_water_badge.setText("💧 Moisture")
-            self.lbl_water_badge.setStyleSheet("background-color: #0c4a6e; color: #38bdf8; font-weight: bold; padding: 3px 6px; border-radius: 4px;")
+        # 3. Hazards (MQ gas, water)
+        gas = num("gas")
+        self.lbl_gas_val.setText("--" if gas is None else f"{gas} / 4095")
+        if gas is None:
+            self._badge(self.lbl_gas_badge, "No data", 'none')
+        elif gas > 2500:
+            self._badge(self.lbl_gas_badge, "🔴 HAZARD!", 'bad')
+        elif gas > 1500:
+            self._badge(self.lbl_gas_badge, "🟡 Moderate", 'warn')
         else:
-            self.lbl_water_badge.setText("🟢 Dry")
-            self.lbl_water_badge.setStyleSheet("background-color: #064e3b; color: #34d399; font-weight: bold; padding: 3px 6px; border-radius: 4px;")
+            self._badge(self.lbl_gas_badge, "🟢 Clean Air", 'ok')
+        water = num("water")
+        self.lbl_water_val.setText("--" if water is None else f"{water} / 4095")
+        if water is None:
+            self._badge(self.lbl_water_badge, "No data", 'none')
+        elif water > 2000:
+            self._badge(self.lbl_water_badge, "🌊 Submerged", 'info')
+        elif water > 600:
+            self._badge(self.lbl_water_badge, "💧 Moisture", 'info')
+        else:
+            self._badge(self.lbl_water_badge, "🟢 Dry", 'ok')
 
-        # 4. IMU Accel & Gyro
-        acc = data.get("accel", {"x": 0.12, "y": -0.05, "z": 9.81})
-        gy = data.get("gyro", {"x": 0.01, "y": 0.0, "z": -0.02})
-        pitch = data.get("pitch", 0.0)
-        roll = data.get("roll", 0.0)
+        # 4. IMU
+        acc, gyr = data.get("accel"), data.get("gyro")
+        pitch, roll = num("pitch"), num("roll")
+        self.lbl_accel_val.setText("--" if not isinstance(acc, dict) else
+                                   f"X: {acc['x']:.2f}  |  Y: {acc['y']:.2f}  |  Z: {acc['z']:.2f}")
+        self.lbl_gyro_val.setText("--" if not isinstance(gyr, dict) else
+                                  f"X: {gyr['x']:.3f}  |  Y: {gyr['y']:.3f}  |  Z: {gyr['z']:.3f}")
+        self.lbl_tilt_val.setText("--" if pitch is None or roll is None else
+                                  f"Pitch: {pitch:.1f}°   |   Roll: {roll:.1f}°")
 
-        self.lbl_accel_val.setText(f"X: {acc['x']:.2f}  |  Y: {acc['y']:.2f}  |  Z: {acc['z']:.2f}")
-        self.lbl_gyro_val.setText(f"X: {gy['x']:.3f}  |  Y: {gy['y']:.3f}  |  Z: {gy['z']:.3f}")
-        self.lbl_tilt_val.setText(f"Pitch: {pitch:.1f}°   |   Roll: {roll:.1f}°")
-
-        # 5. GPS Navigation & Status
-        gps_valid = data.get("gps_valid", False)
-        sats = data.get("gps_sats", 0)
-        lat = data.get("lat", 0.0)
-        lng = data.get("lng", 0.0)
-
-        if gps_valid:
-            self.lbl_gps_status.setText("🟢 3D Satellite Fix")
-            self.lbl_gps_status.setStyleSheet("background-color: #064e3b; color: #34d399; font-weight: bold; padding: 3px 6px; border-radius: 4px;")
+        # 5. GPS
+        gps_valid = data.get("gps_valid")
+        sats, lat, lng = num("gps_sats"), num("lat"), num("lng")
+        if gps_valid is True and lat is not None and lng is not None:
+            self._badge(self.lbl_gps_status, "🟢 3D Satellite Fix", 'ok')
             self.lbl_gps_coords.setText(f"Lat: {lat:.6f} | Lng: {lng:.6f}")
+        elif gps_valid is False:
+            self._badge(self.lbl_gps_status, "🔴 Searching / No Fix", 'bad')
+            self.lbl_gps_coords.setText("--")
         else:
-            self.lbl_gps_status.setText("🔴 Searching / No Fix")
-            self.lbl_gps_status.setStyleSheet("background-color: #451a1a; color: #f87171; font-weight: bold; padding: 3px 6px; border-radius: 4px;")
-            self.lbl_gps_coords.setText("Lat: --.------ | Lng: --.------")
+            self._badge(self.lbl_gps_status, "No data", 'none')
+            self.lbl_gps_coords.setText("--")
+        self.lbl_gps_sats.setText("--" if sats is None else f"{sats} sats")
 
-        self.lbl_gps_sats.setText(f"{sats} sats")
-
-        # 6. SD & System Status
-        sd_ok = data.get("sd_ok", True)
-        if sd_ok:
-            self.lbl_sd_status.setText("💾 SD: Ready (/log.csv)")
-            self.lbl_sd_status.setStyleSheet("background-color: #064e3b; color: #34d399; font-weight: bold; padding: 3px 6px; border-radius: 4px;")
+        # 6. SD & system
+        sd_ok = data.get("sd_ok")
+        if sd_ok is True:
+            self._badge(self.lbl_sd_status, "💾 SD: Ready (/log.csv)", 'ok')
+        elif sd_ok is False:
+            self._badge(self.lbl_sd_status, "❌ No SD Card", 'bad')
         else:
-            self.lbl_sd_status.setText("❌ No SD Card")
-            self.lbl_sd_status.setStyleSheet("background-color: #451a1a; color: #f87171; font-weight: bold; padding: 3px 6px; border-radius: 4px;")
-
-        uptime_sec = int(data.get("uptime_ms", 0) / 1000)
-        mins = uptime_sec // 60
-        secs = uptime_sec % 60
-        self.lbl_system_status.setText(f"Alert: {alert_state} | Up: {mins:02d}m {secs:02d}s")
-
+            self._badge(self.lbl_sd_status, "No data", 'none')
+        uptime = num("uptime_ms")
+        up_txt = "--" if uptime is None else f"{int(uptime / 1000) // 60:02d}m {int(uptime / 1000) % 60:02d}s"
+        self.lbl_system_status.setText(f"Alert: {alert_up or '--'} | Up: {up_txt}")
 
     def tare_imu_horizon(self):
         """Record current accelerometer-derived tilt as zero-horizon reference."""
-        raw_p = self.sensor_state.get("raw_pitch", self.sensor_state.get("pitch", 0.0))
-        raw_r = self.sensor_state.get("raw_roll", self.sensor_state.get("roll", 0.0))
+        raw_p = self.sensor_state.get("raw_pitch")
+        raw_r = self.sensor_state.get("raw_roll")
+        if raw_p is None or raw_r is None:
+            self.console.log("Can't tare: no IMU reading yet. Connect the rover first.", 'warn')
+            return
         self.imu_offsets["pitch"] = round(raw_p, 1)
         self.imu_offsets["roll"] = round(raw_r, 1)
         self.imu_offsets["yaw"] = 0.0

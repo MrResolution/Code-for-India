@@ -22,7 +22,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import re
-import random
 import argparse
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from socketserver import ThreadingMixIn
@@ -204,6 +203,36 @@ def list_serial_ports():
 _LINK_CMD_RE = re.compile(r'^(RECONNECT|STATUS|VERBOSE=[01]|PORT=(/dev/[A-Za-z0-9_./+-]+|COM\d+)|BAUD=\d{3,7}|IP=[A-Za-z0-9.:/-]{1,253})$')
 
 
+# Rover readings before (or between) real data: None means "no reading", and
+# the dashboards show "--" instead of a made-up value.
+EMPTY_SENSOR_READINGS = {
+    "temperature": None, "temp_dht": None, "humidity": None, "temp_bmp": None, "pressure": None,
+    "dht_error": None, "accel": None, "gyro": None, "pitch": None, "roll": None,
+    "raw_pitch": None, "raw_roll": None, "gas": None, "water": None, "flame": None,
+    "air_quality": None, "lat": None, "lng": None, "gps_valid": None, "gps_sats": None,
+    "alert": None, "sd_ok": None, "uptime_ms": None,
+}
+
+
+def _reading(d, keys, cast=float):
+    """First present, finite value among keys in a rover JSON reply, else None."""
+    for k in keys:
+        if d.get(k) is None:
+            continue
+        try:
+            v = float(d[k])
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(v):
+            return None
+        return int(v) if cast is int else v
+    return None
+
+
+def air_quality(gas):
+    return "Clean" if gas < 600 else ("Moderate" if gas < 1500 else "Danger")
+
+
 # Shared state between HTTP Server and ROS 2 Node
 class RobotState:
     def __init__(self):
@@ -231,8 +260,8 @@ class RobotState:
                            'last_error': '', 'rssi': None}
         self.quard_resolved = {}        # hostname -> IP from the last good ping
         self.quard_cmd_failures = 0
-        # Rover data source: 'sim' | 'wifi' | 'serial' | 'off'
-        self.sensor_link = {'source': 'sim', 'phase': 'sim', 'error': '', 'last_rx': 0.0,
+        # Rover data source: 'wifi' | 'serial' | 'off'
+        self.sensor_link = {'source': 'off', 'phase': 'off', 'error': '', 'last_rx': 0.0,
                             'since': time.time(), 'gen': 0, 'target': ''}
         self.sensor_rx_times = collections.deque(maxlen=200)
         # Text commands for servo_serial_commander (CALIB:/SYNC:/MODE:),
@@ -255,124 +284,75 @@ class RobotState:
         }
 
         # ESP32 Sensor Node (DHT11, BMP280, MPU6050, MQ Gas, Water, Flame, GPS) State
-        self.sensor_state = {
-            "temperature": 24.5,
-            "temp_dht": 24.5,
-            "humidity": 48.0,
-            "temp_bmp": 24.8,
-            "pressure": 1013.25,
-            "dht_error": False,
-            "accel": {"x": 0.12, "y": -0.05, "z": 9.81},
-            "gyro": {"x": 0.01, "y": 0.00, "z": -0.02},
-            "ax": 120, "ay": -50, "az": 16384,
-            "gx": 10, "gy": 0, "gz": -20,
-            "pitch": -0.3,
-            "roll": 0.7,
-            "raw_pitch": -0.3,
-            "raw_roll": 0.7,
-            "gas": 415,
-            "water": 120,
-            "flame": 1,
-            "lat": 17.385044,
-            "lng": 78.486671,
-            "gps_valid": False,
-            "gps_sats": 0,
-            "alert": "OK",
-            "sd_ok": True,
-            "uptime_ms": 0,
-            "air_quality": "Clean",
+        self.sensor_state = dict(EMPTY_SENSOR_READINGS, **{
             "connected": False,
             "wifi_connected": False,
             "wifi_ip": "192.168.1.100",
-            "simulating": True,
             "port": "/dev/ttyUSB0",
             "baudrate": 115200,
-            "last_seen": time.time(),
+            "last_seen": 0.0,
             "raw_log": []
-        }
+        })
 
     def parse_sensor_json(self, raw_str):
-        """Apply a rover /data reply. Returns False if it isn't a JSON object."""
+        """Apply a rover /data reply. Only fields present in the reply change;
+        nothing is filled in. Returns False if it isn't a JSON object."""
         try:
             d = json.loads(raw_str)
         except Exception:
             return False
-
         if not isinstance(d, dict):
             return False
         console_log.add('sensors', 'data', raw_str.strip()[:240])
         with self.lock:
-            self.sensor_state["raw_log"].append(f"[JSON] {raw_str[:90]}...")
-            if len(self.sensor_state["raw_log"]) > 100:
-                self.sensor_state["raw_log"].pop(0)
+            st = self.sensor_state
+            st["raw_log"].append(f"[JSON] {raw_str[:90]}...")
+            if len(st["raw_log"]) > 100:
+                st["raw_log"].pop(0)
+            st["last_seen"] = time.time()
 
-            self.sensor_state["last_seen"] = time.time()
+            for key, keys, cast in (("temp_dht", ("temp_dht", "temperature"), float),
+                                    ("humidity", ("humidity",), float),
+                                    ("temp_bmp", ("temp_bmp",), float),
+                                    ("pressure", ("pressure",), float),
+                                    ("gas", ("air", "gas"), int),
+                                    ("water", ("water",), int),
+                                    ("flame", ("flame",), int),
+                                    ("lat", ("lat",), float),
+                                    ("lng", ("lng",), float),
+                                    ("gps_sats", ("gps_sats",), int),
+                                    ("uptime_ms", ("uptime_ms",), int)):
+                v = _reading(d, keys, cast)
+                if v is not None:
+                    st[key] = v
+            if st["temp_dht"] is not None:
+                st["temperature"] = st["temp_dht"]
+            if st["gas"] is not None:
+                st["air_quality"] = air_quality(st["gas"])
+            for key in ("gps_valid", "sd_ok", "dht_error"):
+                if key in d and d[key] is not None:
+                    st[key] = bool(d[key])
+            if d.get("alert") is not None:
+                st["alert"] = str(d["alert"]).upper()
 
-            t_dht = float(d.get("temp_dht", self.sensor_state["temp_dht"]))
-            hum = float(d.get("humidity", self.sensor_state["humidity"]))
-            t_bmp = float(d.get("temp_bmp", self.sensor_state["temp_bmp"]))
-            pres = float(d.get("pressure", self.sensor_state["pressure"]))
-            gas_val = int(d.get("air", d.get("gas", self.sensor_state["gas"])))
-            water_val = int(d.get("water", self.sensor_state["water"]))
-            flame_val = int(d.get("flame", self.sensor_state["flame"]))
-
-            self.sensor_state["temp_dht"] = t_dht
-            self.sensor_state["temperature"] = t_dht
-            self.sensor_state["humidity"] = hum
-            self.sensor_state["temp_bmp"] = t_bmp
-            self.sensor_state["pressure"] = pres
-            self.sensor_state["gas"] = gas_val
-            self.sensor_state["water"] = water_val
-            self.sensor_state["flame"] = flame_val
-
-            if gas_val < 600:
-                self.sensor_state["air_quality"] = "Clean"
-            elif gas_val < 1500:
-                self.sensor_state["air_quality"] = "Moderate"
-            else:
-                self.sensor_state["air_quality"] = "Danger"
-
-            ax = float(d.get("ax", 0))
-            ay = float(d.get("ay", 0))
-            az = float(d.get("az", 16384))
-            gx = float(d.get("gx", 0))
-            gy = float(d.get("gy", 0))
-            gz = float(d.get("gz", 0))
-
-            if abs(az) > 50 or abs(ax) > 50 or abs(ay) > 50:
-                ax_mps2 = (ax / 16384.0) * 9.80665
-                ay_mps2 = (ay / 16384.0) * 9.80665
-                az_mps2 = (az / 16384.0) * 9.80665
-                gx_rad = (gx / 131.0) * (math.pi / 180.0)
-                gy_rad = (gy / 131.0) * (math.pi / 180.0)
-                gz_rad = (gz / 131.0) * (math.pi / 180.0)
-            else:
-                ax_mps2, ay_mps2, az_mps2 = ax, ay, az
-                gx_rad, gy_rad, gz_rad = gx, gy, gz
-
-            self.sensor_state["accel"] = {"x": round(ax_mps2, 2), "y": round(ay_mps2, 2), "z": round(az_mps2, 2)}
-            self.sensor_state["gyro"] = {"x": round(gx_rad, 3), "y": round(gy_rad, 3), "z": round(gz_rad, 3)}
-
-            if az_mps2 != 0 or ay_mps2 != 0 or ax_mps2 != 0:
-                pitch_rad = math.atan2(ay_mps2, math.sqrt(ax_mps2**2 + az_mps2**2))
-                roll_rad = math.atan2(-ax_mps2, az_mps2)
-                raw_p = round(pitch_rad * (180.0 / math.pi), 1)
-                raw_r = round(roll_rad * (180.0 / math.pi), 1)
-                self.sensor_state["raw_pitch"] = raw_p
-                self.sensor_state["raw_roll"] = raw_r
-                imu_t = self.calibration.get("imu_offsets", {})
-                p_off = float(imu_t.get("pitch", 0.0))
-                r_off = float(imu_t.get("roll", 0.0))
-                self.sensor_state["pitch"] = round(raw_p - p_off, 1)
-                self.sensor_state["roll"] = round(raw_r - r_off, 1)
-
-            self.sensor_state["lat"] = float(d.get("lat", self.sensor_state["lat"]))
-            self.sensor_state["lng"] = float(d.get("lng", self.sensor_state["lng"]))
-            self.sensor_state["gps_valid"] = bool(d.get("gps_valid", False))
-            self.sensor_state["gps_sats"] = int(d.get("gps_sats", 0))
-            self.sensor_state["alert"] = str(d.get("alert", "OK"))
-            self.sensor_state["sd_ok"] = bool(d.get("sd_ok", True))
-            self.sensor_state["uptime_ms"] = int(d.get("uptime_ms", 0))
+            accel = [_reading(d, (k,)) for k in ("ax", "ay", "az")]
+            if None not in accel:
+                ax, ay, az = accel
+                if abs(az) > 50 or abs(ax) > 50 or abs(ay) > 50:   # raw MPU6050 LSB (16384/g)
+                    ax, ay, az = ((v / 16384.0) * 9.80665 for v in (ax, ay, az))
+                st["accel"] = {"x": round(ax, 2), "y": round(ay, 2), "z": round(az, 2)}
+                if ax or ay or az:
+                    raw_p = round(math.degrees(math.atan2(ay, math.sqrt(ax ** 2 + az ** 2))), 1)
+                    raw_r = round(math.degrees(math.atan2(-ax, az)), 1)
+                    imu_t = self.calibration.get("imu_offsets", {})
+                    st["raw_pitch"], st["raw_roll"] = raw_p, raw_r
+                    st["pitch"] = round(raw_p - float(imu_t.get("pitch", 0.0)), 1)
+                    st["roll"] = round(raw_r - float(imu_t.get("roll", 0.0)), 1)
+            gyro = [_reading(d, (k,)) for k in ("gx", "gy", "gz")]
+            if None not in gyro:
+                if any(abs(v) > 50 for v in gyro):                   # raw LSB (131 per deg/s)
+                    gyro = [math.radians(v / 131.0) for v in gyro]
+                st["gyro"] = {"x": round(gyro[0], 3), "y": round(gyro[1], 3), "z": round(gyro[2], 3)}
         return True
 
     def parse_sensor_line(self, line):
@@ -603,10 +583,10 @@ class RobotState:
                   last_rx=0.0, since=time.time(), gen=lk['gen'] + 1, target=target)
         self.sensor_rx_times.clear()
         st = self.sensor_state
-        st['simulating'] = src == 'sim'
+        st.update(EMPTY_SENSOR_READINGS)    # old readings are not from the new source
         st['wifi_connected'] = src == 'wifi'
         st['connected'] = src == 'serial'
-        label = {'sim': "Showing simulated data (not from the rover)", 'off': "Rover data source off",
+        label = {'off': "Rover data source off",
                  'wifi': f"Connecting to {target} …", 'serial': f"Opening {target} …"}[src]
         console_log.add('sensors', 'info', label)
 
@@ -925,9 +905,14 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
                     raise ValueError("'reference_pose' must be an object")
                 calib_update = {}
                 with robot_state.lock:
-                    if target in ["imu", "all"]:
-                        raw_p = robot_state.sensor_state.get("raw_pitch", robot_state.sensor_state.get("pitch", 0.0))
-                        raw_r = robot_state.sensor_state.get("raw_roll", robot_state.sensor_state.get("roll", 0.0))
+                    raw_p = robot_state.sensor_state.get("raw_pitch")
+                    raw_r = robot_state.sensor_state.get("raw_roll")
+                    have_imu = raw_p is not None and raw_r is not None
+                    if target == "imu" and not have_imu:
+                        self.send_json({"status": "error", "message":
+                                        "no IMU reading yet: connect the rover first"}, code=409)
+                        return
+                    if target in ["imu", "all"] and have_imu:   # "all" skips a missing IMU
                         calib_update["imu_offsets"] = {
                             "pitch": raw_p,
                             "roll": raw_r,
@@ -991,10 +976,6 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
                     self.send_json({"status": "ok", "mode": mode})
                 else:
                     self.send_json({"status": "error", "message": "Invalid mode"})
-            elif path == "/api/sensors/sim":
-                with robot_state.lock:
-                    robot_state.set_sensor_source('sim' if data.get("simulating", True) else 'off')
-                self.send_json({"status": "ok", "simulating": robot_state.sensor_state["simulating"]})
             elif path == "/api/sensors/connect":
                 port = str(data.get("port", "")).strip()
                 baud = int(data.get("baudrate", 115200))
@@ -1316,75 +1297,6 @@ def sensor_wifi_url(ip):
     return cur if cur.endswith('/data') else cur + "/data"
 
 
-def simulate_sensor_tick():
-    """One second of demo telemetry (the 'sim' source)."""
-    t = time.time()
-    temp_d = round(24.5 + 1.2 * math.sin(0.2 * t), 2)
-    hum = round(48.0 + 3.5 * math.cos(0.15 * t), 2)
-    temp_b = round(24.8 + 0.9 * math.sin(0.25 * t), 2)
-    pres = round(1013.25 + 2.5 * math.sin(0.1 * t), 2)
-    ax = round(0.4 * math.sin(0.5 * t), 2)
-    ay = round(0.3 * math.cos(0.4 * t), 2)
-    az = round(9.81 + 0.1 * math.sin(0.8 * t), 2)
-    gx = round(0.02 * math.sin(0.6 * t), 3)
-    gy = round(0.01 * math.cos(0.5 * t), 3)
-    gz = round(-0.01 * math.sin(0.3 * t), 3)
-    gas = int(410 + 25 * math.sin(0.1 * t) + random.randint(-4, 4))
-    water = int(120 + 15 * math.sin(0.05 * t) + random.randint(-2, 2))
-    uptime = int(t * 1000) % 10000000
-
-    block = [
-        "-----------------------------------",
-        f"DHT11   temp: {temp_d:.1f} C   hum: {hum:.1f} %",
-        f"BMP280  temp: {temp_b:.1f} C   pres: {pres:.1f} hPa",
-        f"Gas:    {gas}   Water: {water}",
-        "Flame:  clear",
-        f"Accel:  X={int(ax*1671)} Y={int(ay*1671)} Z={int(az*1671)}",
-        f"Gyro:   X={int(gx*7500)} Y={int(gy*7500)} Z={int(gz*7500)}",
-        "GPS:    17.38504, 78.48667   sats: 7",
-        "Alert:  OK",
-        "-----------------------------------"
-    ]
-
-    with robot_state.lock:
-        robot_state.sensor_state["temp_dht"] = temp_d
-        robot_state.sensor_state["temperature"] = temp_d
-        robot_state.sensor_state["humidity"] = hum
-        robot_state.sensor_state["temp_bmp"] = temp_b
-        robot_state.sensor_state["pressure"] = pres
-        robot_state.sensor_state["gas"] = gas
-        robot_state.sensor_state["water"] = water
-        robot_state.sensor_state["flame"] = 1
-        robot_state.sensor_state["alert"] = "OK"
-        robot_state.sensor_state["accel"] = {"x": ax, "y": ay, "z": az}
-        robot_state.sensor_state["gyro"] = {"x": gx, "y": gy, "z": gz}
-        robot_state.sensor_state["lat"] = 17.385044
-        robot_state.sensor_state["lng"] = 78.486671
-        robot_state.sensor_state["gps_valid"] = True
-        robot_state.sensor_state["gps_sats"] = 7
-        robot_state.sensor_state["sd_ok"] = True
-        robot_state.sensor_state["uptime_ms"] = uptime
-
-        pitch_rad = math.atan2(ay, math.sqrt(ax**2 + az**2))
-        roll_rad = math.atan2(-ax, az)
-        raw_p = round(pitch_rad * (180.0 / math.pi), 1)
-        raw_r = round(roll_rad * (180.0 / math.pi), 1)
-        robot_state.sensor_state["raw_pitch"] = raw_p
-        robot_state.sensor_state["raw_roll"] = raw_r
-        imu_t = robot_state.calibration.get("imu_offsets", {})
-        p_off = float(imu_t.get("pitch", 0.0))
-        r_off = float(imu_t.get("roll", 0.0))
-        robot_state.sensor_state["pitch"] = round(raw_p - p_off, 1)
-        robot_state.sensor_state["roll"] = round(raw_r - r_off, 1)
-
-        for line in block:
-            robot_state.sensor_state["raw_log"].append(line)
-        if len(robot_state.sensor_state["raw_log"]) > 100:
-            robot_state.sensor_state["raw_log"] = robot_state.sensor_state["raw_log"][-100:]
-        for line in block:
-            console_log.add('sensors', 'data', line)
-
-
 def read_sensor_serial(gen, port, baud):
     """Read the rover over serial until the source changes. Raises on errors."""
     import serial
@@ -1405,7 +1317,7 @@ def read_sensor_serial(gen, port, baud):
 
 
 def sensor_background_loop():
-    """Feed rover telemetry from the selected source: sim, Wi-Fi (/data JSON) or serial."""
+    """Feed rover telemetry from the selected source: Wi-Fi (/data JSON) or serial."""
     wifi_failures = 0
     while True:
         with robot_state.lock:
@@ -1414,10 +1326,7 @@ def sensor_background_loop():
             port = robot_state.sensor_state.get("port", "/dev/ttyUSB0")
             baud = robot_state.sensor_state.get("baudrate", 115200)
         try:
-            if src == 'sim':
-                simulate_sensor_tick()
-                time.sleep(1.0)
-            elif src == 'wifi':
+            if src == 'wifi':
                 try:
                     req = urllib.request.Request(target, headers={"User-Agent": "RobotArm-Server/1.0"})
                     with urllib.request.urlopen(req, timeout=2.0) as resp:

@@ -271,7 +271,6 @@
             <h2>Rover Sensor Telemetry</h2>
             <div class="tile-header-actions">
               <button id="btn-load-sensor-view" class="btn btn-outline btn-sm" title="Show the IMU in the 3D viewport">👁️ 3D</button>
-              <button id="btn-sensors-sim" class="btn btn-warning btn-sm">⏸️ Stop Simulation</button>
             </div>
           </div>
 
@@ -280,11 +279,11 @@
               🚨 EMERGENCY: FIRE DETECTED ON ROVER! 🚨
             </div>
 
-            <!-- Connection Card: simulated, Wi-Fi (/data JSON) or serial -->
+            <!-- Connection Card: Wi-Fi (/data JSON) or serial -->
             <div class="card sensor-conn-card">
               <div class="card-title flex-between">
                 <span>🔌 Connection</span>
-                <span id="pill-sensor-wifi-status" class="status-pill status-info">Simulated</span>
+                <span id="pill-sensor-wifi-status" class="status-pill">Not connected</span>
               </div>
               <div id="sensor-link-detail" class="link-detail link-detail-block"></div>
 
@@ -310,7 +309,7 @@
             <div class="card sensor-data-card">
               <div class="card-title flex-between">
                 <span>🌡️ Climate (DHT11 &amp; BMP-280)</span>
-                <span id="badge-dht-status" class="status-pill status-online">OK</span>
+                <span id="badge-dht-status" class="status-pill">No data</span>
               </div>
               <div class="sensor-metrics-grid">
                 <div class="metric-box">
@@ -344,13 +343,13 @@
             <div class="card sensor-data-card">
               <div class="card-title flex-between">
                 <span>⚠️ Hazards</span>
-                <span id="badge-hazard-status" class="status-pill status-online">Safe</span>
+                <span id="badge-hazard-status" class="status-pill">No data</span>
               </div>
               <div class="sensor-metrics-grid">
                 <div class="metric-box">
                   <div class="flex-between">
                     <span class="metric-label">💨 Combustible gas</span>
-                    <span id="badge-gas-status" class="status-pill status-online">Clean Air</span>
+                    <span id="badge-gas-status" class="status-pill">No data</span>
                   </div>
                   <span id="val-gas" class="metric-val">-- / 4095</span>
                   <div class="meter-bar"><div id="meter-gas" class="meter-fill meter-gas-fill" style="width: 0%"></div></div>
@@ -358,7 +357,7 @@
                 <div class="metric-box">
                   <div class="flex-between">
                     <span class="metric-label">💧 Water level</span>
-                    <span id="badge-water-status" class="status-pill status-online">Dry</span>
+                    <span id="badge-water-status" class="status-pill">No data</span>
                   </div>
                   <span id="val-water" class="metric-val">-- / 4095</span>
                   <div class="meter-bar"><div id="meter-water" class="meter-fill blue" style="width: 0%"></div></div>
@@ -366,11 +365,11 @@
                 <div class="metric-box metric-wide">
                   <div class="flex-between">
                     <span class="metric-label">🔥 Flame sensor (DO)</span>
-                    <span id="badge-flame-status" class="status-pill status-online">✅ Clear</span>
+                    <span id="badge-flame-status" class="status-pill">No data</span>
                   </div>
                   <div class="flame-row">
-                    <span id="val-flame" class="readout-pill ok">Pin DO: HIGH (Clear)</span>
-                    <span id="val-alert-state" class="status-pill status-online">Alert: OK</span>
+                    <span id="val-flame" class="readout-pill">Pin DO: --</span>
+                    <span id="val-alert-state" class="status-pill">Alert: --</span>
                   </div>
                 </div>
               </div>
@@ -382,7 +381,7 @@
                 <span>🧭 MPU6050 IMU</span>
                 <span style="display:flex;gap:6px;align-items:center;">
                   <button id="btn-tare-imu" class="btn btn-outline btn-xs" title="Zero pitch and roll at the current orientation">🎯 Tare Horizon</button>
-                  <span id="badge-imu-status" class="status-pill status-online">Active</span>
+                  <span id="badge-imu-status" class="status-pill">No data</span>
                 </span>
               </div>
               <div class="imu-grid">
@@ -410,13 +409,13 @@
             <div class="card sensor-data-card">
               <div class="card-title flex-between">
                 <span>🛰️ GPS &amp; storage</span>
-                <span id="badge-gps-status" class="status-pill status-offline">No Fix</span>
+                <span id="badge-gps-status" class="status-pill">No data</span>
               </div>
               <div class="sensor-metrics-grid">
                 <div class="metric-box">
                   <span class="metric-label">Coordinates (lat, lng)</span>
                   <span id="val-gps-coords" class="metric-val sm">--</span>
-                  <span id="val-gps-sats" class="metric-subval">🛰️ 0 satellites</span>
+                  <span id="val-gps-sats" class="metric-subval">🛰️ -- satellites</span>
                 </div>
                 <div class="metric-box">
                   <span class="metric-label">microSD logging</span>
