@@ -27,7 +27,7 @@ From the project root directory:
 ./launch_web_dashboard.sh                  # add --host 0.0.0.0 for phones/tablets (no auth!)
 ```
 
-> ⛔ **E-STOP:** both dashboards have an E-STOP button in the header (or press **Esc**). It stops all dashboard-driven motion and locks the controls. It is a software stop and does not cut servo power. See [Safety Controls](docs/DASHBOARD_AND_RVIZ_GUIDE.md#-4-safety-controls).
+> ⛔ **E-STOP:** both dashboards have an E-STOP button in the header (or press **Esc**). It stops all dashboard-driven motion and locks the controls. It is a software stop and does not cut servo power. See [Safety Controls](docs/DASHBOARD_AND_RVIZ_GUIDE.md#-5-safety-controls).
 
 > **First time running?** See the [🛠️ Quick Installation Guide](docs/QUICK_INSTALL_GUIDE.md) to set up ROS 2 Jazzy, RViz2, and `xdotool` in under 3 minutes.
 
@@ -40,6 +40,9 @@ From the project root directory:
   - Light and dark themes; works at phone width.
   - Live status badges for the ROS bridge, Quard Bot and sensor node.
   - Runs UI-only without ROS 2.
+- **Connections & consoles** (every tab, both UIs):
+  - Live link state with the reason when something is wrong, ping round trip, ⟳ Reconnect, and port / IP changes without a restart.
+  - Consoles with colour, filter, find, pause, copy, save and command history; raw commands to the arm ESP32 or the Quard Bot.
 - **Safety**:
   - E-STOP (button or **Esc**) in both UIs.
   - The Quard firmware's 2 s locomotion watchdog is honoured: the active gait is resent every second.
@@ -134,7 +137,7 @@ From the project root directory:
 ## 📚 Documentation Reference
 
 - **[Quick Installation Guide](docs/QUICK_INSTALL_GUIDE.md)**: ROS 2 Jazzy, RViz2, and `xdotool` setup.
-- **[Dashboard & RViz Docking Guide](docs/DASHBOARD_AND_RVIZ_GUIDE.md)**: Both UIs, control panels, E-STOP and safety, keyboard shortcuts, web dashboard options, troubleshooting.
+- **[Dashboard & RViz Docking Guide](docs/DASHBOARD_AND_RVIZ_GUIDE.md)**: Both UIs, control panels, connections & consoles, E-STOP and safety, keyboard shortcuts, web dashboard options, troubleshooting.
 - **[Project Context & Handoff](PROJECT_CONTEXT_README.md)**: Phobos patch details, gripper mimic joint math, and developer notes.
 - **[Quard Bot Firmware & Hardware](Quard%20bot/README.md)**: Pinouts, OLED animations, and Web AP instructions.
 - **[Robotic Arm Carrier PCB](robotic_arm_motherboard/README.md)**: Custom KiCad carrier board and Gerbers.

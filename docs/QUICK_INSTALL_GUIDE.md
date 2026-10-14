@@ -85,7 +85,7 @@ The dashboard launchers (`launch_dashboard.sh`, `launch_quard_dashboard.sh`, `la
 
 Web dashboard options: `--no-commander` (don't start `servo_serial_commander`), `--host 0.0.0.0` (reachable from phones/tablets on your network; there is no authentication), `--port N`.
 
-> ⛔ Both dashboards have an **E-STOP** in the header (or press **Esc**). It is a software stop, so keep a hardware power switch for the servos. Details: [Dashboard guide → Safety Controls](DASHBOARD_AND_RVIZ_GUIDE.md#-4-safety-controls).
+> ⛔ Both dashboards have an **E-STOP** in the header (or press **Esc**). It is a software stop, so keep a hardware power switch for the servos. Details: [Dashboard guide → Safety Controls](DASHBOARD_AND_RVIZ_GUIDE.md#-5-safety-controls).
 
 ---
 

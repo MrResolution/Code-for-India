@@ -188,6 +188,9 @@ python3 scripts/convert_3mf_to_stl.py path/to/input.3mf extracted_stls
 - [x] Desktop app theme centralised (`THEME`, `apply_app_theme`, `button_qss` in `calibrated_joint_gui.py`); window layout saved to `~/.config/CodeForIndia/RobotDashboard.conf`.
 - [x] Web dashboard: light/dark + responsive layout, real status badges (`/api/state` reports `ros_bridge` and `comm_mode`), toasts instead of `alert()`, saved limits/home loaded on start-up.
 - [x] Quard commands match the firmware: channel moves send `deg` (not `angle`); active gait is resent every 1 s to satisfy the 2 s `LOCOMOTION_WATCHDOG_MS`.
+- [x] Link monitoring: `servo_serial_commander` publishes `/esp32_link_state` (JSON, transient local) and `/esp32_console`, and accepts `RAW:` / `LINK:` commands (raw joint CMDs clamped to limits).
+- [x] Connection cards + shared console in every tab of both dashboards (`ConsoleWidget` in the Qt GUI; `ConsolePanel` + `/api/console` in the web UI). Late Quard motion commands (>2 s) are dropped, never replayed.
+- [x] No fake rover data: the simulated sensor source and every placeholder reading were removed from both dashboards and the web server. Unknown readings are `None` / "--", JSON replies only update the fields they contain, and changing source clears readings.
 - [ ] Quard firmware has no `face` command; the OLED face buttons get `400 Bad Args`.
 - [ ] Desktop app: arm **Start Sim** also starts the Quard Bot walking. Decide whether to decouple them.
 - [ ] `launch_gesture_teleop.sh` and `launch_quard_rviz.sh` still hardcode `/home/sabo/Documents/learn_/Hardware`.
