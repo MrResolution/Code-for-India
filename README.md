@@ -24,8 +24,10 @@ From the project root directory:
 ./launch_dual_dashboard.sh
 
 # 🌐 Launch Standalone WebGL 3D Dashboard (Browser: http://localhost:8000)
-./launch_web_dashboard.sh
+./launch_web_dashboard.sh                  # add --host 0.0.0.0 for phones/tablets (no auth!)
 ```
+
+> ⛔ **E-STOP:** both dashboards have an E-STOP button in the header (or press **Esc**). It stops all dashboard-driven motion and locks the controls. It is a software stop and does not cut servo power. See [Safety Controls](docs/DASHBOARD_AND_RVIZ_GUIDE.md#-4-safety-controls).
 
 > **First time running?** See the [🛠️ Quick Installation Guide](docs/QUICK_INSTALL_GUIDE.md) to set up ROS 2 Jazzy, RViz2, and `xdotool` in under 3 minutes.
 
@@ -34,22 +36,27 @@ From the project root directory:
 ## 🏗️ System Highlights
 
 - **Embedded Native RViz2**: Seamlessly docked into the desktop dashboard frame via X11 reparenting with strict PID and window-class isolation.
-- **Standalone WebGL Fallback**: Runs without ROS 2 dependencies via Three.js at `http://localhost:8000`.
+- **Web Dashboard**: Three.js twin at `http://localhost:8000`.
+  - Light and dark themes; works at phone width.
+  - Live status badges for the ROS bridge, Quard Bot and sensor node.
+  - Runs UI-only without ROS 2.
+- **Safety**:
+  - E-STOP (button or **Esc**) in both UIs.
+  - The Quard firmware's 2 s locomotion watchdog is honoured: the active gait is resent every second.
 - **Quard Bot Quadruped Control**:
   - D-Pad & keyboard locomotion (WASD / Space) with 4-phase gait trajectory generation.
   - Quick stance presets (`Stand 45°`, `Base Zero 0°`, `Crouch 30°`, `High 60°`, `Wave`).
   - PCA9685 8-channel live servo slider management.
 - **Robotic Arm Control**:
   - Joint angle sliders with real-time degree and radian readouts.
-  - "📍 Set Low" and "📍 Set High" safety boundary calibration.
-  - Smooth homing (`🏠 Go Home`) and automated sinusoidal motion simulation.
+  - "📍 Set Low" and "📍 Set High" safety boundary calibration (the web UI shows the saved range on each slider).
+  - Smooth homing (`🏠 Go Home`), `📌 Set Home`, and automated sinusoidal motion simulation.
+  - Save calibration with `💾 Save Config` or Ctrl+S (desktop).
 - **Rover Telemetry & Sensors**:
   - Climate: DHT11 & BMP280 temperature, humidity, and barometric pressure.
   - Hazards: MQ Gas, water level, and optical flame detector with emergency fire alerts.
   - Motion: 6-DOF MPU6050 IMU accelerometer, gyroscope, and pitch/roll tilt.
   - Navigation: NEO-6M GPS coordinates and satellite lock telemetry.
-- **Visual SLAM**:
-  - ESP32-CAM live stream HUD, 2D top-down map, VL53L1X ToF distance tracking, and ORB visual odometry.
 
 ---
 
@@ -71,6 +78,7 @@ From the project root directory:
 │   └── src/servo_joint_publisher/  # Main ROS 2 package
 │       ├── servo_joint_publisher/
 │       │   ├── calibrated_joint_gui.py   # PyQt5 Dashboard with embedded RViz2 container
+│       │   ├── servo_serial_commander.py # Sends /joint_states to the arm ESP32 (serial or Wi-Fi)
 │       │   ├── servo_serial_publisher.py # ESP32 USB serial joint state reader
 │       │   ├── servo_simulator.py        # Automated trajectory generator
 │       │   └── web_dashboard/            # Three.js WebGL Digital Twin server & frontend
@@ -126,7 +134,7 @@ From the project root directory:
 ## 📚 Documentation Reference
 
 - **[Quick Installation Guide](docs/QUICK_INSTALL_GUIDE.md)**: ROS 2 Jazzy, RViz2, and `xdotool` setup.
-- **[Dashboard & RViz Docking Guide](docs/DASHBOARD_AND_RVIZ_GUIDE.md)**: Architecture, safety window filters, and control panel features.
+- **[Dashboard & RViz Docking Guide](docs/DASHBOARD_AND_RVIZ_GUIDE.md)**: Both UIs, control panels, E-STOP and safety, keyboard shortcuts, web dashboard options, troubleshooting.
 - **[Project Context & Handoff](PROJECT_CONTEXT_README.md)**: Phobos patch details, gripper mimic joint math, and developer notes.
 - **[Quard Bot Firmware & Hardware](Quard%20bot/README.md)**: Pinouts, OLED animations, and Web AP instructions.
 - **[Robotic Arm Carrier PCB](robotic_arm_motherboard/README.md)**: Custom KiCad carrier board and Gerbers.

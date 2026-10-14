@@ -57,6 +57,7 @@ This repository contains the complete codebase, URDF robot models, 3D STL mesh a
             └── servo_joint_publisher/
                 ├── __init__.py
                 ├── calibrated_joint_gui.py   # PyQt5 Dashboard with embedded RViz2 container
+                ├── servo_serial_commander.py # /joint_states → arm ESP32 (serial or Wi-Fi UDP), owns the serial port
                 ├── servo_serial_publisher.py # Microcontroller USB serial state reader node
                 ├── servo_simulator.py        # Automated 50 Hz sinusoidal trajectory generator node
                 └── web_dashboard/            # Three.js WebGL Digital Twin server & frontend
@@ -183,3 +184,12 @@ python3 scripts/convert_3mf_to_stl.py path/to/input.3mf extracted_stls
 - [x] Phobos export bug fixes applied directly to `blender2phobos.py` and `xmlrobot.py`.
 - [x] `unnamed.urdf` mesh paths updated to absolute `file://` URLs for RViz2 rendering.
 - [x] Mimic joint sign conventions documented for parallel gear gripper.
+- [x] Software E-STOP (button / Esc) in both dashboards: stops sim, homing, gesture mode and Quard gaits, sends `stand`, locks motion controls.
+- [x] Desktop app theme centralised (`THEME`, `apply_app_theme`, `button_qss` in `calibrated_joint_gui.py`); window layout saved to `~/.config/CodeForIndia/RobotDashboard.conf`.
+- [x] Web dashboard: light/dark + responsive layout, real status badges (`/api/state` reports `ros_bridge` and `comm_mode`), toasts instead of `alert()`, saved limits/home loaded on start-up.
+- [x] Quard commands match the firmware: channel moves send `deg` (not `angle`); active gait is resent every 1 s to satisfy the 2 s `LOCOMOTION_WATCHDOG_MS`.
+- [ ] Quard firmware has no `face` command; the OLED face buttons get `400 Bad Args`.
+- [ ] Desktop app: arm **Start Sim** also starts the Quard Bot walking. Decide whether to decouple them.
+- [ ] `launch_gesture_teleop.sh` and `launch_quard_rviz.sh` still hardcode `/home/sabo/Documents/learn_/Hardware`.
+
+See [`docs/DASHBOARD_AND_RVIZ_GUIDE.md`](docs/DASHBOARD_AND_RVIZ_GUIDE.md) for the user-facing description of both dashboards.

@@ -12,7 +12,7 @@ This guide walks you through setting up **ROS 2 Jazzy**, **RViz2**, and the requ
 - **Hardware Targets**:
   - 🦾 6-DOF Robotic Arm with Geared Parallel Gripper
   - 🤖 Sesame 8-Servo Quadruped ("Quard Bot")
-  - 🚀 ESP32 Rover Telemetry & SLAM Node
+  - 🚀 ESP32 Rover Telemetry Node
 
 ---
 
@@ -44,10 +44,15 @@ sudo apt install -y \
   ros-jazzy-xacro \
   python3-colcon-common-extensions
 
-# Step 6: Enable ROS 2 environment in shell
+# Step 6: Desktop dashboard (PyQt5), embedded WebGL twin, serial access
+sudo apt install -y python3-pyqt5 python3-pyqt5.qtwebengine python3-serial
+
+# Step 7: Enable ROS 2 environment in shell
 echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
 source /opt/ros/jazzy/setup.bash
 ```
+
+> If a project virtualenv exists at `.venv/`, `launch_dashboard.sh` uses its Python instead of the system one; install `PyQt5` and `pyserial` there too.
 
 ---
 
@@ -56,7 +61,7 @@ source /opt/ros/jazzy/setup.bash
 Once ROS 2 is installed, build the project workspace:
 
 ```bash
-cd /home/sabo/Documents/learn_/Hardware/ros2_ws
+cd ros2_ws        # from the repository root
 source /opt/ros/jazzy/setup.bash
 colcon build --symlink-install
 source install/setup.bash
@@ -76,6 +81,12 @@ From the repository root directory, run any of the dedicated launch scripts:
 | **🌐 WebGL Browser Twin** | `./launch_web_dashboard.sh` | Three.js Web (http://localhost:8000) |
 | **🎮 Gesture Teleoperation** | `./launch_gesture_teleop.sh` | MediaPipe Hand Tracking |
 
+The dashboard launchers (`launch_dashboard.sh`, `launch_quard_dashboard.sh`, `launch_dual_dashboard.sh`, `launch_web_dashboard.sh`) find the project from their own location (`ROBOT_PROJECT_DIR`), so the repository can live anywhere. `launch_gesture_teleop.sh` and `launch_quard_rviz.sh` still expect it at `/home/sabo/Documents/learn_/Hardware`.
+
+Web dashboard options: `--no-commander` (don't start `servo_serial_commander`), `--host 0.0.0.0` (reachable from phones/tablets on your network; there is no authentication), `--port N`.
+
+> ⛔ Both dashboards have an **E-STOP** in the header (or press **Esc**). It is a software stop, so keep a hardware power switch for the servos. Details: [Dashboard guide → Safety Controls](DASHBOARD_AND_RVIZ_GUIDE.md#-4-safety-controls).
+
 ---
 
 ## 🔍 4. Verification Checklist
@@ -87,6 +98,7 @@ which ros2      # Should output: /opt/ros/jazzy/bin/ros2
 which rviz2     # Should output: /opt/ros/jazzy/bin/rviz2
 which xdotool   # Should output: /usr/bin/xdotool
 which xprop     # Should output: /usr/bin/xprop
+python3 -c "import PyQt5, serial; print('PyQt5 + pyserial OK')"
 ```
 
 ---

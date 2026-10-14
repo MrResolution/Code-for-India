@@ -75,6 +75,23 @@ Quard bot/
 - **Quick Actions**: HI Wave animation, Stand (45°), Base Zero (0°), High Stance (60°)
 - **Live Channel Sliders**: Individual 0°–180° adjustment for all 8 leg channels
 
+### HTTP Command API (used by both project dashboards)
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /cmd?...` | Send a command (parameters below). Replies `200 OK`, or `400 Bad Args` if nothing was recognised. |
+| `GET /status` (alias `/state`) | JSON telemetry |
+| `GET /` | The built-in web page |
+
+| Parameter | Values |
+|---|---|
+| `move` (or `mode`, `cmd`) | `w`/`forward`, `b`/`backward`, `l`/`left`, `r`/`right`, `s`/`stand`/`stop`, `z`/`zero`, `hi`/`wave`, `crouch`, `high` |
+| `ch` + `deg` (or `val`) | One channel `0`–`7` to an angle, e.g. `/cmd?ch=3&deg=70`. The angle **must** be in `deg` or `val`; if neither is present it reads as 0°. |
+| `all` | Every channel to one angle, e.g. `/cmd?all=45` |
+| `speed` (or `delay`) | Gait step delay in ms, `50`–`800` |
+
+**Locomotion watchdog:** while walking, the robot returns to stand if no `/cmd` request arrives for 2 s (`LOCOMOTION_WATCHDOG_MS`). Clients must repeat the active gait (the dashboards resend it every second). There is no OLED `face` command yet.
+
 ---
 
 ## 🛡️ Anti-Surge & Power Protection

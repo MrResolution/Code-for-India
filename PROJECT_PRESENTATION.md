@@ -394,8 +394,9 @@ Monocular cameras cannot determine absolute metric distance without depth sensor
 - **Embedded RViz2 Container**: 3D digital twin rendered directly inside the Qt window.
 - **3 Dedicated Subsystem Tabs**:
   - `🦾 Robot Arm`: Slider limits, S-curve homing, sync offsets.
-  - `🤖 Quard Bot`: Gait triggers & stance buttons.
-  - `🚀 Rover`: Motor speeds & steering overrides.
+  - `🤖 Quard Bot`: Gait triggers, stance buttons, 8-channel servo trims.
+  - `🚀 Rover`: Climate, hazard, IMU and GPS telemetry.
+- **E-STOP**: header button or **Esc** halts all dashboard-driven motion and locks controls.
 - **Live Terminal & Telemetry**: Serial & Wi-Fi console with connection heartbeat badges (🟢 Connected / 🔴 Disconnected).
 
 </div>
@@ -404,8 +405,9 @@ Monocular cameras cannot determine absolute metric distance without depth sensor
 ### 2. WebGL 3D Web Dashboard (`web_dashboard`)
 - **Zero-Install Browser Access**: Runs on `http://localhost:8000`.
 - **Three.js 3D Viewport**: Interactive orbit/pan/zoom view of the robot models.
-- **REST & WebSocket API**: Fast bi-directional communication between mobile phones/tablets and ROS 2 nodes.
-- **Universal Cross-Platform**: Works across Linux, macOS, Android, and iOS.
+- **REST API**: polled JSON endpoints bridge the browser and ROS 2.
+- **Phones & Tablets**: responsive light/dark layout. Start with `--host 0.0.0.0` to allow other devices on the network.
+- **Same safety controls**: E-STOP and live link-status badges.
 
 </div>
 </div>
