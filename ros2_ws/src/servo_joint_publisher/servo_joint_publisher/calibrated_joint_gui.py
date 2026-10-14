@@ -3,8 +3,11 @@
 ROS 2 Node: calibrated_joint_gui
 ---------------------------------
 An interactive PyQt5 Dashboard with:
-  • Live Connection Status Monitor Badge (🟢 Connected / 🔴 Disconnected).
-  • Integrated Serial & Wi-Fi Network Console Monitor with manual command input.
+  • Connection card per robot: live state, latency, last reply, reconnect,
+    port / host settings (arm state comes from servo_serial_commander's
+    /esp32_link_state; Quard Bot over HTTP; rover over Wi-Fi or serial).
+  • Shared console in every tab: colour-coded, filter, find, pause, copy,
+    save, command input with history.
   • Integrated RViz 3D Viewport container embedded side-by-side.
   • "⚡ Sim Speed": Adjustable simulation speed slider (0.1x to 5.0x).
   • "🏠 Go Home": Smooth, slow homing movement from any joint position over 2.0s.
@@ -28,15 +31,21 @@ import urllib.parse
 import threading
 import re
 import random
+import html
+import glob
+import socket
+import collections
+import urllib.error
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QSlider, QDoubleSpinBox, QPushButton, QGroupBox,
     QScrollArea, QMessageBox, QSplitter, QTextEdit, QLineEdit,
-    QTabWidget, QGridLayout, QComboBox, QShortcut
+    QTabWidget, QGridLayout, QComboBox, QShortcut, QPlainTextEdit,
+    QFileDialog, QCheckBox
 )
 from PyQt5.QtCore import Qt, QTimer, QProcess, QProcessEnvironment, pyqtSignal, QCoreApplication, QUrl, QSettings
-from PyQt5.QtGui import QFont, QWindow, QTextCursor, QPainter, QPen, QBrush, QColor, QPainterPath, QRadialGradient, QLinearGradient, QPalette, QKeySequence
+from PyQt5.QtGui import QFont, QWindow, QTextCursor, QPainter, QPen, QBrush, QColor, QPainterPath, QRadialGradient, QLinearGradient, QPalette, QKeySequence, QFontDatabase
 
 try:
     QCoreApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
@@ -67,6 +76,14 @@ try:
     from rclpy.node import Node
     from sensor_msgs.msg import JointState
     from std_msgs.msg import String as StringMsg
+    from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
+    # Must match servo_serial_commander: latched link state, volatile console.
+    LINK_STATE_QOS = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                                history=HistoryPolicy.KEEP_LAST)
+    CONSOLE_QOS = QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE,
+                             durability=DurabilityPolicy.VOLATILE,
+                             history=HistoryPolicy.KEEP_LAST)
     ROS2_AVAILABLE = True
 except ImportError:
     ROS2_AVAILABLE = False
@@ -154,6 +171,18 @@ APP_QSS = f"""
     QDoubleSpinBox, QSpinBox, QLineEdit, QComboBox, QTextEdit {{
         selection-background-color: {THEME['accent']}; selection-color: #ffffff;
     }}
+    QLineEdit {{
+        background-color: #0f1115; color: {THEME['text']};
+        border: 1px solid {THEME['border']}; border-radius: 4px; padding: 3px 6px;
+    }}
+    QLineEdit:focus {{ border-color: {THEME['accent']}; }}
+    QComboBox QLineEdit {{ border: none; background: transparent; padding: 0; }}
+    QCheckBox {{ spacing: 6px; color: {THEME['text']}; }}
+    QCheckBox::indicator {{
+        width: 14px; height: 14px; border: 1px solid #5b6273; border-radius: 3px; background: #0f1115;
+    }}
+    QCheckBox::indicator:checked {{ background: {THEME['accent']}; border-color: {THEME['accent']}; }}
+    QCheckBox:disabled {{ color: #6b7280; }}
 """
 
 
@@ -213,6 +242,408 @@ def section_label(text):
     lbl.setStyleSheet(f"color: {THEME['muted']}; font-size: 10px; font-weight: bold; letter-spacing: 1px;")
     lbl.setFixedWidth(92)
     return lbl
+
+
+def group_box_qss(accent):
+    """Dark group box with a coloured title (console / connection cards)."""
+    return (f"QGroupBox {{ font-weight: bold; font-size: 12px; border: 1px solid {THEME['border']}; "
+            f"border-radius: 8px; margin-top: 8px; padding-top: 10px; background-color: {THEME['sunken']}; "
+            f"color: {accent}; }} "
+            f"QGroupBox::title {{ subcontrol-origin: margin; left: 8px; padding: 0 4px; color: {accent}; }}")
+
+
+def muted_label(text=""):
+    lbl = QLabel(text)
+    lbl.setStyleSheet(f"color: {THEME['muted']}; font-size: 11px;")
+    lbl.setWordWrap(True)
+    return lbl
+
+
+def _ui_settings():
+    """The INI file the main window keeps its layout in (also console history, hosts)."""
+    return QSettings(QSettings.IniFormat, QSettings.UserScope, "CodeForIndia", "RobotDashboard")
+
+
+def list_serial_ports():
+    """[(device, description)] for the serial ports present right now."""
+    try:
+        from serial.tools import list_ports
+        found = [(p.device, p.description if p.description and p.description != 'n/a' else '')
+                 for p in list_ports.comports()]
+    except Exception:
+        found = [(d, '') for pattern in ('/dev/ttyUSB*', '/dev/ttyACM*') for d in sorted(glob.glob(pattern))]
+    return sorted(found)
+
+
+def explain_serial_error(err):
+    """Short reason plus the usual fix for a serial port failure."""
+    text = str(err)
+    errno_ = getattr(err, 'errno', None)
+    if errno_ == 13 or 'Permission denied' in text or 'PermissionError' in text:
+        return "permission denied: add your user to the 'dialout' group, then log out and back in"
+    if errno_ == 2 or 'No such file' in text or 'FileNotFoundError' in text:
+        return "port not found: is the board plugged in? Rescan the port list"
+    if errno_ == 16 or 'busy' in text.lower():
+        return "port busy: another program has it open"
+    if 'readiness to read but returned no data' in text:
+        return "device disconnected (unplugged or reset)"
+    return text
+
+
+def describe_net_error(err):
+    """Plain-language reason for an HTTP request failure."""
+    if isinstance(err, urllib.error.HTTPError):
+        return f"HTTP {err.code} {err.reason}"
+    reason = getattr(err, 'reason', err)
+    if isinstance(reason, socket.gaierror):
+        return "host name not found (a .local name needs mDNS; try the IP address)"
+    if isinstance(reason, (socket.timeout, TimeoutError)) or 'timed out' in str(reason):
+        return "no reply (timed out)"
+    if isinstance(reason, ConnectionRefusedError):
+        return "connection refused (board up, but its web server isn't running?)"
+    if isinstance(reason, OSError) and getattr(reason, 'errno', None) in (101, 113, 10051, 10065):
+        return "network unreachable (is this computer on the robot's Wi-Fi?)"
+    return str(reason)
+
+
+def infer_console_kind(text):
+    """Console kind for older log calls that only carry an emoji."""
+    t = text.lstrip()
+    if t.startswith(('🔴', '❌', '⛔', '✗')):
+        return 'error'
+    if t.startswith(('⚠', '🟡')):
+        return 'warn'
+    if t.startswith(('🟢', '✅', '💾', '✓')):
+        return 'ok'
+    if t.startswith(('📤', '→')):
+        return 'tx'
+    return 'info'
+
+
+# (background, text, dot) per state
+_PILL_COLORS = {
+    'ok':    ('#0b3b2c', '#6ee7b7', '#10b981'),
+    'warn':  ('#3d2a07', '#fcd34d', '#f59e0b'),
+    'error': ('#3f0d16', '#fda4af', '#f43f5e'),
+    'busy':  ('#0b2f45', '#7dd3fc', '#0ea5e9'),
+    'idle':  ('#2c3039', '#cbd5e1', '#64748b'),
+}
+
+
+class StatusPill(QLabel):
+    """Rounded "● Label" badge for a link state."""
+
+    def __init__(self, text="", kind='idle', parent=None):
+        super().__init__(parent)
+        self.kind = None
+        self.setTextFormat(Qt.RichText)
+        self.set_state(kind, text)
+
+    def set_state(self, kind, text):
+        bg, fg, dot = _PILL_COLORS.get(kind, _PILL_COLORS['idle'])
+        self.kind = kind
+        self.plain_text = text
+        self.setText(f'<span style="color:{dot}">●</span>&nbsp;{html.escape(text)}')
+        self.setStyleSheet(f"QLabel {{ background-color: {bg}; color: {fg}; border: 1px solid {dot}; "
+                           f"border-radius: 10px; padding: 2px 10px; font-weight: bold; font-size: 12px; }}")
+
+
+class HistoryLineEdit(QLineEdit):
+    """Line edit with shell-style Up/Down history, kept between runs."""
+
+    def __init__(self, history_key=None, parent=None):
+        super().__init__(parent)
+        self.history_key = history_key
+        self.history = []
+        if history_key:
+            saved = _ui_settings().value(history_key, [])
+            if isinstance(saved, str):
+                saved = [saved]
+            self.history = [h for h in (saved or []) if isinstance(h, str)][-50:]
+        self.hist_idx = len(self.history)
+
+    def remember(self, text):
+        if not text:
+            return
+        if text in self.history:
+            self.history.remove(text)
+        self.history.append(text)
+        self.history = self.history[-50:]
+        self.hist_idx = len(self.history)
+        if self.history_key:
+            _ui_settings().setValue(self.history_key, self.history)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Up and self.history:
+            self.hist_idx = max(0, self.hist_idx - 1)
+            self.setText(self.history[self.hist_idx])
+            return
+        if event.key() == Qt.Key_Down and self.history:
+            self.hist_idx = min(len(self.history), self.hist_idx + 1)
+            self.setText(self.history[self.hist_idx] if self.hist_idx < len(self.history) else "")
+            return
+        super().keyPressEvent(event)
+
+
+class _ConsoleEntry:
+    __slots__ = ('ts', 'kind', 'text', 'key', 'count', 'rendered')
+
+    def __init__(self, ts, kind, text, key):
+        self.ts, self.kind, self.text, self.key = ts, kind, text, key
+        self.count = 1
+        self.rendered = False
+
+
+class ConsoleWidget(QWidget):
+    """Log view shared by the Arm, Quard Bot and Rover tabs.
+
+    log() is safe to call from worker threads. Identical consecutive lines
+    collapse into one with a repeat count; consecutive entries with the same
+    `key` replace each other (a slider drag shows only its latest angle).
+    """
+    submitted = pyqtSignal(str)
+    _incoming = pyqtSignal(str, str, object, float)
+
+    KINDS = {
+        'tx':    ('→', '#7dd3fc'),
+        'rx':    ('←', '#5eead4'),
+        'data':  (' ', '#94a3b8'),
+        'info':  ('•', '#cbd5e1'),
+        'ok':    ('✓', '#86efac'),
+        'warn':  ('!', '#fcd34d'),
+        'error': ('✗', '#fca5a5'),
+    }
+    FILTERS = (("All", None), ("Sent", {'tx'}), ("Received", {'rx', 'data'}),
+               ("Events", {'info', 'ok', 'warn', 'error'}), ("Problems", {'warn', 'error'}))
+
+    def __init__(self, name, input_placeholder=None, quick_commands=(), max_entries=3000, parent=None):
+        super().__init__(parent)
+        self.name = name
+        self.entries = collections.deque(maxlen=max_entries)
+        self.paused = False
+        self.pending = 0
+        self.hidden = 0
+        self.kind_filter = None
+        self.text_filter = ""
+        self._incoming.connect(self._add)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        small = button_qss('neutral', padding='3px 8px')
+        bar = QHBoxLayout()
+        bar.setSpacing(4)
+        self.filter_combo = QComboBox()
+        for label, _ in self.FILTERS:
+            self.filter_combo.addItem(label)
+        self.filter_combo.setToolTip("Show only some kinds of line")
+        self.filter_combo.currentIndexChanged.connect(self._on_filter_changed)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Find…")
+        self.search.setClearButtonEnabled(True)
+        self.search.setMaximumWidth(170)
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(150)
+        self._search_timer.timeout.connect(self._on_filter_changed)
+        self.search.textChanged.connect(lambda _t: self._search_timer.start())
+        self.extra_bar = QHBoxLayout()
+        self.extra_bar.setSpacing(6)
+        self.lbl_count = QLabel()
+        self.lbl_count.setStyleSheet(f"color: {THEME['muted']}; font-size: 11px;")
+        self.btn_pause = QPushButton("⏸ Pause")
+        self.btn_pause.setCheckable(True)
+        self.btn_pause.setToolTip("Freeze the view to read it; new lines are kept")
+        self.btn_pause.setStyleSheet(button_qss('neutral', checked='warning', padding='3px 8px'))
+        self.btn_pause.toggled.connect(self.set_paused)
+        btn_copy = QPushButton("Copy")
+        btn_copy.setToolTip("Copy the lines shown to the clipboard")
+        btn_copy.clicked.connect(self.copy_visible)
+        btn_save = QPushButton("Save…")
+        btn_save.setToolTip("Save every line to a .log file")
+        btn_save.clicked.connect(self.save_to_file)
+        btn_clear = QPushButton("Clear")
+        btn_clear.clicked.connect(self.clear)
+        for b in (btn_copy, btn_save, btn_clear):
+            b.setStyleSheet(small)
+        bar.addWidget(self.filter_combo)
+        bar.addWidget(self.search)
+        bar.addLayout(self.extra_bar)
+        bar.addStretch(1)
+        bar.addWidget(self.lbl_count)
+        bar.addWidget(self.btn_pause)
+        bar.addWidget(btn_copy)
+        bar.addWidget(btn_save)
+        bar.addWidget(btn_clear)
+        layout.addLayout(bar)
+
+        self.view = QPlainTextEdit()
+        self.view.setReadOnly(True)
+        self.view.setUndoRedoEnabled(False)
+        self.view.setMaximumBlockCount(max_entries)
+        mono = QFontDatabase.systemFont(QFontDatabase.FixedFont)
+        mono.setPointSize(9)
+        self.view.setFont(mono)
+        self.view.setStyleSheet(f"QPlainTextEdit {{ background-color: #0b0d10; color: {THEME['text']}; "
+                                f"border: 1px solid {THEME['border']}; border-radius: 6px; padding: 4px; }}")
+        layout.addWidget(self.view, 1)
+
+        self.input = None
+        if input_placeholder:
+            row = QHBoxLayout()
+            row.setSpacing(4)
+            self.input = HistoryLineEdit(f"console/{name}/history")
+            self.input.setPlaceholderText(input_placeholder)
+            self.input.setFont(mono)
+            self.input.returnPressed.connect(self._submit)
+            btn_send = QPushButton("Send")
+            btn_send.setStyleSheet(button_qss('primary', padding='4px 12px'))
+            btn_send.clicked.connect(self._submit)
+            row.addWidget(self.input, 1)
+            row.addWidget(btn_send)
+            for label, command, tip in quick_commands:
+                b = QPushButton(label)
+                b.setToolTip(f"{tip}  [{command}]")
+                b.setStyleSheet(small)
+                b.clicked.connect(lambda _=False, c=command: self.submitted.emit(c))
+                row.addWidget(b)
+            layout.addLayout(row)
+        self._update_count()
+
+    # ── public API ──
+    def log(self, text, kind='info', key=None):
+        """Add a line (thread-safe)."""
+        self._incoming.emit(str(text), kind if kind in self.KINDS else 'info', key, time.time())
+
+    def add_toolbar_widget(self, widget):
+        self.extra_bar.addWidget(widget)
+
+    def plain_lines(self, visible_only=True):
+        return [self._plain(e) for e in self.entries if not visible_only or self._matches(e)]
+
+    def set_paused(self, on):
+        self.paused = bool(on)
+        if self.btn_pause.isChecked() != self.paused:
+            self.btn_pause.setChecked(self.paused)
+        self.btn_pause.setText("▶ Resume" if self.paused else "⏸ Pause")
+        if not self.paused and self.pending:
+            self._render_all()
+        self._update_count()
+
+    def clear(self):
+        self.entries.clear()
+        self.view.clear()
+        self.pending = self.hidden = 0
+        self._update_count()
+
+    def copy_visible(self):
+        lines = self.plain_lines()
+        QApplication.clipboard().setText("\n".join(lines))
+        self.lbl_count.setText(f"Copied {len(lines)} lines")
+        QTimer.singleShot(1500, self._update_count)
+
+    def save_to_file(self):
+        default = os.path.join(os.path.expanduser("~"), f"{self.name}-console-{time.strftime('%Y%m%d-%H%M%S')}.log")
+        path, _ = QFileDialog.getSaveFileName(self, "Save console log", default, "Log files (*.log *.txt);;All files (*)")
+        if not path:
+            return
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write("\n".join(self.plain_lines(visible_only=False)) + "\n")
+            self.log(f"Saved {len(self.entries)} lines to {path}", 'ok')
+        except OSError as e:
+            self.log(f"Could not save {path}: {e}", 'error')
+
+    # ── internals ──
+    def _matches(self, e):
+        if self.kind_filter and e.kind not in self.kind_filter:
+            return False
+        if self.text_filter and self.text_filter not in e.text.lower():
+            return False
+        return True
+
+    @staticmethod
+    def _stamp(ts):
+        return time.strftime('%H:%M:%S', time.localtime(ts)) + f".{int((ts % 1) * 1000):03d}"
+
+    def _html(self, e):
+        sym, color = self.KINDS[e.kind]
+        text = html.escape(e.text).replace('  ', ' &nbsp;')
+        count = f'<span style="color:{THEME["muted"]}">  ×{e.count}</span>' if e.count > 1 else ''
+        return (f'<span style="color:#6b7280">{self._stamp(e.ts)}</span> '
+                f'<span style="color:{color}">{sym} {text}</span>{count}')
+
+    def _plain(self, e):
+        count = f"  (x{e.count})" if e.count > 1 else ""
+        return f"{self._stamp(e.ts)} {e.kind.upper():5} {e.text}{count}"
+
+    def _add(self, text, kind, key, ts):
+        last = self.entries[-1] if self.entries else None
+        same_key = last is not None and key is not None and last.key == key
+        same_line = (last is not None and key is None and last.key is None
+                     and last.kind == kind and last.text == text)
+        if same_key or same_line:
+            if same_key:
+                last.text, last.kind = text, kind
+            else:
+                last.count += 1
+            last.ts = ts
+            if not self.paused and last.rendered and self._matches(last):
+                cursor = QTextCursor(self.view.document().lastBlock())
+                cursor.movePosition(QTextCursor.StartOfBlock)
+                cursor.movePosition(QTextCursor.EndOfBlock, QTextCursor.KeepAnchor)
+                cursor.insertHtml(self._html(last))
+            self._update_count()
+            return
+        e = _ConsoleEntry(ts, kind, text, key)
+        self.entries.append(e)
+        if self.paused:
+            self.pending += 1
+        elif self._matches(e):
+            self.view.appendHtml(self._html(e))
+            e.rendered = True
+        else:
+            self.hidden += 1
+        self._update_count()
+
+    def _render_all(self):
+        self.view.setUpdatesEnabled(False)
+        self.view.clear()
+        self.hidden = 0
+        for e in self.entries:
+            if self._matches(e):
+                self.view.appendHtml(self._html(e))
+                e.rendered = True
+            else:
+                e.rendered = False
+                self.hidden += 1
+        self.view.setUpdatesEnabled(True)
+        sb = self.view.verticalScrollBar()
+        sb.setValue(sb.maximum())
+        self.pending = 0
+        self._update_count()
+
+    def _on_filter_changed(self, *_):
+        self.kind_filter = self.FILTERS[self.filter_combo.currentIndex()][1]
+        self.text_filter = self.search.text().strip().lower()
+        self._render_all()
+
+    def _update_count(self):
+        txt = f"{len(self.entries)} lines"
+        if self.hidden and (self.kind_filter or self.text_filter):
+            txt += f" · {self.hidden} hidden"
+        if self.paused:
+            txt += f" · paused, {self.pending} new"
+        self.lbl_count.setText(txt)
+
+    def _submit(self):
+        text = self.input.text().strip()
+        if not text:
+            return
+        self.input.remember(text)
+        self.input.clear()
+        self.submitted.emit(text)
 
 
 # Readable name and wiring hint for each arm joint (URDF names are opaque).
@@ -739,6 +1170,15 @@ class QuardBotWidget(QWidget):
         self.gait_phase = 0
         self.quard_offsets = {str(i): 0.0 for i in range(8)}
         self.load_quard_offsets()
+        # Connection bookkeeping (GUI thread only)
+        self.link = {'online': None, 'rtt_ms': None, 'last_seen': 0.0, 'sent': 0,
+                     'failed': 0, 'last_error': '', 'rssi': None}
+        self._ping_in_flight = False
+        self._ping_gen = 0             # results of superseded pings are dropped
+        self._resolved = {}            # hostname -> IP from the last good ping
+        self._ping_failures = 0
+        self._cmd_failures = 0
+        self._next_ping_at = None
 
         # Gait generation timer
         self.gait_timer = QTimer(self)
@@ -759,11 +1199,14 @@ class QuardBotWidget(QWidget):
         self.update_status_signal.connect(self.set_status)
         threading.Thread(target=self._command_sender_loop, daemon=True).start()
 
-        # Periodic Heartbeat check
+        # Heartbeat: every 3 s while online, backing off to 10 s while offline
         self.ping_timer = QTimer(self)
+        self.ping_timer.setSingleShot(True)
         self.ping_timer.timeout.connect(self.ping_quard_bot)
-        self.ping_timer.start(5000)
         QTimer.singleShot(800, self.ping_quard_bot)
+        self.link_age_timer = QTimer(self)
+        self.link_age_timer.timeout.connect(self._refresh_link_detail)
+        self.link_age_timer.start(1000)
 
         # The firmware stands the robot up after 2 s without a /cmd request
         # (/status pings don't count), so re-send the active gait every second.
@@ -787,8 +1230,8 @@ class QuardBotWidget(QWidget):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(8)
 
-        # 1. Network Connection Card with Telemetry
-        conn_box = QGroupBox("🌐 Quard Bot Network Target && Live Telemetry")
+        # 1. Connection card
+        conn_box = QGroupBox("🌐 Quard Bot Connection")
         conn_box.setStyleSheet("""
             QGroupBox { font-weight: bold; font-size: 13px; border: 1px solid #444; border-radius: 6px; margin-top: 6px; padding-top: 10px; background-color: #2b2b2b; color: #4da6ff; }
             QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; color: #4da6ff; }
@@ -798,25 +1241,49 @@ class QuardBotWidget(QWidget):
         conn_layout.setSpacing(6)
 
         c_row1 = QHBoxLayout()
-        self.input_host = QLineEdit(self.quard_host)
+        self.combo_host = QComboBox()
+        self.combo_host.setEditable(True)
+        self.combo_host.setInsertPolicy(QComboBox.NoInsert)
+        self.combo_host.setToolTip("Quard Bot address: http://sesame-robot.local, or its IP (shown on its OLED / router)")
+        saved_hosts = _ui_settings().value("quard/hosts", [])
+        if isinstance(saved_hosts, str):
+            saved_hosts = [saved_hosts]
+        hosts = [h for h in (saved_hosts or []) if isinstance(h, str) and h] or [self.quard_host]
+        self.combo_host.addItems(hosts)
+        self.combo_host.setCurrentText(hosts[0])
+        self.input_host = self.combo_host.lineEdit()
         self.input_host.setFont(QFont("Monospace", 9))
-        self.input_host.setStyleSheet("background-color: #18181b; color: #ffffff; border: 1px solid #3f3f46; border-radius: 4px; padding: 4px 8px;")
+        self.input_host.returnPressed.connect(lambda: self.ping_quard_bot(manual=True))
+        self.combo_host.activated.connect(lambda _i: self.ping_quard_bot(manual=True))
+        self._host_edit_timer = QTimer(self)
+        self._host_edit_timer.setSingleShot(True)
+        self._host_edit_timer.setInterval(900)
+        self._host_edit_timer.timeout.connect(self.ping_quard_bot)
+        self.input_host.textEdited.connect(self._on_host_edited)
 
-        self.lbl_status = QLabel("🔴 Offline")
-        self.lbl_status.setFont(QFont("SansSerif", 9, QFont.Bold))
-        self.lbl_status.setStyleSheet("background-color: #4c0519; color: #f43f5e; padding: 4px 10px; border-radius: 4px;")
+        self.btn_ping = QPushButton("🔄 Ping")
+        self.btn_ping.setToolTip("Check the connection now (GET /status)")
+        self.btn_ping.setStyleSheet("QPushButton { background-color: #0284c7; color: white; font-weight: bold; border-radius: 4px; padding: 4px 10px; } QPushButton:hover { background-color: #0369a1; }")
+        self.btn_ping.clicked.connect(lambda: self.ping_quard_bot(manual=True))
+        self.chk_auto_ping = QCheckBox("Auto")
+        self.chk_auto_ping.setChecked(True)
+        self.chk_auto_ping.setToolTip("Keep checking: every 3 s while online, backing off to 10 s while unreachable")
+        self.chk_auto_ping.toggled.connect(self._on_auto_ping_toggled)
 
-        btn_ping = QPushButton("🔄 Ping")
-        btn_ping.setStyleSheet("QPushButton { background-color: #0284c7; color: white; font-weight: bold; border-radius: 4px; padding: 4px 10px; } QPushButton:hover { background-color: #0369a1; }")
-        btn_ping.clicked.connect(self.ping_quard_bot)
-
-        c_row1.addWidget(self.input_host, 1)
-        c_row1.addWidget(self.lbl_status)
-        c_row1.addWidget(btn_ping)
+        c_row1.addWidget(self.combo_host, 1)
+        c_row1.addWidget(self.btn_ping)
+        c_row1.addWidget(self.chk_auto_ping)
         conn_layout.addLayout(c_row1)
 
+        c_row2 = QHBoxLayout()
+        self.lbl_status = StatusPill("Checking…", 'busy')
+        self.lbl_link_detail = muted_label()
+        c_row2.addWidget(self.lbl_status)
+        c_row2.addWidget(self.lbl_link_detail, 1)
+        conn_layout.addLayout(c_row2)
+
         # Telemetry readouts row
-        self.lbl_telemetry = QLabel("📡 Telemetry: Waiting for ping...")
+        self.lbl_telemetry = QLabel("📡 Telemetry: waiting for the first reply…")
         self.lbl_telemetry.setFont(QFont("Monospace", 8))
         self.lbl_telemetry.setStyleSheet("color: #94a3b8; background-color: #18181b; padding: 3px 6px; border-radius: 3px;")
         conn_layout.addWidget(self.lbl_telemetry)
@@ -1061,23 +1528,23 @@ class QuardBotWidget(QWidget):
         pca_box.setLayout(pca_layout)
         right_layout.addWidget(pca_box, 2)
 
-        # 6. Console Log Box
-        log_box = QGroupBox("📟 Quard Bot Console && Communication Log")
-        log_box.setStyleSheet("""
-            QGroupBox { font-weight: bold; font-size: 12px; border: 1px solid #333; border-radius: 6px; margin-top: 6px; padding-top: 8px; background-color: #141414; color: #f59e0b; }
-            QGroupBox::title { subcontrol-origin: margin; padding: 0 4px; color: #f59e0b; }
-        """)
+        # 6. Console
+        log_box = QGroupBox("📟 Quard Bot Console")
+        log_box.setStyleSheet(group_box_qss('#f59e0b'))
         log_layout = QVBoxLayout()
         log_layout.setContentsMargins(6, 6, 6, 6)
-
-        self.console_log = QTextEdit()
-        self.console_log.setReadOnly(True)
-        self.console_log.setFont(QFont("Monospace", 9))
-        self.console_log.setStyleSheet("QTextEdit { background-color: #09090b; color: #38bdf8; border: 1px solid #27272a; border-radius: 4px; padding: 4px; }")
-
-        log_layout.addWidget(self.console_log, 1)
+        self.console = ConsoleWidget(
+            "quard",
+            input_placeholder="Quard command: move=w · ch=3&deg=70 · all=45 · speed=180 · status  (↑/↓ history)",
+            quick_commands=[("Status", "status", "GET /status and show the reply"),
+                            ("Stand", "move=s", "Stand still")])
+        self.console.submitted.connect(self.on_console_submit)
+        log_layout.addWidget(self.console, 1)
         log_box.setLayout(log_layout)
         right_layout.addWidget(log_box, 1)
+
+        # Locked by E-STOP; the connection card and console stay usable
+        self.motion_boxes = [dpad_box, presets_box, pca_box]
 
         main_layout.addWidget(left_col, 0)
         main_layout.addWidget(right_col, 1)
@@ -1327,15 +1794,18 @@ class QuardBotWidget(QWidget):
                 'wave': 'hi', 'hi': 'hi'
             }
             norm_params['move'] = mode_map.get(m, m)
+            del norm_params['mode']   # the firmware reads 'move' first
 
         if 'ch' in norm_params and 'angle' in norm_params:
-            norm_params['deg'] = norm_params['angle']
+            norm_params['deg'] = norm_params.pop('angle')
 
-        host = self.input_host.text().strip()
-        if not host.startswith("http://") and not host.startswith("https://"):
-            host = "http://" + host
-        url = f"{host.rstrip('/')}/cmd?{urllib.parse.urlencode(norm_params)}"
-        entry = {"url": url, "params": params, "quiet": quiet}
+        query = urllib.parse.urlencode(norm_params)
+        url = f"{self.request_base_url()}/cmd?{query}"
+        move = str(norm_params.get('move', '')).lower()
+        entry = {"url": url, "params": params, "quiet": quiet, "query": query,
+                 "t": time.monotonic(),
+                 # Stand is always delivered, however late; motion is not.
+                 "always": move in ('s', 'stand', 'stop')}
 
         with self._cmd_cv:
             last = self._cmd_queue[-1] if self._cmd_queue else None
@@ -1353,55 +1823,127 @@ class QuardBotWidget(QWidget):
                 while not self._cmd_queue:
                     self._cmd_cv.wait()
                 entry = self._cmd_queue.pop(0)
-            params = entry["params"]
+            info = {"type": "keepalive" if entry["quiet"] else "cmd",
+                    "params": entry["params"], "query": entry.get("query", "")}
+            waited = time.monotonic() - entry.get("t", time.monotonic())
+            if waited > 2.0 and not entry.get("always"):
+                # Queued behind a slow request: replaying motion this late
+                # would move the robot unexpectedly, so skip it.
+                if not entry["quiet"]:
+                    info["type"] = "dropped"
+                    info["waited"] = waited
+                    try:
+                        self.update_status_signal.emit(False, info)
+                    except RuntimeError:
+                        return
+                continue
+            t0 = time.monotonic()
             try:
                 req = urllib.request.Request(entry["url"])
                 with urllib.request.urlopen(req, timeout=1.5) as resp:
-                    reply = resp.read().decode('utf-8', errors='ignore')
-                info = {"type": "ping" if entry["quiet"] else "cmd", "params": params, "reply": reply}
+                    info["reply"] = resp.read().decode('utf-8', errors='ignore').strip()
+                ok = True
+            except urllib.error.HTTPError as e:
+                # The robot answered (e.g. 400 "Bad Args"): online, command refused.
+                try:
+                    body = e.read().decode('utf-8', errors='ignore').strip()
+                except Exception:
+                    body = ""
+                info["rejected"] = e.code
+                info["reply"] = body or str(e.reason)
                 ok = True
             except Exception as e:
-                info = {"type": "cmd", "params": params, "error": str(e)}
+                info["error"] = describe_net_error(e)
                 ok = False
+            info["rtt_ms"] = (time.monotonic() - t0) * 1000.0
             try:
                 self.update_status_signal.emit(ok, info)
             except RuntimeError:
                 return  # widget destroyed
 
-    def ping_quard_bot(self):
-        host = self.input_host.text().strip()
+    def set_motion_enabled(self, on):
+        for box in getattr(self, 'motion_boxes', []):
+            box.setEnabled(on)
+
+    def current_host_url(self):
+        host = self.input_host.text().strip() or self.quard_host
         if not host.startswith("http://") and not host.startswith("https://"):
             host = "http://" + host
-        url_status = f"{host.rstrip('/')}/status"
+        return host.rstrip('/')
+
+    def request_base_url(self):
+        """current_host_url() with the host name swapped for the IP the last
+        good ping resolved, so commands skip slow .local lookups."""
+        base = self.current_host_url()
+        parts = urllib.parse.urlsplit(base)
+        ip = self._resolved.get(parts.hostname or "")
+        if not ip:
+            return base
+        netloc = ip + (f":{parts.port}" if parts.port else "")
+        return urllib.parse.urlunsplit((parts.scheme, netloc, parts.path, "", "")).rstrip('/')
+
+    def _on_host_edited(self, _text):
+        """The address changed: commands queued for the old one are dropped."""
+        with self._cmd_cv:
+            dropped = sum(1 for e in self._cmd_queue if not e["quiet"])
+            self._cmd_queue.clear()
+        if dropped:
+            self.console.log(f"Address changed: dropped {dropped} queued command(s)", 'warn')
+        self.link.update(online=None, rtt_ms=None, last_error='')
+        self._resolved = {}
+        self._ping_gen += 1          # ignore a ping still running for the old address
+        self._ping_in_flight = False
+        self._refresh_link_detail()
+        if self.chk_auto_ping.isChecked():
+            self._host_edit_timer.start()
+
+    def ping_quard_bot(self, manual=False):
+        """GET /status in the background. Automatic pings wait for the previous
+        one; a manual ping replaces it (e.g. the old host is still resolving)."""
+        if self._ping_in_flight and not manual:
+            return
+        self.ping_timer.stop()
+        self._ping_in_flight = True
+        self._ping_gen += 1
+        gen = self._ping_gen
+        host = self.current_host_url()
+        if manual:
+            self.lbl_status.set_state('busy', "Checking…")
+            self.console.log(f"GET {host}/status", 'tx')
 
         def worker():
+            info = {"type": "ping", "manual": manual, "host": host, "gen": gen}
+            t0 = time.monotonic()
             try:
-                req = urllib.request.Request(url_status)
-                with urllib.request.urlopen(req, timeout=1.5) as resp:
-                    raw_data = resp.read().decode('utf-8', errors='ignore')
-                    try:
-                        telemetry = json.loads(raw_data)
-                    except Exception:
-                        telemetry = {"status": "ok", "raw": raw_data}
-                    try:
-                        self.update_status_signal.emit(True, {"type": "ping", "telemetry": telemetry})
-                    except (RuntimeError, Exception):
-                        pass
-            except Exception:
-                # Fallback to root /
+                parts = urllib.parse.urlsplit(host)
+                name = parts.hostname or ""
+                ip = socket.getaddrinfo(name, parts.port or 80, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
+                if ip != name:
+                    info["resolved"] = (name, ip)
+                t0 = time.monotonic()   # RTT excludes the name lookup
+                netloc = ip + (f":{parts.port}" if parts.port else "")
+                url = urllib.parse.urlunsplit((parts.scheme, netloc, "/status", "", ""))
+                with urllib.request.urlopen(urllib.request.Request(url), timeout=2.0) as resp:
+                    raw = resp.read().decode('utf-8', errors='ignore')
                 try:
-                    url_root = f"{host.rstrip('/')}/"
-                    req = urllib.request.Request(url_root)
-                    with urllib.request.urlopen(req, timeout=1.2) as resp:
-                        try:
-                            self.update_status_signal.emit(True, {"type": "ping", "telemetry": {"status": "online"}})
-                        except (RuntimeError, Exception):
-                            pass
-                except Exception as e2:
-                    try:
-                        self.update_status_signal.emit(False, {"type": "ping", "error": str(e2)})
-                    except (RuntimeError, Exception):
-                        pass
+                    info["telemetry"] = json.loads(raw)
+                except ValueError:
+                    info["telemetry"] = {}
+                    info["note"] = raw.strip()[:120]
+                ok = True
+            except urllib.error.HTTPError as e:
+                # It answered, so it's online; this firmware just has no /status.
+                info["telemetry"] = {}
+                info["note"] = f"online (HTTP {e.code} on /status)"
+                ok = True
+            except Exception as e:
+                info["error"] = describe_net_error(e)
+                ok = False
+            info["rtt_ms"] = (time.monotonic() - t0) * 1000.0
+            try:
+                self.update_status_signal.emit(ok, info)
+            except RuntimeError:
+                pass
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1409,38 +1951,177 @@ class QuardBotWidget(QWidget):
         """Compatibility alias for ping_quard_bot."""
         self.ping_quard_bot()
 
-    def set_status(self, is_online, info_dict):
-        self.is_online = is_online
-        msg_type = info_dict.get("type", "")
+    def _on_auto_ping_toggled(self, on):
+        if on:
+            self.ping_quard_bot()
+        else:
+            self.ping_timer.stop()
+            self._next_ping_at = None
+        self._refresh_link_detail()
+
+    def _schedule_next_ping(self):
+        if not self.chk_auto_ping.isChecked():
+            self._next_ping_at = None
+            return
+        if self.link['online']:
+            delay = 3.0
+        else:
+            delay = min(10.0, 2.0 * (2 ** max(0, self._ping_failures - 1)))
+        self._next_ping_at = time.time() + delay
+        self.ping_timer.start(int(delay * 1000))
+
+    def _remember_host(self):
+        text = self.input_host.text().strip()
+        if not text:
+            return
+        hosts = [self.combo_host.itemText(i) for i in range(self.combo_host.count())]
+        if hosts and hosts[0] == text:
+            return
+        hosts = [text] + [h for h in hosts if h != text][:5]
+        self.combo_host.blockSignals(True)
+        self.combo_host.clear()
+        self.combo_host.addItems(hosts)
+        self.combo_host.setCurrentText(text)
+        self.combo_host.blockSignals(False)
+        _ui_settings().setValue("quard/hosts", hosts)
+
+    def set_status(self, is_online, info):
+        """Result of a ping or command (runs in the GUI thread)."""
+        t = info.get("type")
+        if t == 'ping' and info.get('gen') != self._ping_gen:
+            return   # superseded by a newer ping
+        was_online = self.link['online']
+        now = time.time()
+
+        if t == 'dropped':
+            self.console.log(f"/cmd?{info.get('query', '')}  not sent: waited {info.get('waited', 0):.1f} s "
+                             "behind a slow request (motion is never replayed late)", 'warn')
+            return
+
+        if t == 'ping' and info.get('resolved'):
+            name, ip = info['resolved']
+            if is_online:
+                self._resolved = {name: ip}
+        elif t == 'ping' and not is_online:
+            self._resolved = {}
 
         if is_online:
-            telemetry = info_dict.get("telemetry", {})
-            rssi = telemetry.get("rssi", None)
-            rssi_str = f" ({rssi} dBm)" if rssi is not None else ""
-            self.lbl_status.setText(f"🟢 Connected{rssi_str}")
-            self.lbl_status.setStyleSheet("background-color: #064e3b; color: #34d399; padding: 4px 10px; border-radius: 4px;")
-
-            if telemetry:
-                ip = telemetry.get("ip", "sesame-robot.local")
-                mode = telemetry.get("mode", "Stand")
-                face = telemetry.get("face", "happy")
-                speed = telemetry.get("step_delay", self.step_delay)
-                self.lbl_telemetry.setText(f"📡 IP: {ip} | RSSI: {rssi or '--'} dBm | Mode: {mode} | Speed: {speed}ms")
+            self.link['online'] = True
+            self.link['last_seen'] = now
+            self.link['rtt_ms'] = info.get('rtt_ms')
+            self.link['last_error'] = ''
+            self._cmd_failures = 0
+            if t == 'ping':
+                self._ping_failures = 0
         else:
-            self.lbl_status.setText("🔴 Offline")
-            self.lbl_status.setStyleSheet("background-color: #4c0519; color: #f43f5e; padding: 4px 10px; border-radius: 4px;")
-            self.lbl_telemetry.setText("📡 Telemetry: Offline (check Wi-Fi / AP connection)")
+            self.link['last_error'] = info.get('error', 'no reply')
+            if t == 'ping':
+                self._ping_failures += 1
+                self.link['online'] = False
+            else:
+                # One lost command isn't an outage; two in a row is.
+                self._cmd_failures += 1
+                if self._cmd_failures >= 2:
+                    self.link['online'] = False
 
-        if msg_type == "cmd":
-            if "reply" in info_dict:
-                self.log_to_console(f"Out: {info_dict['params']} | Reply: {info_dict['reply']}")
-            elif "error" in info_dict:
-                self.log_to_console(f"⚠️ Out: {info_dict['params']} | Error: {info_dict['error']}")
+        if t in ('cmd', 'keepalive'):
+            self.link['sent'] += 1
+            if not is_online or info.get('rejected'):
+                self.link['failed'] += 1
 
-    def log_to_console(self, text):
-        ts = time.strftime("[%H:%M:%S] ")
-        self.console_log.append(ts + text)
-        self.console_log.moveCursor(QTextCursor.End)
+        if t == 'ping':
+            if is_online:
+                tel = info.get('telemetry') or {}
+                self.link['rssi'] = tel.get('rssi')
+                if tel:
+                    up = int(tel.get('uptime_ms', 0) / 1000)
+                    self.lbl_telemetry.setText(
+                        f"📡 IP: {tel.get('ip', '?')} | RSSI: {tel.get('rssi', '--')} dBm | Mode: {tel.get('mode', '?')} | "
+                        f"Step: {tel.get('step_delay', self.step_delay)} ms | Up: {up // 60}m {up % 60:02d}s")
+                if info.get('manual'):
+                    self.console.log(json.dumps(tel) if tel else (info.get('note') or "online"), 'rx')
+                self._remember_host()
+            elif info.get('manual'):
+                self.console.log(f"No answer from {info.get('host')}: {info.get('error')}", 'error')
+
+        if self.link['online'] is not None and self.link['online'] != was_online:
+            if self.link['online']:
+                rtt = f" (ping {self.link['rtt_ms']:.0f} ms)" if self.link['rtt_ms'] is not None else ""
+                self.console.log(f"Quard Bot online at {self.current_host_url()}{rtt}", 'ok')
+            else:
+                self.console.log(f"Quard Bot unreachable: {self.link['last_error']}", 'error')
+                self.lbl_telemetry.setText("📡 Telemetry: no reply (is the robot on, and on the same Wi-Fi?)")
+
+        if t == 'cmd':
+            q = info.get('query', '')
+            params = info.get('params') or {}
+            key = f"ch{params['ch']}" if 'ch' in params else None
+            ms = info.get('rtt_ms', 0.0)
+            if info.get('rejected'):
+                self.console.log(f"/cmd?{q}  ←  refused: HTTP {info['rejected']} {info.get('reply', '')}", 'warn', key=key)
+            elif is_online:
+                self.console.log(f"/cmd?{q}  ←  {info.get('reply') or 'OK'}  ({ms:.0f} ms)", 'tx', key=key)
+            else:
+                self.console.log(f"/cmd?{q}  ✗  {info.get('error')}", 'error', key=key)
+        elif t == 'keepalive' and not is_online:
+            self.console.log(f"Gait keep-alive failed: {info.get('error')}", 'warn', key='keepalive')
+
+        self.is_online = bool(self.link['online'])
+        if t == 'ping':
+            self._ping_in_flight = False
+            self._schedule_next_ping()
+        self._refresh_link_detail()
+
+    def _refresh_link_detail(self):
+        if not hasattr(self, 'lbl_link_detail'):
+            return
+        l = self.link
+        now = time.time()
+        parts = []
+        if l['online'] is None:
+            self.lbl_status.set_state('busy', "Checking…")
+            parts.append(self.current_host_url())
+        elif l['online']:
+            rtt = f" · {l['rtt_ms']:.0f} ms" if l['rtt_ms'] is not None else ""
+            self.lbl_status.set_state('ok', "Online" + rtt)
+            parts.append(f"seen {now - l['last_seen']:.0f} s ago")
+            if l['rssi'] not in (None, 0):
+                parts.append(f"RSSI {l['rssi']} dBm")
+        else:
+            self.lbl_status.set_state('error', "Unreachable")
+            parts.append(l['last_error'] or "no reply")
+            if l['last_seen']:
+                parts.append(f"last seen {now - l['last_seen']:.0f} s ago")
+        if self._next_ping_at and not l['online'] and not self._ping_in_flight:
+            parts.append(f"retry in {max(0, self._next_ping_at - now):.0f} s")
+        if l['sent']:
+            parts.append(f"sent {l['sent']}" + (f", failed {l['failed']}" if l['failed'] else ""))
+        self.lbl_link_detail.setText(" · ".join(parts))
+
+    def on_console_submit(self, text):
+        """Console input: 'status', or a /cmd query like move=w or ch=3&deg=70."""
+        t = text.strip()
+        if t.lower() in ('status', '/status', 'ping'):
+            self.ping_quard_bot(manual=True)
+            return
+        q = t
+        for prefix in ('/cmd?', 'cmd?', '?'):
+            if q.lower().startswith(prefix):
+                q = q[len(prefix):]
+                break
+        params = dict(urllib.parse.parse_qsl(q))
+        if not params:
+            self.console.log(f"Not understood: {t!r}. Use key=value pairs such as move=w or ch=3&deg=70", 'warn')
+            return
+        move = str(params.get('move', params.get('mode', params.get('cmd', '')))).lower()
+        is_stand = set(params) <= {'move', 'mode', 'cmd'} and move in ('s', 'stand', 'stop')
+        if getattr(self.main_gui, 'estop_engaged', False) and not is_stand:
+            self.console.log(f"Blocked by E-STOP: {t}", 'warn')
+            return
+        self.send_command(params)
+
+    def log_to_console(self, text, kind=None):
+        self.console.log(text, kind or infer_console_kind(text))
 
     def get_joint_radians(self):
         rads = {}
@@ -1542,6 +2223,7 @@ class QuardBotWidget(QWidget):
 
 class ESP32SensorNodeWidget(QWidget):
     update_data_signal = pyqtSignal(dict)
+    link_signal = pyqtSignal(int, str, str)   # generation, state, detail (from worker threads)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1588,13 +2270,34 @@ class ESP32SensorNodeWidget(QWidget):
         self.imu_offsets = {"pitch": 0.0, "roll": 0.0, "yaw": 0.0}
         self.load_imu_offsets()
         self.update_data_signal.connect(self.on_data_updated)
+        self.link_signal.connect(self._on_link_signal)
+
+        # Data source: 'sim', 'wifi', 'serial' or 'off'. Bumping _gen tells the
+        # previous source's worker thread to stop.
+        self.source = 'sim'
+        self._gen = 0
+        self.active_url = None
+        self.active_port = None
+        self.active_baud = None
+        self.link_phase = 'sim'
+        self.link_error = ''
+        self.last_rx = 0.0
+        self.phase_since = time.time()
+        self.rx_times = collections.deque(maxlen=200)
+        self._stale_logged = False
+        self._btn_key = None
 
         self.init_ui()
+        self.refresh_port_list()
 
         # Timer to drive simulation when hardware is not connected
         self.sim_timer = QTimer(self)
         self.sim_timer.timeout.connect(self.sim_tick)
         self.sim_timer.start(1000)
+        self.link_timer = QTimer(self)
+        self.link_timer.timeout.connect(self._refresh_link)
+        self.link_timer.start(1000)
+        self.set_source('sim')
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -1615,80 +2318,65 @@ class ESP32SensorNodeWidget(QWidget):
         self.lbl_fire_banner.setVisible(False)
         main_layout.addWidget(self.lbl_fire_banner)
 
-        # ── 1. Dual Connection Box: Wi-Fi (HTTP /data) & USB Serial ────────
-        conn_box = QGroupBox("🔌 Rover Wi-Fi && Serial Connection")
+        # ── 1. Connection card: simulated, Wi-Fi (HTTP /data) or USB serial ─
+        conn_box = QGroupBox("🔌 Rover Connection")
         conn_box.setStyleSheet("""
             QGroupBox { font-weight: bold; font-size: 13px; border: 1px solid #444; border-radius: 6px; margin-top: 6px; padding-top: 10px; background-color: #242424; color: #38bdf8; }
             QGroupBox::title { subcontrol-origin: margin; padding: 0 6px; color: #38bdf8; }
         """)
         conn_layout = QVBoxLayout(conn_box)
         conn_layout.setSpacing(6)
+        field_qss = "background-color: #18181b; color: #e6e8ec; padding: 4px 8px; border: 1px solid #3f3f46; border-radius: 4px;"
 
-        # Row 1: Wi-Fi Connection
         wifi_row = QHBoxLayout()
-        lbl_wifi = QLabel("🌐 Wi-Fi IP / URL:")
+        lbl_wifi = QLabel("🌐 Wi-Fi")
         lbl_wifi.setStyleSheet("color: #cccccc; font-weight: bold; font-size: 12px;")
-        self.txt_wifi_ip = QLineEdit("192.168.1.100")
-        self.txt_wifi_ip.setPlaceholderText("e.g. 192.168.1.50 or http://192.168.1.50")
-        self.txt_wifi_ip.setStyleSheet("background-color: #18181b; color: #38bdf8; padding: 4px 8px; border: 1px solid #3f3f46; border-radius: 4px; font-weight: bold;")
-
-        self.btn_wifi_connect = QPushButton("🌐 Connect Wi-Fi (/data)")
-        self.btn_wifi_connect.setStyleSheet("""
-            QPushButton { background-color: #0284c7; color: white; font-weight: bold; padding: 5px 12px; border-radius: 4px; }
-            QPushButton:hover { background-color: #0369a1; }
-        """)
+        lbl_wifi.setFixedWidth(70)
+        self.txt_wifi_ip = QLineEdit(str(_ui_settings().value("rover/wifi_host", "192.168.1.100")))
+        self.txt_wifi_ip.setPlaceholderText("Rover IP, e.g. 192.168.1.50 (reads http://<ip>/data)")
+        self.txt_wifi_ip.setStyleSheet(field_qss)
+        self.txt_wifi_ip.returnPressed.connect(lambda: self.set_source('wifi'))
+        self.btn_wifi_connect = QPushButton("🌐 Connect Wi-Fi")
         self.btn_wifi_connect.clicked.connect(self.toggle_wifi_connection)
-
-        self.lbl_wifi_status = QLabel("Wi-Fi: Offline")
-        self.lbl_wifi_status.setStyleSheet("background-color: #3f3f46; color: #d4d4d8; font-weight: bold; padding: 4px 8px; border-radius: 4px;")
-
         wifi_row.addWidget(lbl_wifi)
-        wifi_row.addWidget(self.txt_wifi_ip, 2)
+        wifi_row.addWidget(self.txt_wifi_ip, 1)
         wifi_row.addWidget(self.btn_wifi_connect)
-        wifi_row.addWidget(self.lbl_wifi_status)
-        wifi_row.addStretch()
         conn_layout.addLayout(wifi_row)
 
-        # Row 2: Serial Connection & Sim Mode
         serial_row = QHBoxLayout()
-        lbl_port = QLabel("🔌 Port:")
-        lbl_port.setStyleSheet("color: #aaaaaa; font-weight: bold; font-size: 12px;")
+        lbl_port = QLabel("🔌 Serial")
+        lbl_port.setStyleSheet("color: #cccccc; font-weight: bold; font-size: 12px;")
+        lbl_port.setFixedWidth(70)
         self.combo_port = QComboBox()
-        self.combo_port.addItems(["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyACM0", "/dev/ttyACM1"])
-        self.combo_port.setStyleSheet("background-color: #18181b; color: #ffffff; padding: 3px 6px; border: 1px solid #3f3f46; border-radius: 4px;")
-
-        lbl_baud = QLabel("Baud:")
-        lbl_baud.setStyleSheet("color: #aaaaaa; font-weight: bold; font-size: 12px;")
+        self.combo_port.setEditable(True)
+        self.combo_port.setMinimumWidth(150)
+        self.combo_port.setToolTip("Serial port the rover's ESP32 is on")
+        btn_rescan = QPushButton("⟳")
+        btn_rescan.setToolTip("Rescan serial ports")
+        btn_rescan.setFixedWidth(32)
+        btn_rescan.setStyleSheet(button_qss('neutral', padding='3px 6px'))
+        btn_rescan.clicked.connect(lambda: self.refresh_port_list(report=True))
         self.combo_baud = QComboBox()
         self.combo_baud.addItems(["115200", "9600", "57600", "230400"])
-        self.combo_baud.setStyleSheet("background-color: #18181b; color: #ffffff; padding: 3px 6px; border: 1px solid #3f3f46; border-radius: 4px;")
-
-        self.btn_connect = QPushButton("Connect Serial")
-        self.btn_connect.setStyleSheet("""
-            QPushButton { background-color: #2563eb; color: white; font-weight: bold; padding: 5px 10px; border-radius: 4px; }
-            QPushButton:hover { background-color: #1d4ed8; }
-        """)
+        self.btn_connect = QPushButton("🔌 Connect Serial")
         self.btn_connect.clicked.connect(self.toggle_serial_connection)
-
-        self.btn_sim = QPushButton("▶️ Simulating Data")
-        self.btn_sim.setStyleSheet("""
-            QPushButton { background-color: #d97706; color: white; font-weight: bold; padding: 5px 10px; border-radius: 4px; }
-            QPushButton:hover { background-color: #b45309; }
-        """)
+        self.btn_sim = QPushButton("▶ Simulate")
+        self.btn_sim.setToolTip("Show demo values instead of rover data")
         self.btn_sim.clicked.connect(self.toggle_sim)
-
-        self.lbl_status = QLabel("Simulating")
-        self.lbl_status.setStyleSheet("background-color: #064e3b; color: #34d399; font-weight: bold; padding: 4px 8px; border-radius: 4px;")
-
         serial_row.addWidget(lbl_port)
-        serial_row.addWidget(self.combo_port)
-        serial_row.addWidget(lbl_baud)
+        serial_row.addWidget(self.combo_port, 1)
+        serial_row.addWidget(btn_rescan)
         serial_row.addWidget(self.combo_baud)
         serial_row.addWidget(self.btn_connect)
         serial_row.addWidget(self.btn_sim)
-        serial_row.addStretch()
-        serial_row.addWidget(self.lbl_status)
         conn_layout.addLayout(serial_row)
+
+        status_row = QHBoxLayout()
+        self.lbl_status = StatusPill("Simulated", 'busy')
+        self.lbl_link_detail = muted_label()
+        status_row.addWidget(self.lbl_status)
+        status_row.addWidget(self.lbl_link_detail, 1)
+        conn_layout.addLayout(status_row)
 
         main_layout.addWidget(conn_box)
 
@@ -1858,83 +2546,254 @@ class ESP32SensorNodeWidget(QWidget):
         scroll.setWidget(container)
         main_layout.addWidget(scroll, 2)
 
-        # ── 3. Rover Telemetry Console Log ─────────────────────────────────
-        log_box = QGroupBox("📜 Rover Telemetry Stream Console (Serial / HTTP JSON)")
-        log_box.setStyleSheet("""
-            QGroupBox { font-weight: bold; font-size: 11px; border: 1px solid #333; border-radius: 6px; margin-top: 4px; padding-top: 6px; background-color: #141414; color: #38bdf8; }
-            QGroupBox::title { subcontrol-origin: margin; padding: 0 4px; color: #38bdf8; }
-        """)
+        # ── 3. Console ─────────────────────────────────────────────────────
+        log_box = QGroupBox("📜 Rover Console")
+        log_box.setStyleSheet(group_box_qss('#38bdf8'))
         log_layout = QVBoxLayout(log_box)
-
-        self.log_console = QTextEdit()
-        self.log_console.setReadOnly(True)
-        self.log_console.setMaximumHeight(140)
-        self.log_console.setFont(QFont("Monospace", 9))
-        self.log_console.setStyleSheet("QTextEdit { background-color: #09090b; color: #38bdf8; border: 1px solid #27272a; border-radius: 4px; padding: 4px; }")
-
-        btn_clear = QPushButton("Clear Console")
-        btn_clear.setStyleSheet("background-color: #27272a; color: #a1a1aa; font-size: 11px; padding: 2px 8px; border-radius: 3px;")
-        btn_clear.clicked.connect(self.log_console.clear)
-
-        log_layout.addWidget(self.log_console)
-        log_layout.addWidget(btn_clear, 0, Qt.AlignRight)
+        log_layout.setContentsMargins(6, 6, 6, 6)
+        self.console = ConsoleWidget("rover")
+        log_layout.addWidget(self.console)
         main_layout.addWidget(log_box, 1)
 
-    def toggle_wifi_connection(self):
-        if self.sensor_state.get("wifi_connected", False):
-            self.sensor_state["wifi_connected"] = False
-            self.btn_wifi_connect.setText("🌐 Connect Wi-Fi (/data)")
-            self.btn_wifi_connect.setStyleSheet("QPushButton { background-color: #0284c7; color: white; font-weight: bold; padding: 5px 12px; border-radius: 4px; }")
-            self.lbl_wifi_status.setText("Wi-Fi: Disconnected")
-            self.lbl_wifi_status.setStyleSheet("background-color: #3f3f46; color: #d4d4d8; font-weight: bold; padding: 4px 8px; border-radius: 4px;")
+    # ── Data source / connection ──────────────────────────────────────────
+    @staticmethod
+    def _wifi_url(text):
+        cur = (text or "").strip() or "192.168.1.100"
+        if not cur.startswith(("http://", "https://")):
+            cur = "http://" + cur
+        cur = cur.rstrip('/')
+        return cur if cur.endswith('/data') else cur + "/data"
+
+    def source_label(self):
+        if self.source == 'wifi':
+            return f"Wi-Fi {self.active_url}"
+        if self.source == 'serial':
+            return f"{self.active_port} @ {self.active_baud}"
+        return "simulated data" if self.source == 'sim' else "nothing"
+
+    def refresh_port_list(self, report=False):
+        """Fill the port list; preselect a port the arm commander isn't using."""
+        current = self.combo_port.currentText().strip()
+        ports = list_serial_ports()
+        arm = getattr(self.main_gui, 'arm_link', None) or {}
+        arm_port = arm.get('port') if arm.get('transport') == 'serial' else None
+        self.combo_port.clear()
+        for dev, desc in ports:
+            label = dev + ("   (arm)" if dev == arm_port else "")
+            self.combo_port.addItem(label, dev)
+            if desc:
+                self.combo_port.setItemData(self.combo_port.count() - 1, desc, Qt.ToolTipRole)
+        free = [d for d, _ in ports if d != arm_port]
+        self.combo_port.setEditText(current or (free[0] if free else (ports[0][0] if ports else "/dev/ttyUSB1")))
+        if report:
+            found = ", ".join(f"{d} ({desc})" if desc else d for d, desc in ports) or "none"
+            self.console.log(f"Serial ports found: {found}", 'info')
+
+    def selected_port(self):
+        text = self.combo_port.currentText().strip()
+        idx = self.combo_port.findText(text)
+        data = self.combo_port.itemData(idx) if idx >= 0 else None
+        return data or text.replace("(arm)", "").strip()
+
+    def set_source(self, src):
+        self._gen += 1
+        gen = self._gen
+        self.source = src
+        self.link_phase = 'connecting' if src in ('wifi', 'serial') else src
+        self.link_error = ''
+        self.rx_times.clear()
+        self.last_rx = 0.0
+        self.phase_since = time.time()
+        self._stale_logged = False
+        st = self.sensor_state
+        st['simulating'] = src == 'sim'
+        st['wifi_connected'] = src == 'wifi'
+        st['connected'] = src == 'serial'
+        if src == 'wifi':
+            self.active_url = self._wifi_url(self.txt_wifi_ip.text())
+            _ui_settings().setValue("rover/wifi_host", self.txt_wifi_ip.text().strip())
+            self.console.log(f"Connecting to {self.active_url} …", 'info')
+            threading.Thread(target=self._wifi_worker, args=(gen, self.active_url), daemon=True).start()
+        elif src == 'serial':
+            self.console.log(f"Opening {self.active_port} @ {self.active_baud} …", 'info')
+            threading.Thread(target=self._serial_worker, args=(gen, self.active_port, self.active_baud), daemon=True).start()
+        elif src == 'sim':
+            self.console.log("Showing simulated data (not from the rover)", 'info')
         else:
-            ip_text = self.txt_wifi_ip.text().strip()
-            if not ip_text:
-                ip_text = "192.168.1.100"
-                self.txt_wifi_ip.setText(ip_text)
+            self.console.log("Rover data source off", 'info')
+        self._refresh_link()
 
-            self.sensor_state["wifi_connected"] = True
-            self.sensor_state["simulating"] = False
-            self.btn_wifi_connect.setText("⏹ Disconnect Wi-Fi")
-            self.btn_wifi_connect.setStyleSheet("QPushButton { background-color: #dc2626; color: white; font-weight: bold; padding: 5px 12px; border-radius: 4px; }")
-            self.lbl_wifi_status.setText("Wi-Fi: Connecting...")
-            self.lbl_wifi_status.setStyleSheet("background-color: #78350f; color: #fde047; font-weight: bold; padding: 4px 8px; border-radius: 4px;")
-            self.btn_sim.setText("▶️ Simulating Data")
-            self.lbl_status.setText(f"Live Wi-Fi ({ip_text})")
-            self.lbl_status.setStyleSheet("background-color: #064e3b; color: #34d399; font-weight: bold; padding: 4px 8px; border-radius: 4px;")
+    def toggle_wifi_connection(self):
+        self.set_source('off' if self.source == 'wifi' else 'wifi')
 
-            def wifi_polling_worker():
-                while self.sensor_state.get("wifi_connected", False):
-                    cur_ip = self.txt_wifi_ip.text().strip()
-                    if not cur_ip.startswith("http://") and not cur_ip.startswith("https://"):
-                        url = f"http://{cur_ip}/data"
-                    elif cur_ip.endswith("/data"):
-                        url = cur_ip
-                    else:
-                        url = f"{cur_ip.rstrip('/')}/data"
+    def toggle_sim(self):
+        self.set_source('off' if self.source == 'sim' else 'sim')
 
-                    try:
-                        req = urllib.request.Request(url, headers={"User-Agent": "RobotArm-GUI/1.0"})
-                        with urllib.request.urlopen(req, timeout=1.5) as resp:
-                            if resp.status == 200:
-                                raw = resp.read().decode('utf-8', errors='ignore')
-                                self.parse_sensor_json(raw)
-                                self.sensor_state["wifi_connected"] = True
-                                self.update_data_signal.emit(self.sensor_state)
-                    except Exception as err:
-                        self.sensor_state["raw_log"].append(f"[Wi-Fi Error] {err}")
-                        if len(self.sensor_state["raw_log"]) > 100:
-                            self.sensor_state["raw_log"].pop(0)
+    def toggle_serial_connection(self):
+        if self.source == 'serial':
+            self.set_source('off')
+            return
+        port = self.selected_port()
+        try:
+            baud = int(self.combo_baud.currentText())
+        except ValueError:
+            self.console.log("Baud rate must be a number", 'error')
+            return
+        if not port:
+            self.console.log("Pick a serial port first (⟳ rescans)", 'warn')
+            return
+        gui = self.main_gui
+        arm = getattr(gui, 'arm_link', None) or {}
+        alive = gui.commander_alive() if hasattr(gui, 'commander_alive') else False
+        if alive and arm.get('transport') == 'serial' and arm.get('port') == port:
+            answer = QMessageBox.question(
+                self, "Port used by the arm",
+                f"{port} is the arm ESP32's port: servo_serial_commander has it open.\n\n"
+                "Opening it here as well resets that ESP32 and takes its replies. Connect anyway?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if answer != QMessageBox.Yes:
+                return
+        self.active_port, self.active_baud = port, baud
+        self.sensor_state['port'], self.sensor_state['baudrate'] = port, baud
+        self.set_source('serial')
+
+    def _wifi_worker(self, gen, url):
+        failures = 0
+        while gen == self._gen:
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "RobotArm-GUI/1.0"})
+                with urllib.request.urlopen(req, timeout=2.0) as resp:
+                    raw = resp.read().decode('utf-8', errors='ignore')
+                if gen != self._gen:
+                    return
+                if not self.parse_sensor_json(raw):
+                    raise ValueError(f"reply from {url} is not JSON: {raw.strip()[:60]!r}")
+                failures = 0
+                self.console.log(raw.strip()[:240], 'data')
+                self.link_signal.emit(gen, 'live', '')
+                self.update_data_signal.emit(self.sensor_state)
+                time.sleep(0.5)
+            except Exception as e:
+                if gen != self._gen:
+                    return
+                failures += 1
+                if isinstance(e, urllib.error.HTTPError) and e.code == 404:
+                    detail = f"HTTP 404: no /data page at {url}"
+                elif isinstance(e, ValueError):
+                    detail = str(e)
+                else:
+                    detail = describe_net_error(e)
+                self.link_signal.emit(gen, 'error', detail)
+                time.sleep(min(5.0, 0.5 * (2 ** min(failures, 4))))
+
+    def _serial_worker(self, gen, port, baud):
+        try:
+            import serial
+        except ImportError:
+            self.link_signal.emit(gen, 'fatal', "pyserial is not installed (sudo apt install python3-serial)")
+            return
+        while gen == self._gen:
+            try:
+                with serial.Serial(port, baud, timeout=0.5) as ser:
+                    self.link_signal.emit(gen, 'opened', f"{port} @ {baud}")
+                    while gen == self._gen:
+                        raw_bytes = ser.readline()
+                        if not raw_bytes:
+                            continue
+                        line = raw_bytes.decode('utf-8', errors='ignore').strip()
+                        if not line:
+                            continue
+                        self.parse_sensor_line(line)
+                        self.console.log(line, 'data')
+                        self.link_signal.emit(gen, 'live', '')
                         self.update_data_signal.emit(self.sensor_state)
-                    time.sleep(0.5)
+            except Exception as e:
+                if gen != self._gen:
+                    return
+                self.link_signal.emit(gen, 'error', explain_serial_error(e))
+                time.sleep(2.0)
 
-            threading.Thread(target=wifi_polling_worker, daemon=True).start()
+    def _on_link_signal(self, gen, state, detail):
+        """Worker report (GUI thread). Ignores reports from replaced sources."""
+        if gen != self._gen:
+            return
+        before = self.link_phase
+        if state == 'live':
+            now = time.time()
+            self.last_rx = now
+            self.rx_times.append(now)
+            if before != 'live' or self._stale_logged:
+                self.console.log(f"Receiving data from {self.source_label()}", 'ok')
+            self._stale_logged = False
+            self.link_phase, self.link_error = 'live', ''
+        elif state == 'opened':
+            self.console.log(f"Opened {detail}; waiting for data…", 'info')
+            self.link_phase, self.link_error = 'waiting', ''
+            self.phase_since = time.time()
+        elif state in ('error', 'fatal'):
+            if detail != self.link_error:
+                self.console.log(f"{self.source_label()}: {detail}", 'error')
+            self.link_phase, self.link_error = 'error', detail
+            if state == 'fatal':
+                self.set_source('off')
+                return
+        if self.link_phase != before:
+            self._refresh_link()
+
+    def _refresh_link(self):
+        if not hasattr(self, 'lbl_link_detail'):
+            return
+        now = time.time()
+        src = self.source
+        if src == 'off':
+            kind, label, detail = 'idle', "Off", "No data source. Choose Wi-Fi, Serial or Simulate."
+        elif src == 'sim':
+            kind, label, detail = 'busy', "Simulated", "Demo values, not from the rover"
+        else:
+            target = self.source_label()
+            phase = self.link_phase
+            if phase == 'live' and now - self.last_rx < 5.0:
+                rate = sum(1 for t in self.rx_times if now - t < 5.0) / 5.0
+                unit = "updates/s" if src == 'wifi' else "lines/s"
+                kind, label = 'ok', "Live"
+                detail = f"{target} · {rate:.1f} {unit} · last {now - self.last_rx:.1f} s ago"
+            elif phase == 'live':
+                kind, label = 'warn', "No data"
+                detail = f"{target} · nothing for {now - self.last_rx:.0f} s"
+                if not self._stale_logged:
+                    self._stale_logged = True
+                    self.console.log(f"No data from {target} for 5 s", 'warn')
+            elif phase == 'waiting':
+                kind, label = 'busy', "Waiting for data"
+                detail = target
+                if now - self.phase_since > 5.0:
+                    detail += " · port open but silent: wrong baud rate, or the board isn't sending?"
+            elif phase == 'error':
+                kind, label = 'error', "Error"
+                detail = f"{target} · {self.link_error} · retrying"
+            else:
+                kind, label, detail = 'busy', "Connecting…", target
+        self.lbl_status.set_state(kind, label)
+        self.lbl_link_detail.setText(detail)
+        self.lbl_link_detail.setToolTip(detail)
+        if src != self._btn_key:
+            self._btn_key = src
+            wifi_on, ser_on, sim_on = src == 'wifi', src == 'serial', src == 'sim'
+            self.btn_wifi_connect.setText("⏹ Disconnect Wi-Fi" if wifi_on else "🌐 Connect Wi-Fi")
+            self.btn_wifi_connect.setStyleSheet(button_qss('danger' if wifi_on else 'primary', padding='5px 12px'))
+            self.btn_connect.setText("⏹ Disconnect Serial" if ser_on else "🔌 Connect Serial")
+            self.btn_connect.setStyleSheet(button_qss('danger' if ser_on else 'primary', padding='5px 12px'))
+            self.btn_sim.setText("⏸ Stop Simulation" if sim_on else "▶ Simulate")
+            self.btn_sim.setStyleSheet(button_qss('warning' if sim_on else 'neutral', padding='5px 12px'))
 
     def parse_sensor_json(self, raw_str):
+        """Apply a /data JSON reply. Returns False if it isn't a JSON object."""
         try:
             d = json.loads(raw_str)
         except Exception:
-            return
+            return False
+        if not isinstance(d, dict):
+            return False
 
         self.sensor_state["raw_log"].append(f"[JSON] {raw_str[:90]}...")
         if len(self.sensor_state["raw_log"]) > 100:
@@ -2011,9 +2870,10 @@ class ESP32SensorNodeWidget(QWidget):
         self.sensor_state["alert"] = str(d.get("alert", "OK"))
         self.sensor_state["sd_ok"] = bool(d.get("sd_ok", True))
         self.sensor_state["uptime_ms"] = int(d.get("uptime_ms", 0))
+        return True
 
     def sim_tick(self):
-        if not self.sensor_state["simulating"]:
+        if self.source != 'sim':
             return
 
         t = time.time()
@@ -2075,6 +2935,7 @@ class ESP32SensorNodeWidget(QWidget):
 
         for line in block:
             self.sensor_state["raw_log"].append(line)
+            self.console.log(line, 'data')
         if len(self.sensor_state["raw_log"]) > 100:
             self.sensor_state["raw_log"] = self.sensor_state["raw_log"][-100:]
 
@@ -2270,60 +3131,6 @@ class ESP32SensorNodeWidget(QWidget):
         secs = uptime_sec % 60
         self.lbl_system_status.setText(f"Alert: {alert_state} | Up: {mins:02d}m {secs:02d}s")
 
-        if data.get("wifi_connected", False):
-            self.lbl_wifi_status.setText("Wi-Fi: Connected")
-            self.lbl_wifi_status.setStyleSheet("background-color: #064e3b; color: #34d399; font-weight: bold; padding: 4px 8px; border-radius: 4px;")
-
-        # Console
-        if data.get("raw_log"):
-            self.log_console.setPlainText("\n".join(data["raw_log"][-40:]))
-            self.log_console.moveCursor(QTextCursor.End)
-
-    def toggle_sim(self):
-        self.sensor_state["simulating"] = not self.sensor_state["simulating"]
-        if self.sensor_state["simulating"]:
-            self.btn_sim.setText("▶️ Simulating Data")
-            self.lbl_status.setText("Simulating")
-            self.lbl_status.setStyleSheet("background-color: #064e3b; color: #34d399; font-weight: bold; padding: 4px 10px; border-radius: 4px;")
-        else:
-            self.btn_sim.setText("⏸️ Simulation Paused")
-            self.lbl_status.setText("Paused")
-            self.lbl_status.setStyleSheet("background-color: #4c0519; color: #f43f5e; font-weight: bold; padding: 4px 10px; border-radius: 4px;")
-
-    def toggle_serial_connection(self):
-        port = self.combo_port.currentText()
-        baud = int(self.combo_baud.currentText())
-
-        if self.sensor_state["connected"]:
-            self.sensor_state["connected"] = False
-            self.btn_connect.setText("Connect Serial")
-            self.lbl_status.setText("Disconnected")
-            self.lbl_status.setStyleSheet("background-color: #4c0519; color: #f43f5e; font-weight: bold; padding: 4px 10px; border-radius: 4px;")
-        else:
-            self.sensor_state["connected"] = True
-            self.sensor_state["simulating"] = False
-            self.sensor_state["wifi_connected"] = False
-            self.btn_connect.setText("Disconnect Serial")
-            self.btn_sim.setText("▶️ Simulating Data")
-            self.lbl_status.setText(f"Hardware Serial ({port})")
-            self.lbl_status.setStyleSheet("background-color: #064e3b; color: #34d399; font-weight: bold; padding: 4px 10px; border-radius: 4px;")
-
-            def serial_reader_loop():
-                try:
-                    import serial
-                    with serial.Serial(port, baud, timeout=1.0) as s:
-                        while self.sensor_state["connected"]:
-                            raw_bytes = s.readline()
-                            if raw_bytes:
-                                line = raw_bytes.decode('utf-8', errors='ignore')
-                                self.parse_sensor_line(line)
-                                self.update_data_signal.emit(self.sensor_state)
-                except Exception:
-                    self.sensor_state["connected"] = False
-                    self.update_data_signal.emit(self.sensor_state)
-
-            threading.Thread(target=serial_reader_loop, daemon=True).start()
-
 
     def tare_imu_horizon(self):
         """Record current accelerometer-derived tilt as zero-horizon reference."""
@@ -2336,8 +3143,7 @@ class ESP32SensorNodeWidget(QWidget):
         self.sensor_state["roll"] = 0.0
         self.lbl_tilt_val.setText("Pitch: 0.0°   |   Roll: 0.0°")
         self.save_imu_offsets()
-        if self.main_gui and hasattr(self.main_gui, 'log_to_console'):
-            self.main_gui.log_to_console(f"🎯 MPU6050 Horizon Tared: Pitch offset={raw_p:.1f}°, Roll offset={raw_r:.1f}°")
+        self.console.log(f"MPU6050 horizon tared: pitch offset {raw_p:.1f}°, roll offset {raw_r:.1f}°", 'ok')
 
     def load_imu_offsets(self):
         if os.path.exists(CALIB_FILE_PATH):
@@ -2389,6 +3195,15 @@ class CalibratedJointPublisherGUI(QMainWindow):
         # painted a dark box behind every label).
         apply_app_theme(QApplication.instance())
         self.estop_engaged = False
+        # Arm link, as reported by servo_serial_commander (/esp32_link_state)
+        self.arm_link = None
+        self.arm_link_rx_t = 0.0
+        self.arm_legacy = None          # (connected, text, time) from /esp32_connection_status
+        self.arm_link_last_state = None
+        self._gui_started = time.time()
+        self._comm_mode_set_at = 0.0
+        self._arm_fix_mode = 'SERIAL'
+        self._raw_cmd_hint_shown = False
         # INI everywhere (~/.config/CodeForIndia/RobotDashboard.conf on Linux)
         self.settings = QSettings(QSettings.IniFormat, QSettings.UserScope, "CodeForIndia", "RobotDashboard")
 
@@ -2521,88 +3336,104 @@ class CalibratedJointPublisherGUI(QMainWindow):
         scroll_content.setLayout(scroll_layout)
         scroll.setWidget(scroll_content)
 
-        # ── Bottom Section: Integrated Serial & Wi-Fi Monitor Console ────
-        console_group = QGroupBox("📟 Hardware Serial && Wi-Fi Monitor Console")
-        console_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                font-size: 12px;
-                border: 1px solid #333;
-                border-radius: 6px;
-                margin-top: 6px;
-                padding-top: 8px;
-                background-color: #141414;
-                color: #f59e0b;
-            }
-            QGroupBox::title { subcontrol-origin: margin; padding: 0 4px; color: #f59e0b; }
-        """)
+        # ── Bottom Section: arm ESP32 link card + console ─────────────────
+        console_group = QGroupBox("📟 Arm ESP32 Link && Console")
+        console_group.setStyleSheet(group_box_qss('#fbbf24'))
         console_layout = QVBoxLayout()
-        console_layout.setContentsMargins(6, 6, 6, 6)
+        console_layout.setContentsMargins(8, 8, 8, 8)
+        console_layout.setSpacing(6)
 
-        # Live Status Connection Badge Bar (Compact Single-Line Strip)
-        status_bar = QHBoxLayout()
-        status_bar.setContentsMargins(0, 0, 0, 2)
-        self.lbl_conn_badge = QLabel(" 🟡 Initializing ESP32 Wireless Monitor...")
-        self.lbl_conn_badge.setFont(QFont("SansSerif", 9, QFont.Bold))
-        self.lbl_conn_badge.setFixedHeight(24)
-        self.lbl_conn_badge.setStyleSheet("background-color: #332b00; color: #ffcc00; padding: 2px 8px; border-radius: 4px;")
+        link_row = QHBoxLayout()
+        self.arm_link_pill = StatusPill("Waiting for commander…", 'busy')
+        self.lbl_arm_link_detail = muted_label()
+        self.btn_arm_reconnect = QPushButton("⟳ Reconnect")
+        self.btn_arm_reconnect.setToolTip("Close and reopen the commander's serial port / UDP socket now")
+        self.btn_arm_reconnect.setStyleSheet(button_qss('neutral', padding='4px 10px'))
+        self.btn_arm_reconnect.clicked.connect(lambda: self.send_link_command("RECONNECT"))
+        self.btn_arm_link_settings = QPushButton("⚙ Link")
+        self.btn_arm_link_settings.setCheckable(True)
+        self.btn_arm_link_settings.setToolTip("Change the arm's serial port, baud rate or Wi-Fi address")
+        self.btn_arm_link_settings.setStyleSheet(button_qss('neutral', checked='primary', padding='4px 10px'))
+        link_row.addWidget(self.arm_link_pill)
+        link_row.addWidget(self.lbl_arm_link_detail, 1)
+        link_row.addWidget(self.btn_arm_reconnect)
+        link_row.addWidget(self.btn_arm_link_settings)
+        console_layout.addLayout(link_row)
 
-        status_bar.addWidget(self.lbl_conn_badge)
-        status_bar.addStretch()
-        console_layout.addLayout(status_bar)
+        # Shown when the ESP32 replies but only obeys the other link
+        self.arm_mismatch_bar = QWidget()
+        self.arm_mismatch_bar.setObjectName("armMismatch")
+        self.arm_mismatch_bar.setAttribute(Qt.WA_StyledBackground, True)
+        self.arm_mismatch_bar.setStyleSheet("QWidget#armMismatch { background-color: #3d2a07; border: 1px solid #f59e0b; border-radius: 6px; }")
+        mm_layout = QHBoxLayout(self.arm_mismatch_bar)
+        mm_layout.setContentsMargins(8, 4, 8, 4)
+        self.lbl_arm_mismatch = QLabel("")
+        self.lbl_arm_mismatch.setStyleSheet("color: #fde68a;")
+        self.lbl_arm_mismatch.setWordWrap(True)
+        self.btn_arm_fix_mode = QPushButton("Switch ESP32")
+        self.btn_arm_fix_mode.setStyleSheet(button_qss('warning', padding='4px 10px'))
+        self.btn_arm_fix_mode.clicked.connect(self.fix_arm_mode_mismatch)
+        mm_layout.addWidget(self.lbl_arm_mismatch, 1)
+        mm_layout.addWidget(self.btn_arm_fix_mode)
+        self.arm_mismatch_bar.hide()
+        console_layout.addWidget(self.arm_mismatch_bar)
 
-        # Terminal Output Box (Stretches to fill 100% of remaining empty vertical space)
-        self.console_text = QTextEdit()
-        self.console_text.setReadOnly(True)
-        self.console_text.setFont(QFont("Monospace", 9))
-        self.console_text.setStyleSheet("""
-            QTextEdit {
-                background-color: #09090b;
-                color: #38bdf8;
-                border: 1px solid #27272a;
-                border-radius: 4px;
-                padding: 4px;
-            }
-        """)
-        console_layout.addWidget(self.console_text, 1)
+        # Link settings: hidden until "⚙ Link" (opens itself on a port error)
+        self.arm_link_settings = QWidget()
+        ls = QHBoxLayout(self.arm_link_settings)
+        ls.setContentsMargins(0, 0, 0, 0)
+        ls.setSpacing(6)
+        ls.addWidget(QLabel("Port"))
+        self.combo_arm_port = QComboBox()
+        self.combo_arm_port.setEditable(True)
+        self.combo_arm_port.setMinimumWidth(150)
+        self.combo_arm_port.setToolTip("Serial port servo_serial_commander opens (pick one or type a path)")
+        btn_rescan = QPushButton("⟳")
+        btn_rescan.setToolTip("Rescan serial ports")
+        btn_rescan.setFixedWidth(32)
+        btn_rescan.setStyleSheet(button_qss('neutral', padding='3px 6px'))
+        btn_rescan.clicked.connect(lambda: self.refresh_arm_port_list(report=True))
+        ls.addWidget(self.combo_arm_port)
+        ls.addWidget(btn_rescan)
+        ls.addWidget(QLabel("Baud"))
+        self.combo_arm_baud = QComboBox()
+        self.combo_arm_baud.addItems(["115200", "57600", "230400", "9600"])
+        ls.addWidget(self.combo_arm_baud)
+        btn_apply_serial = QPushButton("Use port")
+        btn_apply_serial.setToolTip("Tell the commander to reopen on this port / baud rate")
+        btn_apply_serial.setStyleSheet(button_qss('primary', padding='4px 10px'))
+        btn_apply_serial.clicked.connect(self.apply_arm_serial_settings)
+        ls.addWidget(btn_apply_serial)
+        ls.addSpacing(10)
+        ls.addWidget(QLabel("Wi-Fi"))
+        self.txt_arm_ip = QLineEdit()
+        self.txt_arm_ip.setPlaceholderText("robot-arm.local or 192.168.1.50")
+        self.txt_arm_ip.setMinimumWidth(130)
+        self.txt_arm_ip.returnPressed.connect(self.apply_arm_ip)
+        ls.addWidget(self.txt_arm_ip, 1)
+        btn_apply_ip = QPushButton("Use IP")
+        btn_apply_ip.setToolTip("Tell the commander which address to send UDP commands to")
+        btn_apply_ip.setStyleSheet(button_qss('primary', padding='4px 10px'))
+        btn_apply_ip.clicked.connect(self.apply_arm_ip)
+        ls.addWidget(btn_apply_ip)
+        self.arm_link_settings.hide()
+        self.btn_arm_link_settings.toggled.connect(self.arm_link_settings.setVisible)
+        console_layout.addWidget(self.arm_link_settings)
 
-        # Bottom Command Row
-        cmd_row = QHBoxLayout()
-        self.cmd_input = QLineEdit()
-        self.cmd_input.setPlaceholderText("Type raw command (e.g. CMD:turntable_link_joint_dup=90.0) & press Enter...")
-        self.cmd_input.setFont(QFont("Monospace", 9))
-        self.cmd_input.setStyleSheet("""
-            QLineEdit {
-                background-color: #18181b;
-                color: #ffffff;
-                border: 1px solid #3f3f46;
-                border-radius: 4px;
-                padding: 4px 8px;
-            }
-        """)
-        self.cmd_input.returnPressed.connect(self.send_custom_cmd)
-
-        btn_send = QPushButton("📤 Send")
-        btn_send.setStyleSheet("""
-            QPushButton { background-color: #2563eb; color: white; font-weight: bold; border-radius: 4px; padding: 4px 10px; }
-            QPushButton:hover { background-color: #1d4ed8; }
-        """)
-        btn_send.clicked.connect(self.send_custom_cmd)
-
-        btn_clear_log = QPushButton("🧹 Clear Log")
-        btn_clear_log.setStyleSheet("""
-            QPushButton { background-color: #3f3f46; color: white; font-weight: bold; border-radius: 4px; padding: 4px 8px; }
-            QPushButton:hover { background-color: #52525b; }
-        """)
-        btn_clear_log.clicked.connect(self.console_text.clear)
-
-        cmd_row.addWidget(self.cmd_input, 1)
-        cmd_row.addWidget(btn_send)
-        cmd_row.addWidget(btn_clear_log)
-        console_layout.addLayout(cmd_row)
+        self.arm_console = ConsoleWidget(
+            "arm",
+            input_placeholder="Command for the arm ESP32: PING, MODE:SERIAL, CMD:turntable_link_joint=90 …  (↑/↓ history)",
+            quick_commands=[("PING", "PING", "Ask the ESP32 to reply (measures the round trip)"),
+                            ("Status", "LINK:STATUS", "Ask the commander to publish its link state now")])
+        self.arm_console.submitted.connect(self.on_arm_console_submit)
+        self.chk_arm_verbose = QCheckBox("Joint traffic")
+        self.chk_arm_verbose.setToolTip("Also show every joint command and ACK (busy while sliders move)")
+        self.chk_arm_verbose.toggled.connect(lambda on: self.send_link_command(f"VERBOSE={1 if on else 0}"))
+        self.arm_console.add_toolbar_widget(self.chk_arm_verbose)
+        console_layout.addWidget(self.arm_console, 1)
 
         console_group.setLayout(console_layout)
-        console_group.setMinimumHeight(130)
+        console_group.setMinimumHeight(230)
 
         # Joints and console share a draggable divider (the console used to
         # take a third of the height and leave room for only ~3 joints).
@@ -2612,7 +3443,7 @@ class CalibratedJointPublisherGUI(QMainWindow):
         self.arm_splitter.setChildrenCollapsible(False)
         self.arm_splitter.setStretchFactor(0, 3)
         self.arm_splitter.setStretchFactor(1, 1)
-        self.arm_splitter.setSizes([560, 200])
+        self.arm_splitter.setSizes([320, 300])
         control_layout.addWidget(self.arm_splitter, 1)
 
         control_widget.setLayout(control_layout)
@@ -2787,41 +3618,237 @@ class CalibratedJointPublisherGUI(QMainWindow):
         ]
 
         self.restore_ui_state()
-        self.log_to_console("🚀 Dashboard Hardware & Wi-Fi Monitor Initialized.")
+        self.refresh_arm_port_list()
+        self.arm_link_timer = QTimer(self)
+        self.arm_link_timer.timeout.connect(self.refresh_arm_link)
+        self.arm_link_timer.start(1000)
+        self.refresh_arm_link()
+        self.log_to_console("Dashboard started" + ("" if ROS2_AVAILABLE else " without ROS 2: nothing will reach the robots"),
+                            'info' if ROS2_AVAILABLE else 'warn')
 
     def update_connection_status(self, status_str):
-        """Update live status badge and output notification message when ESP32 connects/disconnects."""
+        """Legacy /esp32_connection_status. Only drives the card when no
+        /esp32_link_state arrives (e.g. unified_robot_commander)."""
         if status_str.startswith("STATUS:CONNECTED:"):
-            info_text = status_str[len("STATUS:CONNECTED:"):]
-            self.lbl_conn_badge.setText(f" {info_text}")
-            self.lbl_conn_badge.setStyleSheet("background-color: #064e3b; color: #34d399; padding: 2px 8px; border-radius: 4px;")
-
-            if self.last_conn_state != True:
-                self.last_conn_state = True
-                self.log_to_console("🟢 [SYSTEM] ✅ Connection Established between Dashboard and ESP32!")
-
+            self.arm_legacy = (True, status_str[len("STATUS:CONNECTED:"):].strip(), time.time())
         elif status_str.startswith("STATUS:DISCONNECTED:"):
-            info_text = status_str[len("STATUS:DISCONNECTED:"):]
-            self.lbl_conn_badge.setText(f" {info_text}")
-            self.lbl_conn_badge.setStyleSheet("background-color: #4c0519; color: #f43f5e; padding: 2px 8px; border-radius: 4px;")
+            self.arm_legacy = (False, status_str[len("STATUS:DISCONNECTED:"):].strip(), time.time())
+        else:
+            return
+        if not self.commander_alive():
+            if self.last_conn_state != self.arm_legacy[0]:
+                self.last_conn_state = self.arm_legacy[0]
+                self.arm_console.log(self.arm_legacy[1], 'ok' if self.arm_legacy[0] else 'error')
+            self.refresh_arm_link()
 
-            if self.last_conn_state != False:
-                self.last_conn_state = False
-                self.log_to_console("🔴 [SYSTEM] ⚠️ Connection Lost to ESP32 / Searching on Wi-Fi...")
+    def log_to_console(self, text, kind=None):
+        """Add a line to the arm console (kind inferred from a leading emoji)."""
+        if not hasattr(self, 'arm_console'):
+            print(text)
+            return
+        self.arm_console.log(text, kind or infer_console_kind(text))
 
-    def log_to_console(self, text):
-        """Append log message to Serial/Wi-Fi Monitor Console with timestamp."""
-        ts = time.strftime("[%H:%M:%S] ")
-        self.console_text.append(ts + text)
-        self.console_text.moveCursor(QTextCursor.End)
+    # ── Arm link (servo_serial_commander) ─────────────────────────────────
+    def commander_alive(self):
+        return self.arm_link is not None and time.time() - self.arm_link_rx_t < 3.5
 
-    def send_custom_cmd(self):
-        """Send custom manual string entered by user in the Serial Monitor input."""
-        cmd_text = self.cmd_input.text().strip()
-        if cmd_text:
-            self.log_to_console(f"📤 Outgoing Command: {cmd_text}")
-            self.ros_node.publish_calibration(cmd_text)
-            self.cmd_input.clear()
+    def on_arm_link_state(self, data):
+        """New /esp32_link_state message (JSON already decoded)."""
+        if not isinstance(data, dict):
+            return
+        if self.arm_link_last_state == 'missing':
+            self.arm_console.log(f"servo_serial_commander is running ({data.get('target', '?')})", 'ok')
+        self.arm_link = data
+        self.arm_link_rx_t = time.time()
+        self.refresh_arm_link()
+
+    def on_arm_console_line(self, text):
+        """New /esp32_console line: RX:/TX:/SYS:/ERR:<text>."""
+        kinds = {'RX': 'rx', 'TX': 'tx', 'SYS': 'info', 'ERR': 'error'}
+        prefix, sep, rest = text.partition(':')
+        if sep and prefix in kinds:
+            self.arm_console.log(rest, kinds[prefix])
+        else:
+            self.arm_console.log(text, 'rx')
+
+    @staticmethod
+    def _age_text(age):
+        if age is None:
+            return "never"
+        return f"{age:.1f} s ago" if age < 60 else f"{age / 60:.0f} min ago"
+
+    def refresh_arm_link(self):
+        """Redraw the arm link card (also runs once a second so ages stay current)."""
+        if not hasattr(self, 'arm_link_pill'):
+            return
+        now = time.time()
+        mismatch_text = None
+        if not ROS2_AVAILABLE:
+            kind, label = 'error', "ROS 2 not available"
+            detail = "Nothing reaches the arm. Start the dashboard with ./launch_dashboard.sh so ROS 2 is sourced."
+        elif self.commander_alive():
+            d = self.arm_link
+            state = d.get('state')
+            serial_link = d.get('transport') != 'wifi'
+            parts = [d.get('target', '?')]
+            if state == 'online':
+                kind, label = 'ok', "Online"
+                if d.get('rtt_ms') is not None:
+                    parts.append(f"ping {d['rtt_ms']:.0f} ms")
+                parts.append(f"last reply {self._age_text(d.get('last_rx_age'))}")
+            elif state == 'mismatch':
+                kind, label = 'warn', "Mode mismatch"
+                listen = 'Wi-Fi' if d.get('mismatch_mode') == 'WIFI' else 'serial'
+                ours = 'serial' if serial_link else 'Wi-Fi'
+                mismatch_text = (f"The ESP32 replies, but it is listening on {listen}, so commands "
+                                 f"sent over {ours} are ignored.")
+                self._arm_fix_mode = 'SERIAL' if serial_link else 'WIFI'
+                parts.append(f"last reply {self._age_text(d.get('last_rx_age'))}")
+            elif state == 'port_error':
+                kind, label = 'error', "Port error" if serial_link else "Socket error"
+                parts.append(d.get('last_error') or "cannot open the link")
+            else:
+                kind, label = 'warn', "No reply"
+                parts.append(f"last reply {self._age_text(d.get('last_rx_age'))}")
+                parts.append("is the ESP32 powered and on this link?")
+            parts.append(f"RX {d.get('rx', 0)} · TX {d.get('tx', 0)}")
+            if d.get('esp32_ip'):
+                parts.append(f"ESP32 IP {d['esp32_ip']}")
+            detail = " · ".join(str(x) for x in parts)
+            self.sync_comm_button(d.get('transport'))
+            self._fill_arm_settings_from_state(d)
+            if state == 'port_error' and self.arm_link_last_state != 'port_error':
+                self.btn_arm_link_settings.setChecked(True)   # the fix is usually another port
+            self.arm_link_last_state = state
+        elif self.arm_legacy and now - self.arm_legacy[2] < 5.0:
+            ok, text, _ = self.arm_legacy
+            kind, label = ('ok', "Online") if ok else ('warn', "Disconnected")
+            detail = f"{text} (basic status from an older commander)"
+        elif self.arm_link is None and now - self._gui_started < 4.0:
+            kind, label = 'busy', "Waiting for commander…"
+            detail = "Looking for servo_serial_commander on /esp32_link_state"
+        else:
+            kind, label = 'error', "Commander not running"
+            since = f" (last heard {now - self.arm_link_rx_t:.0f} s ago)" if self.arm_link_rx_t else ""
+            detail = (f"No link state from servo_serial_commander{since}. "
+                      "Start it: ros2 run servo_joint_publisher servo_serial_commander")
+            if self.arm_link_last_state not in ('missing', None):
+                self.arm_console.log("Lost contact with servo_serial_commander", 'error')
+            self.arm_link_last_state = 'missing'
+        self.arm_link_pill.set_state(kind, label)
+        self.lbl_arm_link_detail.setText(detail)
+        self.lbl_arm_link_detail.setToolTip(detail)
+        self.arm_mismatch_bar.setVisible(mismatch_text is not None)
+        if mismatch_text:
+            self.lbl_arm_mismatch.setText("⚠ " + mismatch_text)
+            self.btn_arm_fix_mode.setText(f"Switch ESP32 to {'Wi-Fi' if self._arm_fix_mode == 'WIFI' else 'serial'}")
+        self.btn_arm_reconnect.setEnabled(ROS2_AVAILABLE and self.commander_alive())
+
+    def sync_comm_button(self, transport):
+        """Keep the Comm toggle showing the link the commander really uses."""
+        if transport not in ('serial', 'wifi') or time.time() - self._comm_mode_set_at < 2.5:
+            return
+        serial_link = transport == 'serial'
+        if self.btn_comm_mode.isChecked() != serial_link:
+            self.btn_comm_mode.blockSignals(True)
+            self.btn_comm_mode.setChecked(serial_link)
+            self.btn_comm_mode.blockSignals(False)
+        self.btn_comm_mode.setText("📟 Comm: Serial" if serial_link else "📡 Comm: WiFi")
+
+    def _fill_arm_settings_from_state(self, d):
+        key = (d.get('port'), d.get('baudrate'), d.get('ip'))
+        if key == getattr(self, '_arm_settings_key', None):
+            return
+        self._arm_settings_key = key
+        if d.get('port'):
+            self.combo_arm_port.setEditText(d['port'])
+        if d.get('baudrate'):
+            baud = str(d['baudrate'])
+            if self.combo_arm_baud.findText(baud) < 0:
+                self.combo_arm_baud.addItem(baud)
+            self.combo_arm_baud.setCurrentText(baud)
+        if d.get('ip'):
+            self.txt_arm_ip.setText(d['ip'])
+
+    def refresh_arm_port_list(self, report=False):
+        current = self.combo_arm_port.currentText()
+        ports = list_serial_ports()
+        self.combo_arm_port.blockSignals(True)
+        self.combo_arm_port.clear()
+        for dev, desc in ports:
+            self.combo_arm_port.addItem(dev)
+            if desc:
+                self.combo_arm_port.setItemData(self.combo_arm_port.count() - 1, desc, Qt.ToolTipRole)
+        self.combo_arm_port.setEditText(current or (ports[0][0] if ports else "/dev/ttyUSB0"))
+        self.combo_arm_port.blockSignals(False)
+        if report:
+            found = ", ".join(f"{d} ({desc})" if desc else d for d, desc in ports) or "none"
+            self.arm_console.log(f"Serial ports found: {found}", 'info')
+
+    def send_link_command(self, cmd):
+        """LINK:<cmd> to servo_serial_commander (it reports back on the console)."""
+        if not ROS2_AVAILABLE:
+            self.arm_console.log(f"Not sent (ROS 2 not available): LINK:{cmd}", 'error')
+            return
+        self.ros_node.publish_calibration(f"LINK:{cmd}")
+        if not self.commander_alive():
+            self.arm_console.log(f"LINK:{cmd} sent, but servo_serial_commander isn't running", 'warn')
+
+    def apply_arm_serial_settings(self):
+        port = self.combo_arm_port.currentText().strip()
+        baud = self.combo_arm_baud.currentText().strip()
+        d = self.arm_link or {}
+        rover = getattr(self, 'sensor_node_widget', None)
+        if rover is not None and rover.source == 'serial' and rover.active_port == port:
+            self.arm_console.log(f"{port} is open in the Rover tab; disconnect it there first", 'error')
+            return
+        changed = False
+        if baud and str(d.get('baudrate')) != baud:
+            self.send_link_command(f"BAUD={baud}")
+            changed = True
+        if port and d.get('port') != port:
+            self.send_link_command(f"PORT={port}")
+            changed = True
+        if not changed:
+            self.send_link_command("RECONNECT")
+        if d.get('transport') == 'wifi':
+            self.arm_console.log("Port saved. The commander is on Wi-Fi: switch Comm to Serial to use it.", 'info')
+
+    def apply_arm_ip(self):
+        host = self.txt_arm_ip.text().strip()
+        if not host:
+            return
+        self.send_link_command(f"IP={host}")
+        if (self.arm_link or {}).get('transport') == 'serial':
+            self.arm_console.log("Address saved. The commander is on serial: switch Comm to Wi-Fi to use it.", 'info')
+
+    def fix_arm_mode_mismatch(self):
+        mode = self._arm_fix_mode
+        self.ros_node.publish_calibration(f"MODE:{mode}")
+        self.arm_console.log(f"Asked the ESP32 to listen on {'Wi-Fi' if mode == 'WIFI' else 'serial'}", 'info')
+
+    def on_arm_console_submit(self, text):
+        """Console input → /servo_calibration (unknown text is sent as RAW:)."""
+        t = text.strip()
+        if not t:
+            return
+        upper = t.upper()
+        known = ('MODE:', 'CMD:', 'CALIB:', 'SYNC:', 'LINK:', 'RAW:')
+        motion = upper.startswith('CMD:') or upper.startswith('RAW:CMD:')
+        if motion and self.estop_engaged:
+            self.arm_console.log(f"Blocked by E-STOP: {t}", 'warn')
+            return
+        if not ROS2_AVAILABLE:
+            self.arm_console.log(f"Not sent (ROS 2 not available): {t}", 'error')
+            return
+        prefix = next((k for k in known if upper.startswith(k)), None)
+        payload = (prefix + t[len(prefix):]) if prefix else "RAW:" + t
+        self.ros_node.publish_calibration(payload)
+        if not self.commander_alive():
+            self.arm_console.log(f"{t}: published, but servo_serial_commander isn't running", 'warn')
+        if motion and not self._raw_cmd_hint_shown:
+            self._raw_cmd_hint_shown = True
+            self.arm_console.log("Joint commands typed here are clamped to the joint limits; the next slider move overrides them.", 'info')
 
     def on_tab_changed(self, index):
         """Handle tab transitions and update status badges."""
@@ -2835,11 +3862,9 @@ class CalibratedJointPublisherGUI(QMainWindow):
         if index == 0:
             self.lbl_rviz_target.setText(f"{prefix}🦾 Arm")
             self.lbl_rviz_target.setStyleSheet("background-color: #0284c7; color: #ffffff; padding: 2px 8px; border-radius: 10px;")
-            self.log_to_console("📑 Switched to 🦾 Robotic Arm Dashboard.")
         elif index == 1:
             self.lbl_rviz_target.setText(f"{prefix}🤖 Quard")
             self.lbl_rviz_target.setStyleSheet("background-color: #10b981; color: #ffffff; padding: 2px 8px; border-radius: 10px;")
-            self.log_to_console("📑 Switched to 🤖 Quard Bot Quadruped Dashboard.")
             if hasattr(self, 'quard_bot_widget'):
                 if hasattr(self.quard_bot_widget, 'ping_quard_bot'):
                     self.quard_bot_widget.ping_quard_bot()
@@ -2848,7 +3873,6 @@ class CalibratedJointPublisherGUI(QMainWindow):
         elif index == 2:
             self.lbl_rviz_target.setText(f"{prefix}🚀 Rover")
             self.lbl_rviz_target.setStyleSheet("background-color: #f59e0b; color: #ffffff; padding: 2px 8px; border-radius: 10px;")
-            self.log_to_console("📑 Switched to 🚀 Rover Sensor Dashboard.")
 
         # Ensure embedded RViz window is properly resized
         QTimer.singleShot(50, self._resize_embedded_rviz)
@@ -3220,8 +4244,10 @@ class CalibratedJointPublisherGUI(QMainWindow):
             self.btn_comm_mode.setText("📡 Comm: WiFi")
 
         cmd = f"MODE:{mode_str}"
+        self._comm_mode_set_at = time.time()
         self.ros_node.publish_calibration(cmd)
-        self.log_to_console(f"📡 Transmitted {cmd} to ESP32 via ROS topic")
+        if not self.commander_alive():
+            self.log_to_console(f"{cmd} published, but servo_serial_commander isn't running", 'warn')
 
     def update_sliders_from_ros(self, msg: JointState):
         """Update GUI joint sliders visually when gesture teleop is active."""
@@ -3256,8 +4282,6 @@ class CalibratedJointPublisherGUI(QMainWindow):
 
             self.btn_gesture.setText("✋ Gesture ACTIVE")
             self.log_to_console("🖐️ [MODE SWITCH] Activated Body Gesture Teleoperation Mode (Webcam /dev/video0).")
-            self.lbl_conn_badge.setText(" 🖐️ Mode: Body Gesture Teleoperation (Webcam)")
-            self.lbl_conn_badge.setStyleSheet("background-color: #064e3b; color: #34d399; padding: 2px 8px; border-radius: 4px;")
 
             if self.gesture_process is None:
                 self.gesture_process = QProcess(self)
@@ -3265,8 +4289,6 @@ class CalibratedJointPublisherGUI(QMainWindow):
         else:
             self.btn_gesture.setText("✋ Gesture Mode")
             self.log_to_console("🕹️ [MODE SWITCH] Returned to Manual Slider Control Mode.")
-            self.lbl_conn_badge.setText(" 🕹️ Mode: Manual Joint Sliders")
-            self.lbl_conn_badge.setStyleSheet("background-color: #1e3a8a; color: #60a5fa; padding: 2px 8px; border-radius: 4px;")
 
             if self.gesture_process and self.gesture_process.state() != QProcess.NotRunning:
                 self.gesture_process.kill()
@@ -3300,7 +4322,7 @@ class CalibratedJointPublisherGUI(QMainWindow):
             q.active_gait = None
             q.send_command({'mode': 'stand'})  # now, not after the stand animation
             q.stand_pose()
-            q.setEnabled(False)
+            q.set_motion_enabled(False)   # connection + console stay usable
 
         for w in self.joint_widgets.values():
             w.setEnabled(False)
@@ -3322,7 +4344,7 @@ class CalibratedJointPublisherGUI(QMainWindow):
         for b in self.motion_buttons:
             b.setEnabled(True)
         if getattr(self, 'quard_bot_widget', None):
-            self.quard_bot_widget.setEnabled(True)
+            self.quard_bot_widget.set_motion_enabled(True)
         self.lbl_estop_banner.hide()
         self.btn_estop.setText("⛔ E-STOP")
         self.btn_estop.setStyleSheet(button_qss('danger', padding='7px 18px') + " QPushButton { font-size: 13px; }")
@@ -3492,7 +4514,6 @@ class CalibratedJointPublisherGUI(QMainWindow):
     def on_joint_calib_changed(self, joint_name, min_deg, max_deg):
         calib_str = f"CALIB:{joint_name}={min_deg:.1f},{max_deg:.1f}"
         self.ros_node.publish_calibration(calib_str)
-        self.log_to_console(f"⚙️ Limit Broadcast: {calib_str}")
 
     def publish_joint_states(self):
         if self.is_gesture_mode:
@@ -3549,6 +4570,11 @@ if ROS2_AVAILABLE:
                 self.status_callback,
                 10
             )
+            # Structured link state + ESP32 console from servo_serial_commander
+            self.link_sub = self.create_subscription(
+                StringMsg, '/esp32_link_state', self.link_state_callback, LINK_STATE_QOS)
+            self.console_sub = self.create_subscription(
+                StringMsg, '/esp32_console', self.console_callback, CONSOLE_QOS)
             # Subscribe to /joint_states to mirror active gesture pose on GUI sliders
             self.joint_sub = self.create_subscription(
                 JointState,
@@ -3565,6 +4591,19 @@ if ROS2_AVAILABLE:
         def status_callback(self, msg: StringMsg):
             if self.gui_ref:
                 self.gui_ref.update_connection_status(msg.data)
+
+        def link_state_callback(self, msg: StringMsg):
+            if not self.gui_ref:
+                return
+            try:
+                data = json.loads(msg.data)
+            except ValueError:
+                return
+            self.gui_ref.on_arm_link_state(data)
+
+        def console_callback(self, msg: StringMsg):
+            if self.gui_ref:
+                self.gui_ref.on_arm_console_line(msg.data)
 
         def publish_calibration(self, calib_str):
             msg = StringMsg()

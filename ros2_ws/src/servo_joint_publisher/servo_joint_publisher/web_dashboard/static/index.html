@@ -112,17 +112,41 @@
             </div>
           </div>
 
-          <!-- Arm link status -->
-          <div class="card serial-card">
-            <div class="link-status-row">
-              <span class="card-title" style="margin:0">🔌 Arm ESP32 Link</span>
-              <span id="pill-arm-link" class="status-pill">Checking…</span>
+          <!-- Arm link (servo_serial_commander) + console -->
+          <div class="card serial-card link-card" id="arm-link-card">
+            <div class="link-row">
+              <span class="card-title link-title">🔌 Arm link</span>
+              <span id="pill-arm-link" class="status-pill status-pending">Checking…</span>
+              <span class="link-actions">
+                <button id="btn-arm-reconnect" class="btn btn-outline btn-xs" type="button" title="Close and reopen the commander's serial port / UDP socket now">⟳ Reconnect</button>
+                <button id="btn-arm-link-settings" class="btn btn-outline btn-xs" type="button" aria-expanded="false" aria-controls="arm-link-settings" title="Change the arm's serial port, baud rate or Wi-Fi address">⚙ Link</button>
+                <button id="btn-arm-console-toggle" class="btn btn-outline btn-xs active" type="button" aria-expanded="true" aria-controls="console-arm" title="Show or hide the console">Console</button>
+              </span>
             </div>
-            <p class="card-hint" id="arm-link-hint">
-              Joint angles go out on <code>/joint_states</code>; <code>servo_serial_commander</code> owns the
-              serial port (default <code>/dev/ttyUSB0</code> @ 115200). Change it with
-              <code>--ros-args -p port:=/dev/ttyACM0</code>.
-            </p>
+            <div id="arm-link-detail" class="link-detail link-detail-block"></div>
+            <div id="arm-mismatch" class="link-warning" hidden>
+              <span id="arm-mismatch-text"></span>
+              <button id="btn-arm-fix-mode" class="btn btn-warning btn-xs" type="button">Switch ESP32</button>
+            </div>
+            <div id="arm-link-settings" class="link-settings" hidden>
+              <label class="field-label" for="arm-port">Port</label>
+              <input id="arm-port" class="form-input mono" list="serial-ports-list" placeholder="/dev/ttyUSB0" spellcheck="false">
+              <button class="btn btn-outline btn-xs btn-rescan-ports" type="button" title="Rescan serial ports">⟳</button>
+              <label class="field-label" for="arm-baud">Baud</label>
+              <select id="arm-baud" class="form-input">
+                <option value="115200">115200</option>
+                <option value="57600">57600</option>
+                <option value="230400">230400</option>
+                <option value="9600">9600</option>
+              </select>
+              <button id="btn-arm-use-port" class="btn btn-primary btn-xs" type="button" title="Tell the commander to reopen on this port / baud rate">Use port</button>
+              <span class="link-sep">·</span>
+              <label class="field-label" for="arm-ip">Wi-Fi</label>
+              <input id="arm-ip" class="form-input mono" placeholder="robot-arm.local or 192.168.1.50" spellcheck="false">
+              <button id="btn-arm-use-ip" class="btn btn-primary btn-xs" type="button" title="Tell the commander which address to send UDP commands to">Use IP</button>
+            </div>
+            <datalist id="serial-ports-list"></datalist>
+            <div id="console-arm" data-channel="arm"></div>
           </div>
         </div>
 
@@ -137,12 +161,17 @@
           </div>
 
           <div class="scroll-container">
-            <!-- Quard Bot Connection Configuration Card -->
+            <!-- Quard Bot Connection Card -->
             <div class="card quard-conn-card">
-              <label class="card-title" for="input-quard-host" style="display:block">🌐 Network target</label>
+              <label class="card-title" for="input-quard-host" style="display:block">🌐 Connection</label>
               <div class="input-row">
-                <input type="text" id="input-quard-host" class="form-input" value="http://sesame-robot.local" placeholder="http://192.168.1.x or http://sesame-robot.local" spellcheck="false">
-                <span id="pill-quard-status" class="status-pill">Checking…</span>
+                <input type="text" id="input-quard-host" class="form-input mono" value="http://sesame-robot.local" placeholder="http://192.168.1.x or http://sesame-robot.local" spellcheck="false" list="quard-hosts-list">
+                <datalist id="quard-hosts-list"></datalist>
+                <label class="console-check" title="Keep checking: every 3 s while online, backing off to 10 s while unreachable"><input type="checkbox" id="chk-quard-auto" checked> Auto</label>
+              </div>
+              <div class="link-row">
+                <span id="pill-quard-status" class="status-pill status-pending">Checking…</span>
+                <span id="quard-link-detail" class="link-detail link-detail-wrap"></span>
               </div>
             </div>
 
@@ -227,6 +256,12 @@
                 <!-- Dynamically populated 8-channel servo rows -->
               </div>
             </div>
+
+            <!-- Quard Bot console -->
+            <div class="card terminal-card">
+              <div class="card-title">📟 Console</div>
+              <div id="console-quard" data-channel="quard"></div>
+            </div>
           </div>
         </div>
 
@@ -245,31 +280,29 @@
               🚨 EMERGENCY: FIRE DETECTED ON ROVER! 🚨
             </div>
 
-            <!-- Connection & Stream Settings Card -->
+            <!-- Connection Card: simulated, Wi-Fi (/data JSON) or serial -->
             <div class="card sensor-conn-card">
               <div class="card-title flex-between">
                 <span>🔌 Connection</span>
-                <span id="pill-sensor-wifi-status" class="status-pill status-offline">Wi-Fi: Offline</span>
+                <span id="pill-sensor-wifi-status" class="status-pill status-info">Simulated</span>
               </div>
+              <div id="sensor-link-detail" class="link-detail link-detail-block"></div>
 
               <div class="wifi-row">
                 <label class="field-label" for="sensor-wifi-ip">Wi-Fi host</label>
                 <input type="text" id="sensor-wifi-ip" class="form-input" value="192.168.1.100" placeholder="192.168.1.x" spellcheck="false">
-                <button id="btn-sensor-wifi-connect" class="btn btn-primary btn-sm">🌐 Connect</button>
-                <button id="btn-sensor-wifi-disconnect" class="btn btn-outline btn-sm" style="display:none;">Disconnect</button>
+                <button id="btn-sensor-wifi-connect" class="btn btn-primary btn-sm" type="button">🌐 Connect</button>
+                <button id="btn-sensor-wifi-disconnect" class="btn btn-danger btn-sm" type="button" hidden>⏹ Disconnect</button>
               </div>
 
               <div class="serial-controls">
-                <select id="sensor-serial-port" class="form-input" aria-label="Sensor serial port">
-                  <option value="/dev/ttyUSB0">/dev/ttyUSB0 (ESP32 USB)</option>
-                  <option value="/dev/ttyUSB1">/dev/ttyUSB1</option>
-                  <option value="/dev/ttyACM0">/dev/ttyACM0 (NodeMCU)</option>
-                </select>
+                <input id="sensor-serial-port" class="form-input mono" list="serial-ports-list" placeholder="/dev/ttyUSB1" spellcheck="false" aria-label="Sensor serial port">
+                <button class="btn btn-outline btn-xs btn-rescan-ports" type="button" title="Rescan serial ports">⟳</button>
                 <select id="sensor-serial-baud" class="form-input" aria-label="Sensor baud rate">
                   <option value="115200">115200 baud</option>
                   <option value="9600">9600 baud</option>
                 </select>
-                <button id="btn-sensor-connect" class="btn btn-outline btn-sm">Connect Serial</button>
+                <button id="btn-sensor-connect" class="btn btn-outline btn-sm" type="button">Connect Serial</button>
               </div>
             </div>
 
@@ -393,13 +426,10 @@
               </div>
             </div>
 
-            <!-- Live ESP32 Serial Console Log -->
+            <!-- Rover console -->
             <div class="card terminal-card">
-              <div class="card-title flex-between">
-                <span>📜 Telemetry log</span>
-                <button id="btn-clear-sensor-log" class="btn btn-outline btn-xs">Clear</button>
-              </div>
-              <pre id="sensor-console-log" class="terminal-log" aria-live="off">Connecting to ESP32 telemetry stream…</pre>
+              <div class="card-title">📜 Console</div>
+              <div id="console-sensors" data-channel="sensors"></div>
             </div>
           </div>
         </div>

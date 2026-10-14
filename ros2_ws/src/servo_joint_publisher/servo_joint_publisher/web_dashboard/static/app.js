@@ -363,8 +363,10 @@ document.addEventListener('DOMContentLoaded', () => {
   initSensorControls();
   setupEventListeners();
   initEstop();
+  initLinkControls();
   loadSyncCalibration(applySavedJointCalibration);
   startStatePolling();
+  startConsolePolling();
   startSensorPolling();
   restoreActiveTab();
 });
@@ -1457,6 +1459,605 @@ function setupEventListeners() {
   });
 }
 
+// ── Console panels (one per robot) ───────────────────────────────────────
+// Lines come from the server (/api/console) and from this page. Device text is
+// only ever set with textContent, never parsed as HTML.
+const CONSOLE_KINDS = {
+  tx: '→', rx: '←', data: ' ', info: '•', ok: '✓', warn: '!', error: '✗'
+};
+const CONSOLE_FILTERS = [
+  ['All', null], ['Sent', ['tx']], ['Received', ['rx', 'data']],
+  ['Events', ['info', 'ok', 'warn', 'error']], ['Problems', ['warn', 'error']]
+];
+const consoles = {};
+
+class ConsolePanel {
+  constructor(root, opts = {}) {
+    this.root = root;
+    this.name = opts.name || root.dataset.channel || 'console';
+    this.max = opts.max || 1000;
+    this.entries = [];          // {id, t, kind, text, count, el}
+    this.byId = new Map();
+    this.paused = false;
+    this.pending = 0;
+    this.kindFilter = null;
+    this.textFilter = '';
+    this.localSeq = 0;
+    this.history = [];
+    this.historyKey = `console-history-${this.name}`;
+    try { this.history = JSON.parse(storageGet(this.historyKey) || '[]'); } catch (e) { this.history = []; }
+    this.histIdx = this.history.length;
+    this.build(opts);
+  }
+
+  build(opts) {
+    const r = this.root;
+    r.classList.add('console');
+    const bar = document.createElement('div');
+    bar.className = 'console-bar';
+    this.filterSel = document.createElement('select');
+    this.filterSel.className = 'form-select-sm';
+    this.filterSel.setAttribute('aria-label', 'Show');
+    CONSOLE_FILTERS.forEach(([label], i) => this.filterSel.add(new Option(label, String(i))));
+    this.filterSel.addEventListener('change', () => this.applyFilter());
+    this.find = document.createElement('input');
+    this.find.type = 'search';
+    this.find.className = 'form-input console-find';
+    this.find.placeholder = 'Find…';
+    this.find.setAttribute('aria-label', 'Find in console');
+    let t = null;
+    this.find.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => this.applyFilter(), 150); });
+    this.extra = document.createElement('span');
+    this.extra.className = 'console-extra';
+    this.count = document.createElement('span');
+    this.count.className = 'console-count';
+    const mk = (label, title, fn, icon = false) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn btn-outline btn-xs' + (icon ? ' btn-icon' : '');
+      b.textContent = label;
+      b.title = title;
+      if (icon) b.setAttribute('aria-label', title);
+      b.addEventListener('click', fn);
+      return b;
+    };
+    this.mk = mk;
+    this.pauseBtn = mk('⏸', 'Pause: freeze the view to read it (new lines are kept)', () => this.setPaused(!this.paused), true);
+    bar.append(this.filterSel, this.find, this.extra, this.count, this.pauseBtn,
+      mk('⧉', 'Copy the lines shown', () => this.copy(), true),
+      mk('⤓', 'Download every line as a .log file', () => this.save(), true),
+      mk('⌫', 'Clear this view', () => this.clear(), true));
+    this.view = document.createElement('div');
+    this.view.className = 'console-view';
+    this.view.setAttribute('role', 'log');
+    this.view.setAttribute('aria-live', 'off');
+    this.view.tabIndex = 0;
+    r.append(bar, this.view);
+
+    if (opts.placeholder) {
+      const form = document.createElement('form');
+      form.className = 'console-input-row';
+      this.input = document.createElement('input');
+      this.input.className = 'form-input';
+      this.input.placeholder = opts.placeholder;
+      this.input.spellcheck = false;
+      this.input.setAttribute('aria-label', `${this.name} command`);
+      this.input.addEventListener('keydown', (e) => this.onKey(e));
+      const send = document.createElement('button');
+      send.type = 'submit';
+      send.className = 'btn btn-primary btn-xs';
+      send.textContent = 'Send';
+      form.append(this.input, send);
+      (opts.quick || []).forEach(([label, command, tip]) => {
+        form.append(mk(label, `${tip} [${command}]`, () => opts.onSubmit && opts.onSubmit(command)));
+      });
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const text = this.input.value.trim();
+        if (!text) return;
+        this.remember(text);
+        this.input.value = '';
+        if (opts.onSubmit) opts.onSubmit(text);
+      });
+      r.append(form);
+    }
+    this.updateCount();
+  }
+
+  onKey(e) {
+    if (e.key === 'ArrowUp' && this.history.length) {
+      e.preventDefault();
+      this.histIdx = Math.max(0, this.histIdx - 1);
+      this.input.value = this.history[this.histIdx];
+    } else if (e.key === 'ArrowDown' && this.history.length) {
+      e.preventDefault();
+      this.histIdx = Math.min(this.history.length, this.histIdx + 1);
+      this.input.value = this.history[this.histIdx] || '';
+    }
+    e.stopPropagation();   // typing here is not a Quard walk key
+  }
+
+  remember(text) {
+    this.history = this.history.filter(h => h !== text).concat([text]).slice(-50);
+    this.histIdx = this.history.length;
+    storageSet(this.historyKey, JSON.stringify(this.history));
+  }
+
+  addExtra(el) { this.extra.append(el); }
+
+  // Local line (from this page)
+  log(text, kind = 'info') {
+    this.add({ id: `L${++this.localSeq}`, t: Date.now() / 1000, kind, text: String(text), count: 1 });
+  }
+
+  // Server entry; an id we already have is an in-place update
+  add(e) {
+    const existing = this.byId.get(e.id);
+    if (existing) {
+      Object.assign(existing, { t: e.t, kind: e.kind, text: e.text, count: e.count });
+      if (existing.el) this.fillLine(existing.el, existing);
+      if (existing.el && !this.matches(existing)) { existing.el.remove(); existing.el = null; }
+      return;
+    }
+    const entry = { id: e.id, t: e.t, kind: CONSOLE_KINDS[e.kind] !== undefined ? e.kind : 'info', text: e.text, count: e.count || 1, el: null };
+    // Server lines arrive by polling, so a line typed here may already be
+    // newer: keep the view in time order.
+    let idx = this.entries.length;
+    while (idx > 0 && this.entries[idx - 1].t > entry.t) idx--;
+    this.entries.splice(idx, 0, entry);
+    this.byId.set(entry.id, entry);
+    if (this.entries.length > this.max) {
+      const old = this.entries.shift();
+      this.byId.delete(old.id);
+      if (old.el) old.el.remove();
+      idx--;
+    }
+    if (this.paused) {
+      this.pending++;
+    } else if (this.matches(entry)) {
+      const atBottom = this.view.scrollHeight - this.view.scrollTop - this.view.clientHeight < 12;
+      entry.el = this.makeLine(entry);
+      const next = this.entries.slice(idx + 1).find(x => x.el);
+      if (next) this.view.insertBefore(entry.el, next.el); else this.view.append(entry.el);
+      if (atBottom) this.view.scrollTop = this.view.scrollHeight;
+    }
+    this.updateCount();
+  }
+
+  matches(e) {
+    if (this.kindFilter && !this.kindFilter.includes(e.kind)) return false;
+    if (this.textFilter && !e.text.toLowerCase().includes(this.textFilter)) return false;
+    return true;
+  }
+
+  stamp(t) {
+    const d = new Date(t * 1000);
+    const p = (n, w = 2) => String(n).padStart(w, '0');
+    return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+  }
+
+  makeLine(e) {
+    const el = document.createElement('div');
+    this.fillLine(el, e);
+    return el;
+  }
+
+  fillLine(el, e) {
+    el.className = `cl cl-${e.kind}`;
+    el.replaceChildren();
+    const time = document.createElement('time');
+    time.textContent = this.stamp(e.t);
+    const sym = document.createElement('span');
+    sym.className = 'cl-sym';
+    sym.textContent = CONSOLE_KINDS[e.kind] || '•';
+    const text = document.createElement('span');
+    text.className = 'cl-text';
+    text.textContent = e.text;
+    el.append(time, sym, text);
+    if (e.count > 1) {
+      const c = document.createElement('span');
+      c.className = 'cl-count';
+      c.textContent = `×${e.count}`;
+      el.append(c);
+    }
+  }
+
+  plain(e) {
+    return `${this.stamp(e.t)} ${e.kind.toUpperCase().padEnd(5)} ${e.text}${e.count > 1 ? `  (x${e.count})` : ''}`;
+  }
+
+  renderAll() {
+    const frag = document.createDocumentFragment();
+    this.entries.forEach(e => {
+      if (this.matches(e)) { e.el = this.makeLine(e); frag.append(e.el); } else { e.el = null; }
+    });
+    this.view.replaceChildren(frag);
+    this.view.scrollTop = this.view.scrollHeight;
+    this.pending = 0;
+    this.updateCount();
+  }
+
+  applyFilter() {
+    this.kindFilter = CONSOLE_FILTERS[Number(this.filterSel.value)][1];
+    this.textFilter = this.find.value.trim().toLowerCase();
+    this.renderAll();
+  }
+
+  setPaused(on) {
+    this.paused = on;
+    this.pauseBtn.textContent = on ? '▶' : '⏸';
+    this.pauseBtn.title = on ? 'Resume: show the lines that arrived while paused' : 'Pause: freeze the view to read it (new lines are kept)';
+    this.pauseBtn.setAttribute('aria-label', this.pauseBtn.title);
+    this.pauseBtn.classList.toggle('btn-warning', on);
+    this.pauseBtn.classList.toggle('btn-outline', !on);
+    if (!on && this.pending) this.renderAll();
+    this.updateCount();
+  }
+
+  clear() {
+    this.entries.forEach(e => this.byId.delete(e.id));
+    this.entries = [];
+    this.view.replaceChildren();
+    this.pending = 0;
+    this.updateCount();
+  }
+
+  copy() {
+    const text = this.entries.filter(e => this.matches(e)).map(e => this.plain(e)).join('\n');
+    const done = () => toast(`Copied ${text ? text.split('\n').length : 0} lines`, 'success', 1500);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, () => toast('Copy failed: clipboard not available', 'error'));
+    } else {
+      toast('Copy failed: clipboard not available', 'error');
+    }
+  }
+
+  save() {
+    const text = this.entries.map(e => this.plain(e)).join('\n') + '\n';
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+    a.download = `${this.name}-console-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.log`;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  updateCount() {
+    let txt = `${this.entries.length}`;
+    if (this.paused) txt += ` · paused, ${this.pending} new`;
+    this.count.title = `${this.entries.length} lines kept (newest ${this.max})`;
+    this.count.textContent = txt;
+  }
+}
+
+let consoleSeq = 0;
+
+function startConsolePolling() {
+  const poll = () => {
+    fetch(`/api/console?since=${consoleSeq}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.reset) {
+          // Server restarted: its ids start again from 1
+          Object.values(consoles).forEach(c => c.clear());
+          consoleSeq = 0;
+          return;
+        }
+        (data.entries || []).forEach(e => { if (consoles[e.channel]) consoles[e.channel].add(e); });
+        consoleSeq = data.seq || consoleSeq;
+      })
+      .catch(() => {})
+      .finally(() => setTimeout(poll, 500));
+  };
+  poll();
+}
+
+// ── Link cards (arm, Quard Bot, rover) ────────────────────────────────────
+let lastLinks = null;
+let lastLinksRender = 0;
+let armLinkPrevState = null;
+
+function ageText(sec) {
+  if (sec === null || sec === undefined) return 'never';
+  return sec < 60 ? `${sec.toFixed(1)} s ago` : `${Math.round(sec / 60)} min ago`;
+}
+
+function setText(id, text) {
+  const el = document.getElementById(id);
+  if (el && el.textContent !== text) { el.textContent = text; el.title = text; }
+}
+
+function renderLinks(links, force = false) {
+  if (!links) return;
+  lastLinks = links;
+  const now = Date.now();
+  if (!force && now - lastLinksRender < 250) return;   // /api/state arrives at 25 Hz
+  lastLinksRender = now;
+  renderArmLink(links.arm || {});
+  renderQuardLink(links.quard || {});
+  renderSensorLink(links.sensors || {});
+}
+
+function renderArmLink(a) {
+  const pill = document.getElementById('pill-arm-link');
+  let kind, label, detail, badge;
+  let mismatch = null;
+  const serialLink = a.transport !== 'wifi';
+  const parts = [a.target || ''];
+  switch (a.state) {
+    case 'no_ros':
+      kind = 'offline'; label = 'ROS 2 not available'; badge = ['warn', 'UI only (no ROS)'];
+      detail = 'Nothing reaches the arm. Start with ./launch_web_dashboard.sh so ROS 2 is sourced.';
+      break;
+    case 'no_commander':
+      kind = 'offline'; label = 'Commander not running'; badge = ['offline', 'No commander'];
+      detail = `No link state from servo_serial_commander${a.last_heard ? ` (last heard ${Math.round(a.last_heard)} s ago)` : ''}. ` +
+        'Start it: ros2 run servo_joint_publisher servo_serial_commander';
+      break;
+    case 'legacy':
+      kind = a.connected ? 'online' : 'warn'; label = a.connected ? 'Online' : 'Disconnected';
+      badge = [kind, label];
+      detail = `${a.detail || ''} (basic status from an older commander)`;
+      break;
+    case 'online':
+      kind = 'online'; label = 'Online'; badge = ['online', `Online · ${serialLink ? 'Serial' : 'Wi-Fi'}`];
+      if (a.rtt_ms !== null && a.rtt_ms !== undefined) parts.push(`ping ${Math.round(a.rtt_ms)} ms`);
+      parts.push(`last reply ${ageText(a.last_rx_age)}`);
+      break;
+    case 'mismatch': {
+      kind = 'warn'; label = 'Mode mismatch'; badge = ['warn', 'Mode mismatch'];
+      const listen = a.mismatch_mode === 'WIFI' ? 'Wi-Fi' : 'serial';
+      mismatch = { text: `The ESP32 replies, but it is listening on ${listen}, so commands sent over ${serialLink ? 'serial' : 'Wi-Fi'} are ignored.`,
+                   mode: serialLink ? 'SERIAL' : 'WIFI' };
+      parts.push(`last reply ${ageText(a.last_rx_age)}`);
+      break;
+    }
+    case 'port_error':
+      kind = 'offline'; label = serialLink ? 'Port error' : 'Socket error'; badge = ['offline', label];
+      parts.push(a.last_error || 'cannot open the link');
+      break;
+    default:
+      kind = 'warn'; label = 'No reply'; badge = ['warn', 'No reply'];
+      parts.push(`last reply ${ageText(a.last_rx_age)}`, 'is the ESP32 powered and on this link?');
+  }
+  const alive = ['online', 'mismatch', 'port_error', 'no_reply'].includes(a.state);
+  if (alive) {
+    parts.push(`RX ${a.rx || 0} · TX ${a.tx || 0}`);
+    if (a.esp32_ip) parts.push(`ESP32 IP ${a.esp32_ip}`);
+    detail = parts.filter(Boolean).join(' · ');
+    // Fill the settings once per change of the commander's target
+    const key = `${a.port}|${a.baudrate}|${a.ip}`;
+    if (key !== renderArmLink.settingsKey) {
+      renderArmLink.settingsKey = key;
+      const portIn = document.getElementById('arm-port');
+      const baudSel = document.getElementById('arm-baud');
+      const ipIn = document.getElementById('arm-ip');
+      if (portIn && a.port && document.activeElement !== portIn) portIn.value = a.port;
+      if (baudSel && a.baudrate) {
+        if (![...baudSel.options].some(o => o.value === String(a.baudrate))) baudSel.add(new Option(String(a.baudrate), String(a.baudrate)));
+        baudSel.value = String(a.baudrate);
+      }
+      if (ipIn && a.ip && document.activeElement !== ipIn) ipIn.value = a.ip;
+    }
+    const verbose = document.getElementById('chk-arm-verbose');
+    if (verbose && Date.now() - (renderArmLink.verboseSetAt || 0) > 2500) verbose.checked = Boolean(a.verbose);
+    if (a.state === 'port_error' && armLinkPrevState !== 'port_error') showArmSettings(true);
+    if (a.transport && Date.now() - commModeEditedAt > 2500) syncCommModeUI(a.transport === 'wifi');
+  }
+  armLinkPrevState = a.state;
+  setPill(pill, kind, label);
+  setText('arm-link-detail', detail || '');
+  setNodeBadge('badge-arm', badge[0], badge[1]);
+  const mm = document.getElementById('arm-mismatch');
+  if (mm) {
+    mm.hidden = !mismatch;
+    if (mismatch) {
+      setText('arm-mismatch-text', `⚠ ${mismatch.text}`);
+      const btn = document.getElementById('btn-arm-fix-mode');
+      btn.dataset.mode = mismatch.mode;
+      btn.textContent = `Switch ESP32 to ${mismatch.mode === 'WIFI' ? 'Wi-Fi' : 'serial'}`;
+    }
+  }
+  const reconnect = document.getElementById('btn-arm-reconnect');
+  if (reconnect) reconnect.disabled = !alive;
+}
+
+function showArmSettings(on) {
+  const panel = document.getElementById('arm-link-settings');
+  const btn = document.getElementById('btn-arm-link-settings');
+  if (!panel || !btn) return;
+  panel.hidden = !on;
+  btn.setAttribute('aria-expanded', String(on));
+  btn.classList.toggle('active', on);
+}
+
+function renderQuardLink(q) {
+  let kind, label;
+  const parts = [];
+  if (q.online === null || q.online === undefined) {
+    kind = 'info'; label = 'Checking…';
+    parts.push(q.host || '');
+  } else if (q.online) {
+    kind = 'online';
+    label = 'Online' + (q.rtt_ms !== null && q.rtt_ms !== undefined ? ` · ${Math.round(q.rtt_ms)} ms` : '');
+    parts.push(`seen ${ageText(q.last_seen_age)}`);
+    if (q.rssi) parts.push(`RSSI ${q.rssi} dBm`);
+  } else {
+    kind = 'offline'; label = 'Unreachable';
+    parts.push(q.last_error || 'no reply');
+    if (q.last_seen_age !== null && q.last_seen_age !== undefined) parts.push(`last seen ${ageText(q.last_seen_age)}`);
+    if (quardPing.nextAt && !quardPing.inFlight) parts.push(`retry in ${Math.max(0, Math.round((quardPing.nextAt - Date.now()) / 1000))} s`);
+  }
+  if (q.sent) parts.push(`sent ${q.sent}` + (q.failed ? `, failed ${q.failed}` : ''));
+  setPill(document.getElementById('pill-quard-status'), kind, label);
+  setText('quard-link-detail', parts.filter(Boolean).join(' · '));
+  setNodeBadge('badge-quardbot', kind === 'info' ? 'pending' : kind, label);
+  quardPing.online = q.online;
+}
+
+function renderSensorLink(sl) {
+  let kind, label, detail;
+  const src = sl.source;
+  const target = sl.target || '';
+  if (src === 'off') {
+    kind = null; label = 'Off'; detail = 'No data source. Connect Wi-Fi or Serial, or simulate.';
+  } else if (src === 'sim') {
+    kind = 'info'; label = 'Simulated'; detail = 'Demo values, not from the rover';
+  } else if (sl.phase === 'live' && sl.last_rx_age !== null && sl.last_rx_age < 5) {
+    kind = 'online'; label = 'Live';
+    detail = `${target} · ${sl.rate} ${src === 'wifi' ? 'updates' : 'lines'}/s · last ${ageText(sl.last_rx_age)}`;
+  } else if (sl.phase === 'live') {
+    kind = 'warn'; label = 'No data'; detail = `${target} · nothing for ${Math.round(sl.last_rx_age || 0)} s`;
+  } else if (sl.phase === 'waiting') {
+    kind = 'info'; label = 'Waiting for data';
+    detail = target + (sl.phase_age > 5 ? " · port open but silent: wrong baud rate, or the board isn't sending?" : '');
+  } else if (sl.phase === 'error') {
+    kind = 'offline'; label = 'Error'; detail = `${target} · ${sl.error} · retrying`;
+  } else {
+    kind = 'info'; label = 'Connecting…'; detail = target;
+  }
+  setPill(document.getElementById('pill-sensor-wifi-status'), kind, label);
+  setText('sensor-link-detail', detail);
+  const badge = { online: ['online', src === 'wifi' ? 'Wi-Fi' : 'Serial'], info: ['warn', src === 'sim' ? 'Simulated' : label],
+                  warn: ['warn', label], offline: ['offline', label] }[kind] || ['offline', 'Off'];
+  setNodeBadge('badge-sensornode', badge[0], badge[1]);
+
+  if (src !== renderSensorLink.lastSrc) {
+    renderSensorLink.lastSrc = src;
+    const wifiBtn = document.getElementById('btn-sensor-wifi-connect');
+    const wifiOff = document.getElementById('btn-sensor-wifi-disconnect');
+    const serBtn = document.getElementById('btn-sensor-connect');
+    const simBtn = document.getElementById('btn-sensors-sim');
+    if (wifiBtn) wifiBtn.hidden = src === 'wifi';
+    if (wifiOff) { wifiOff.hidden = src !== 'wifi'; wifiOff.style.display = ''; }
+    if (serBtn) {
+      serBtn.textContent = src === 'serial' ? '⏹ Disconnect Serial' : 'Connect Serial';
+      serBtn.className = src === 'serial' ? 'btn btn-danger btn-sm' : 'btn btn-outline btn-sm';
+    }
+    if (simBtn) {
+      simBtn.textContent = src === 'sim' ? '⏸️ Stop Simulation' : '▶️ Simulate Data';
+      simBtn.className = src === 'sim' ? 'btn btn-warning btn-sm' : 'btn btn-outline btn-sm';
+    }
+  }
+}
+
+// Refresh age read-outs between /api/state renders even when nothing changes
+setInterval(() => { if (lastLinks) renderLinks(lastLinks, true); }, 1000);
+
+function armConsoleSubmit(text) {
+  const t = text.trim();
+  if (!t) return;
+  const upper = t.toUpperCase();
+  if ((upper.startsWith('CMD:') || upper.startsWith('RAW:CMD:')) && estopEngaged) {
+    consoles.arm.log(`Blocked by E-STOP: ${t}`, 'warn');
+    return;
+  }
+  postJSON('/api/arm/console', { line: t })
+    .then(r => { if (r.status !== 'ok' && r.message) consoles.arm.log(`Not sent: ${r.message}`, 'error'); })
+    .catch(() => consoles.arm.log('Not sent: server unreachable', 'error'));
+  if ((upper.startsWith('CMD:') || upper.startsWith('RAW:CMD:')) && !armConsoleSubmit.hinted) {
+    armConsoleSubmit.hinted = true;
+    consoles.arm.log('Joint commands typed here are clamped to the joint limits; the next slider move overrides them.', 'info');
+  }
+}
+
+function sendArmLink(cmd) {
+  return postJSON('/api/arm/link', { cmd })
+    .then(r => { if (r.status !== 'ok') consoles.arm.log(`LINK:${cmd} not sent: ${r.message || 'error'}`, 'error'); })
+    .catch(() => consoles.arm.log(`LINK:${cmd} not sent: server unreachable`, 'error'));
+}
+
+function refreshSerialPorts(report = false) {
+  return fetch('/api/serial_ports').then(r => r.json()).then(data => {
+    const list = document.getElementById('serial-ports-list');
+    if (list) {
+      list.replaceChildren(...(data.ports || []).map(p => {
+        const o = document.createElement('option');
+        o.value = p.device;
+        o.label = [p.description, p.arm ? 'arm' : ''].filter(Boolean).join(' · ');
+        return o;
+      }));
+    }
+    const sensorPort = document.getElementById('sensor-serial-port');
+    if (sensorPort && !sensorPort.value) {
+      const free = (data.ports || []).find(p => !p.arm);
+      sensorPort.value = free ? free.device : '/dev/ttyUSB1';
+    }
+    if (report) {
+      const names = (data.ports || []).map(p => p.device + (p.arm ? ' (arm)' : '')).join(', ') || 'none';
+      toast(`Serial ports: ${names}`, 'info');
+    }
+    return data;
+  }).catch(() => {});
+}
+
+function initLinkControls() {
+  consoles.arm = new ConsolePanel(document.getElementById('console-arm'), {
+    name: 'arm',
+    placeholder: 'Command for the arm ESP32: PING, MODE:SERIAL, CMD:turntable_link_joint=90 …  (↑/↓ history)',
+    quick: [['PING', 'PING', 'Ask the ESP32 to reply'], ['Status', 'LINK:STATUS', 'Ask the commander for its link state']],
+    onSubmit: armConsoleSubmit
+  });
+  const verboseLabel = document.createElement('label');
+  verboseLabel.className = 'console-check';
+  verboseLabel.title = 'Also show every joint command and ACK (busy while sliders move)';
+  verboseLabel.innerHTML = '<input type="checkbox" id="chk-arm-verbose"> Joint traffic';
+  consoles.arm.addExtra(verboseLabel);
+  document.getElementById('chk-arm-verbose').addEventListener('change', (e) => {
+    renderArmLink.verboseSetAt = Date.now();
+    sendArmLink(`VERBOSE=${e.target.checked ? 1 : 0}`);
+  });
+
+  consoles.quard = new ConsolePanel(document.getElementById('console-quard'), {
+    name: 'quard',
+    placeholder: 'Quard command: move=w · ch=3&deg=70 · all=45 · speed=180 · status  (↑/↓ history)',
+    quick: [['Status', 'status', 'GET /status and show the reply'], ['Stand', 'move=s', 'Stand still']],
+    onSubmit: quardConsoleSubmit
+  });
+  consoles.sensors = new ConsolePanel(document.getElementById('console-sensors'), { name: 'rover' });
+
+  document.getElementById('btn-arm-reconnect').addEventListener('click', () => sendArmLink('RECONNECT'));
+  document.getElementById('btn-arm-link-settings').addEventListener('click', () => {
+    showArmSettings(document.getElementById('arm-link-settings').hidden);
+  });
+  document.getElementById('btn-arm-console-toggle').addEventListener('click', (e) => {
+    const box = document.getElementById('console-arm');
+    box.hidden = !box.hidden;
+    e.currentTarget.setAttribute('aria-expanded', String(!box.hidden));
+    e.currentTarget.classList.toggle('active', !box.hidden);
+    storageSet('arm-console-open', box.hidden ? '0' : '1');
+  });
+  if (storageGet('arm-console-open') === '0') document.getElementById('btn-arm-console-toggle').click();
+  document.getElementById('btn-arm-fix-mode').addEventListener('click', (e) => {
+    const mode = e.currentTarget.dataset.mode || 'SERIAL';
+    armConsoleSubmit(`MODE:${mode}`);
+  });
+  document.getElementById('btn-arm-use-port').addEventListener('click', () => {
+    const port = document.getElementById('arm-port').value.trim();
+    const baud = document.getElementById('arm-baud').value;
+    const a = (lastLinks && lastLinks.arm) || {};
+    let changed = false;
+    if (baud && String(a.baudrate) !== baud) { sendArmLink(`BAUD=${baud}`); changed = true; }
+    if (port && a.port !== port) { sendArmLink(`PORT=${port}`); changed = true; }
+    if (!changed) sendArmLink('RECONNECT');
+    if (a.transport === 'wifi') consoles.arm.log('Port saved. The commander is on Wi-Fi: switch the header toggle to Serial to use it.', 'info');
+  });
+  const useIp = () => {
+    const ip = document.getElementById('arm-ip').value.trim();
+    if (!ip) return;
+    sendArmLink(`IP=${ip}`);
+    const a = (lastLinks && lastLinks.arm) || {};
+    if (a.transport === 'serial') consoles.arm.log('Address saved. The commander is on serial: switch the header toggle to Wi-Fi to use it.', 'info');
+  };
+  document.getElementById('btn-arm-use-ip').addEventListener('click', useIp);
+  document.getElementById('arm-ip').addEventListener('keydown', (e) => { if (e.key === 'Enter') useIp(); });
+  document.querySelectorAll('.btn-rescan-ports').forEach(b => b.addEventListener('click', () => refreshSerialPorts(true)));
+  refreshSerialPorts();
+}
+
 // ── Real-time State Polling ──────────────────────────────────────────────
 let serverOnline = null;
 let stateFailures = 0;
@@ -1467,23 +2068,10 @@ function setServerOnline(online) {
   serverOnline = online;
   document.body.classList.toggle('server-offline', !online);
   if (!online) {
-    setNodeBadge('badge-arm', 'offline', 'Server offline');
+    ['badge-arm', 'badge-quardbot', 'badge-sensornode'].forEach(id => setNodeBadge(id, 'offline', 'Server offline'));
     setPill(document.getElementById('pill-arm-link'), 'offline', 'Server offline');
+    lastLinks = null;
   }
-}
-
-function updateArmLinkStatus(data) {
-  const viaWifi = String(data.comm_mode || '').toUpperCase() === 'WIFI';
-  const link = viaWifi ? 'Wi-Fi' : 'Serial';
-  if (data.ros_bridge === true) {
-    setNodeBadge('badge-arm', 'online', `ROS 2 · ${link}`);
-    setPill(document.getElementById('pill-arm-link'), 'online', `ROS 2 bridge · ${link}`);
-  } else if (data.ros_bridge === false) {
-    setNodeBadge('badge-arm', 'warn', 'UI only (no ROS)');
-    setPill(document.getElementById('pill-arm-link'), 'warn', 'No ROS 2 — not sent to arm');
-  }
-  // Don't fight a toggle the user flipped a moment ago.
-  if (data.comm_mode && Date.now() - commModeEditedAt > 1500) syncCommModeUI(viaWifi);
 }
 
 function startStatePolling() {
@@ -1495,7 +2083,11 @@ function startStatePolling() {
       .then(data => {
         stateFailures = 0;
         setServerOnline(true);
-        updateArmLinkStatus(data);
+        renderLinks(data.links);
+        if (data.comm_mode && !(data.links && data.links.arm && data.links.arm.transport) &&
+            Date.now() - commModeEditedAt > 1500) {
+          syncCommModeUI(String(data.comm_mode).toUpperCase() === 'WIFI');
+        }
 
         if (typeof data.simulating === 'boolean' && data.simulating !== isSimulating) {
           // Another client (or the server) changed it: follow without re-posting.
@@ -1619,8 +2211,8 @@ function initQuardBotControls() {
   buildQuardChannelSliders();
   setupQuardEventListeners();
   setupQuardKeyboard();
-  pingQuardBot();
-  setInterval(pingQuardBot, 5000); // 5s periodic heartbeat check
+  initQuardHost();
+  setTimeout(() => pingQuardBot(), 600);
 }
 
 function buildQuardChannelSliders() {
@@ -1923,7 +2515,7 @@ function setupQuardEventListeners() {
   // Ping Test Button
   const btnPing = document.getElementById('btn-quard-ping');
   if (btnPing) {
-    btnPing.addEventListener('click', pingQuardBot);
+    btnPing.addEventListener('click', () => pingQuardBot(true));
   }
 }
 
@@ -1956,17 +2548,29 @@ function setupQuardKeyboard() {
 // latest value instead of queueing dozens of stale angles.
 const quardCmdQueue = [];
 let quardCmdInFlight = false;
+const QUARD_STALE_MS = 2000;   // motion older than this is never replayed
+
+function quardHost() {
+  const el = document.getElementById('input-quard-host');
+  return (el && el.value.trim()) || 'http://sesame-robot.local';
+}
+
+function isStandParams(params) {
+  const m = String(params.mode !== undefined ? params.mode : (params.move !== undefined ? params.move : '')).toLowerCase();
+  return ['s', 'stand', 'stop'].includes(m) && Object.keys(params).every(k => ['mode', 'move', 'cmd'].includes(k));
+}
 
 function sendQuardCmd(params, force = false, keepalive = false) {
   if (estopEngaged && !force) return;
-  const host = document.getElementById('input-quard-host') ? document.getElementById('input-quard-host').value.trim() : 'http://sesame-robot.local';
-  const entry = { host: host, params: params, keepalive: keepalive };
+  const host = quardHost();
+  const entry = { host, params, keepalive, t: Date.now(), always: isStandParams(params) };
 
   // Only the newest gait/mode matters: drop older queued ones so a slow or
   // unreachable robot does not replay stale walk commands later.
-  if (params.mode !== undefined) {
+  if (params.mode !== undefined || params.move !== undefined) {
     for (let i = quardCmdQueue.length - 1; i >= 0; i--) {
-      if (quardCmdQueue[i].params.mode !== undefined) quardCmdQueue.splice(i, 1);
+      const qp = quardCmdQueue[i].params;
+      if (qp.mode !== undefined || qp.move !== undefined) quardCmdQueue.splice(i, 1);
     }
   }
 
@@ -1986,48 +2590,67 @@ let lastQuardRejectToast = 0;
 function flushQuardCmdQueue() {
   if (quardCmdInFlight || quardCmdQueue.length === 0) return;
   const entry = quardCmdQueue.shift();
+  const waited = Date.now() - entry.t;
+  if (waited > QUARD_STALE_MS && !entry.always) {
+    // Queued behind a slow request: moving now would surprise whoever is watching
+    if (!entry.keepalive) {
+      const q = new URLSearchParams(entry.params).toString();
+      consoles.quard.log(`/cmd?${q}  not sent: waited ${(waited / 1000).toFixed(1)} s behind a slow request (motion is never replayed late)`, 'warn');
+    }
+    flushQuardCmdQueue();
+    return;
+  }
   quardCmdInFlight = true;
 
-  postJSON('/api/quardbot/cmd', { host: entry.host, params: entry.params })
+  postJSON('/api/quardbot/cmd', { host: entry.host, params: entry.params, keepalive: entry.keepalive })
   .then(data => {
-    if (data.status === 'rejected') {
+    if (data.status === 'rejected' && Date.now() - lastQuardRejectToast > 3000) {
       // The robot answered, so it is online; it just did not accept this command.
-      updateQuardStatusPill(true);
-      if (Date.now() - lastQuardRejectToast > 3000) {
-        lastQuardRejectToast = Date.now();
-        const what = Object.keys(entry.params).join(', ');
-        toast(`Quard Bot rejected the command (${what}); the firmware may not support it.`, 'warn');
-      }
-    } else {
-      updateQuardStatusPill(data.status === 'ok');
+      lastQuardRejectToast = Date.now();
+      const what = Object.keys(entry.params).join(', ');
+      toast(`Quard Bot refused the command (${what}); the firmware may not support it.`, 'warn');
     }
   })
-  .catch(err => {
-    console.warn('[Dashboard] Quard Bot command error:', err);
-    updateQuardStatusPill(false);
-  })
+  .catch(err => console.warn('[Dashboard] Quard Bot command error:', err))
   .finally(() => {
     quardCmdInFlight = false;
     flushQuardCmdQueue();
   });
 }
 
-function pingQuardBot(e) {
-  if (e && e.type === 'click') btnPingBusy(true);
-  const host = document.getElementById('input-quard-host') ? document.getElementById('input-quard-host').value.trim() : 'http://sesame-robot.local';
+// Heartbeat: every 3 s while online, backing off 2 → 4 → 8 → 10 s while offline.
+const quardPing = { gen: 0, inFlight: false, failures: 0, timer: null, nextAt: null, online: null };
 
-  fetch('/api/quardbot/ping', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ host: host })
-  })
-  .then(res => res.json())
-  .then(data => {
-    const online = data.online === true;
-    updateQuardStatusPill(online);
-  })
-  .catch(() => updateQuardStatusPill(false))
-  .finally(() => btnPingBusy(false));
+function scheduleQuardPing() {
+  clearTimeout(quardPing.timer);
+  const auto = document.getElementById('chk-quard-auto');
+  if (auto && !auto.checked) { quardPing.nextAt = null; return; }
+  const delay = quardPing.online ? 3000 : Math.min(10000, 2000 * 2 ** Math.max(0, quardPing.failures - 1));
+  quardPing.nextAt = Date.now() + delay;
+  quardPing.timer = setTimeout(() => pingQuardBot(false), delay);
+}
+
+function pingQuardBot(manual = false) {
+  if (quardPing.inFlight && !manual) return;   // a manual ping replaces a stuck one
+  clearTimeout(quardPing.timer);
+  const gen = ++quardPing.gen;
+  quardPing.inFlight = true;
+  if (manual) btnPingBusy(true);
+  postJSON('/api/quardbot/ping', { host: quardHost(), manual })
+    .then(data => {
+      if (gen !== quardPing.gen) return;
+      const online = data.online === true;
+      quardPing.online = online;
+      quardPing.failures = online ? 0 : quardPing.failures + 1;
+      if (online) rememberQuardHost(quardHost());
+    })
+    .catch(() => { if (gen === quardPing.gen) { quardPing.online = false; quardPing.failures++; } })
+    .finally(() => {
+      if (gen !== quardPing.gen) return;
+      quardPing.inFlight = false;
+      btnPingBusy(false);
+      scheduleQuardPing();
+    });
 }
 
 function btnPingBusy(on) {
@@ -2035,113 +2658,125 @@ function btnPingBusy(on) {
   if (btn) btn.classList.toggle('is-busy', on);
 }
 
-function updateQuardStatusPill(online) {
-  setPill(document.getElementById('pill-quard-status'), online ? 'online' : 'offline', online ? 'Connected' : 'Offline');
-  setNodeBadge('badge-quardbot', online ? 'online' : 'offline', online ? 'Connected' : 'Offline');
+function rememberQuardHost(host) {
+  let hosts = [];
+  try { hosts = JSON.parse(storageGet('quard-hosts') || '[]'); } catch (e) { hosts = []; }
+  if (hosts[0] === host) return;
+  hosts = [host].concat(hosts.filter(h => h !== host)).slice(0, 6);
+  storageSet('quard-hosts', JSON.stringify(hosts));
+  fillQuardHostList(hosts);
+}
+
+function fillQuardHostList(hosts) {
+  const list = document.getElementById('quard-hosts-list');
+  if (list) list.replaceChildren(...hosts.map(h => new Option(h, h)));
+}
+
+function initQuardHost() {
+  const input = document.getElementById('input-quard-host');
+  let hosts = [];
+  try { hosts = JSON.parse(storageGet('quard-hosts') || '[]'); } catch (e) { hosts = []; }
+  fillQuardHostList(hosts);
+  if (input && hosts[0]) input.value = hosts[0];
+  let t = null;
+  input.addEventListener('input', () => {
+    // A new address: commands queued for the old one are pointless
+    const dropped = quardCmdQueue.filter(e => !e.keepalive).length;
+    quardCmdQueue.length = 0;
+    if (dropped) consoles.quard.log(`Address changed: dropped ${dropped} queued command(s)`, 'warn');
+    quardPing.gen++;             // ignore a ping still running for the old address
+    quardPing.inFlight = false;
+    clearTimeout(t);
+    t = setTimeout(() => pingQuardBot(false), 900);
+  });
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') pingQuardBot(true);
+  });
+  const auto = document.getElementById('chk-quard-auto');
+  if (auto) auto.addEventListener('change', () => (auto.checked ? pingQuardBot(false) : scheduleQuardPing()));
+}
+
+function quardConsoleSubmit(text) {
+  const t = text.trim();
+  if (['status', '/status', 'ping'].includes(t.toLowerCase())) { pingQuardBot(true); return; }
+  let q = t;
+  for (const prefix of ['/cmd?', 'cmd?', '?']) {
+    if (q.toLowerCase().startsWith(prefix)) { q = q.slice(prefix.length); break; }
+  }
+  const params = Object.fromEntries(new URLSearchParams(q));
+  delete params[''];
+  if (!Object.keys(params).length || Object.values(params).some(v => v === '')) {
+    consoles.quard.log(`Not understood: "${t}". Use key=value pairs such as move=w or ch=3&deg=70`, 'warn');
+    return;
+  }
+  if (estopEngaged && !isStandParams(params)) {
+    consoles.quard.log(`Blocked by E-STOP: ${t}`, 'warn');
+    return;
+  }
+  sendQuardCmd(params, isStandParams(params));
 }
 
 // ── ESP32 Sensor Node Telemetry & Controls ────────────────────────────────
 function initSensorControls() {
   const btnConnect = document.getElementById('btn-sensor-connect');
   const btnSim = document.getElementById('btn-sensors-sim');
-  const btnClear = document.getElementById('btn-clear-sensor-log');
   const btnWifiConnect = document.getElementById('btn-sensor-wifi-connect');
   const btnWifiDisconnect = document.getElementById('btn-sensor-wifi-disconnect');
   const inputWifiIp = document.getElementById('sensor-wifi-ip');
+  const savedIp = storageGet('rover-wifi-host');
+  if (savedIp && inputWifiIp) inputWifiIp.value = savedIp;
 
-  if (btnWifiConnect) {
-    btnWifiConnect.addEventListener('click', () => {
-      const ip = (inputWifiIp ? inputWifiIp.value.trim() : '') || '192.168.1.100';
-      btnWifiConnect.classList.add('is-busy');
-      btnWifiConnect.disabled = true;
-
-      fetch('/api/sensors/wifi_connect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ip: ip })
-      })
-      .then(res => res.json())
-      .then(data => {
-        btnWifiConnect.classList.remove('is-busy');
-        btnWifiConnect.disabled = false;
-        if (btnWifiDisconnect) btnWifiDisconnect.style.display = 'inline-block';
-        const pill = document.getElementById('pill-sensor-wifi-status');
-        if (pill) {
-          pill.innerText = `Connected (${ip})`;
-          pill.className = 'status-pill status-online';
-        }
-      })
-      .catch(() => {
-        btnWifiConnect.classList.remove('is-busy');
-        btnWifiConnect.disabled = false;
-        toast('Could not reach the server.', 'error');
-      });
-    });
-  }
-
+  const connectWifi = () => {
+    const ip = (inputWifiIp ? inputWifiIp.value.trim() : '') || '192.168.1.100';
+    storageSet('rover-wifi-host', ip);
+    withBusy(btnWifiConnect, postJSON('/api/sensors/wifi_connect', { ip }))
+      .catch(() => toast('Could not reach the server.', 'error'));
+  };
+  if (btnWifiConnect) btnWifiConnect.addEventListener('click', connectWifi);
+  if (inputWifiIp) inputWifiIp.addEventListener('keydown', (e) => { if (e.key === 'Enter') connectWifi(); });
   if (btnWifiDisconnect) {
     btnWifiDisconnect.addEventListener('click', () => {
-      fetch('/api/sensors/wifi_disconnect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-      .then(res => res.json())
-      .then(data => {
-        btnWifiDisconnect.style.display = 'none';
-        const pill = document.getElementById('pill-sensor-wifi-status');
-        if (pill) {
-          pill.innerText = 'Wi-Fi: Offline';
-          pill.className = 'status-pill status-offline';
-        }
-      });
+      postJSON('/api/sensors/wifi_disconnect', {}).catch(() => toast('Could not reach the server.', 'error'));
     });
   }
 
+  let forceUntil = 0;
   if (btnConnect) {
     btnConnect.addEventListener('click', () => {
-      const port = document.getElementById('sensor-serial-port').value;
+      if (lastLinks && lastLinks.sensors && lastLinks.sensors.source === 'serial') {
+        postJSON('/api/sensors/disconnect', {}).catch(() => toast('Could not reach the server.', 'error'));
+        return;
+      }
+      const port = document.getElementById('sensor-serial-port').value.trim();
       const baud = parseInt(document.getElementById('sensor-serial-baud').value);
-
+      if (!port) { toast('Pick a serial port first (⟳ rescans).', 'warn'); return; }
+      const force = Date.now() < forceUntil;
       fetch('/api/sensors/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ port: port, baudrate: baud })
+        body: JSON.stringify({ port, baudrate: baud, force })
       })
-      .then(res => res.json())
-      .then(() => toast(`🔌 Reading sensor node on ${port} @ ${baud} baud…`, 'info'))
+      .then(res => res.json().then(data => ({ code: res.status, data })))
+      .then(({ code, data }) => {
+        if (code === 409) {
+          forceUntil = Date.now() + 10000;
+          toast(`${data.message} Click Connect Serial again within 10 s to connect anyway.`, 'warn', 10000);
+        } else if (data.status !== 'ok') {
+          toast(`Not connected: ${data.message || 'error'}`, 'error');
+        }
+      })
       .catch(() => toast('Could not reach the server.', 'error'));
     });
   }
 
   if (btnSim) {
     btnSim.addEventListener('click', () => {
-      sensorState.simulating = !sensorState.simulating;
-      sensorSimEditedAt = Date.now();
-      updateSensorSimButton(sensorState.simulating);
-
-      fetch('/api/sensors/sim', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ simulating: sensorState.simulating })
-      });
-    });
-  }
-
-  if (btnClear) {
-    btnClear.addEventListener('click', () => {
-      const consoleLog = document.getElementById('sensor-console-log');
-      if (consoleLog) consoleLog.innerText = '';
+      const simulating = !(lastLinks && lastLinks.sensors && lastLinks.sensors.source === 'sim');
+      postJSON('/api/sensors/sim', { simulating }).catch(() => toast('Could not reach the server.', 'error'));
     });
   }
 }
-
-// The button names the action it performs, not the current state.
-function updateSensorSimButton(simulating) {
-  const btnSim = document.getElementById('btn-sensors-sim');
-  if (!btnSim) return;
-  btnSim.innerText = simulating ? '⏸️ Stop Simulation' : '▶️ Simulate Data';
-  btnSim.className = simulating ? 'btn btn-warning btn-sm' : 'btn btn-outline btn-sm';
-}
-
-let lastSensorLog = '';
-let sensorSimEditedAt = 0;
 
 function startSensorPolling() {
   setInterval(() => {
@@ -2157,8 +2792,6 @@ function startSensorPolling() {
         const isFire = (flameVal === 0 || alertStr === 'FIRE');
         const fireBanner = document.getElementById('banner-sensor-fire');
         if (fireBanner) fireBanner.classList.toggle('visible', isFire);
-        // A poll that left before the toggle POST landed would flip it back.
-        if (Date.now() - sensorSimEditedAt > 1000) updateSensorSimButton(Boolean(data.simulating));
 
         // 2. DHT11 Climate & BMP280
         const tempC = data.temp_dht !== undefined ? data.temp_dht : (data.temperature || 24.5);
@@ -2303,31 +2936,6 @@ function startSensorPolling() {
           elUptime.innerText = `Uptime: ${mins}m ${secs}s`;
         }
 
-        // Update Wi-Fi status pill
-        const pillWifi = document.getElementById('pill-sensor-wifi-status');
-        if (data.wifi_connected) setPill(pillWifi, 'online', `Wi-Fi: ${data.wifi_ip || 'online'}`);
-        else if (data.connected) setPill(pillWifi, 'info', `Serial: ${data.port || ''}`);
-        else if (data.simulating) setPill(pillWifi, 'warn', 'Simulated data');
-        else setPill(pillWifi, 'offline', 'Wi-Fi: Offline');
-
-        // Update Console Log
-        const elConsole = document.getElementById('sensor-console-log');
-        if (elConsole && data.raw_log && data.raw_log.length > 0) {
-          const text = data.raw_log.slice(-30).join('\n');
-          if (text !== lastSensorLog) {
-            lastSensorLog = text;
-            // Only follow the tail if the user hasn't scrolled up to read.
-            const atBottom = elConsole.scrollHeight - elConsole.scrollTop - elConsole.clientHeight < 24;
-            elConsole.innerText = text;
-            if (atBottom) elConsole.scrollTop = elConsole.scrollHeight;
-          }
-        }
-
-        // Update Top Header Badge
-        if (data.wifi_connected) setNodeBadge('badge-sensornode', 'online', 'Wi-Fi');
-        else if (data.connected) setNodeBadge('badge-sensornode', 'online', 'Serial');
-        else if (data.simulating) setNodeBadge('badge-sensornode', 'warn', 'Simulated');
-        else setNodeBadge('badge-sensornode', 'offline', 'Disconnected');
       })
       .catch(err => {});
   }, 200); // 5 Hz telemetry sync

@@ -28,11 +28,21 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
 import socket
+import collections
+import glob
 try:
     import rclpy
     from rclpy.node import Node
+    from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
     from sensor_msgs.msg import JointState
     from std_msgs.msg import String as StringMsg
+    # Must match servo_serial_commander: latched link state, volatile console.
+    LINK_STATE_QOS = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                                history=HistoryPolicy.KEEP_LAST)
+    CONSOLE_QOS = QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE,
+                             durability=DurabilityPolicy.VOLATILE,
+                             history=HistoryPolicy.KEEP_LAST)
     ROS2_AVAILABLE = True
 except ImportError:
     ROS2_AVAILABLE = False
@@ -108,6 +118,92 @@ def send_comm_mode_udp_broadcast(mode_str):
         print(f"[Server] UDP mode send error: {e}")
 
 
+class ConsoleLog:
+    """Per-robot console lines for the browser, polled via /api/console.
+
+    Every entry has a stable id plus a seq that grows whenever it changes, so
+    a client asking for seq > N also gets entries updated in place: repeats of
+    the last line (count) or a new value for the same key (slider drags).
+    """
+    CHANNELS = ('arm', 'quard', 'sensors')
+
+    def __init__(self, per_channel=500):
+        self.lock = threading.Lock()
+        self.seq = 0
+        self.next_id = 0
+        self.channels = {c: collections.deque(maxlen=per_channel) for c in self.CHANNELS}
+
+    def add(self, channel, kind, text, key=None):
+        text = str(text)[:500]
+        with self.lock:
+            q = self.channels[channel]
+            last = q[-1] if q else None
+            self.seq += 1
+            if last is not None and ((key is not None and last['key'] == key) or
+                                     (key is None and last['key'] is None and last['kind'] == kind and last['text'] == text)):
+                if key is not None:
+                    last['text'], last['kind'] = text, kind
+                else:
+                    last['count'] += 1
+                last['t'], last['seq'] = time.time(), self.seq
+                return
+            self.next_id += 1
+            q.append({'id': self.next_id, 'seq': self.seq, 't': time.time(), 'channel': channel,
+                      'kind': kind, 'text': text, 'key': key, 'count': 1})
+
+    def since(self, seq, limit=600):
+        with self.lock:
+            out = [dict(e) for q in self.channels.values() for e in q if e['seq'] > seq]
+            latest = self.seq
+        out.sort(key=lambda e: e['seq'])
+        return latest, out[-limit:]
+
+
+console_log = ConsoleLog()
+
+
+def describe_net_error(err):
+    """Plain-language reason for an HTTP request failure (same wording as the Qt GUI)."""
+    if isinstance(err, urllib.error.HTTPError):
+        return f"HTTP {err.code} {err.reason}"
+    reason = getattr(err, 'reason', err)
+    if isinstance(reason, socket.gaierror):
+        return "host name not found (a .local name needs mDNS; try the IP address)"
+    if isinstance(reason, (socket.timeout, TimeoutError)) or 'timed out' in str(reason):
+        return "no reply (timed out)"
+    if isinstance(reason, ConnectionRefusedError):
+        return "connection refused (board up, but its web server isn't running?)"
+    if isinstance(reason, OSError) and getattr(reason, 'errno', None) in (101, 113, 10051, 10065):
+        return "network unreachable (is this computer on the robot's Wi-Fi?)"
+    return str(reason)
+
+
+def explain_serial_error(err):
+    text = str(err)
+    errno_ = getattr(err, 'errno', None)
+    if errno_ == 13 or 'Permission denied' in text:
+        return "permission denied: add your user to the 'dialout' group, then log out and back in"
+    if errno_ == 2 or 'No such file' in text:
+        return "port not found: is the board plugged in?"
+    if errno_ == 16 or 'busy' in text.lower():
+        return "port busy: another program has it open"
+    if 'readiness to read but returned no data' in text:
+        return "device disconnected (unplugged or reset)"
+    return text
+
+
+def list_serial_ports():
+    try:
+        from serial.tools import list_ports
+        return sorted((p.device, p.description if p.description and p.description != 'n/a' else '')
+                      for p in list_ports.comports())
+    except Exception:
+        return [(d, '') for pattern in ('/dev/ttyUSB*', '/dev/ttyACM*') for d in sorted(glob.glob(pattern))]
+
+
+_LINK_CMD_RE = re.compile(r'^(RECONNECT|STATUS|VERBOSE=[01]|PORT=(/dev/[A-Za-z0-9_./+-]+|COM\d+)|BAUD=\d{3,7}|IP=[A-Za-z0-9.:/-]{1,253})$')
+
+
 # Shared state between HTTP Server and ROS 2 Node
 class RobotState:
     def __init__(self):
@@ -125,6 +221,20 @@ class RobotState:
         self.comm_mode = "SERIAL"
         # True while the ROS 2 bridge node is spinning (arm commands reach hardware).
         self.ros_bridge_active = False
+        # Arm link as reported by servo_serial_commander (/esp32_link_state)
+        self.arm_link = None
+        self.arm_link_rx_t = 0.0
+        self.arm_legacy = None          # (connected, text, time) from /esp32_connection_status
+        self.arm_link_last_state = None
+        # Quard Bot link, measured by /api/quardbot/ping and /cmd
+        self.quard_link = {'online': None, 'rtt_ms': None, 'last_seen': 0.0, 'sent': 0, 'failed': 0,
+                           'last_error': '', 'rssi': None}
+        self.quard_resolved = {}        # hostname -> IP from the last good ping
+        self.quard_cmd_failures = 0
+        # Rover data source: 'sim' | 'wifi' | 'serial' | 'off'
+        self.sensor_link = {'source': 'sim', 'phase': 'sim', 'error': '', 'last_rx': 0.0,
+                            'since': time.time(), 'gen': 0, 'target': ''}
+        self.sensor_rx_times = collections.deque(maxlen=200)
         # Text commands for servo_serial_commander (CALIB:/SYNC:/MODE:),
         # drained by the ROS 2 bridge node onto /servo_calibration.
         self.commander_msgs = []
@@ -182,11 +292,15 @@ class RobotState:
         }
 
     def parse_sensor_json(self, raw_str):
+        """Apply a rover /data reply. Returns False if it isn't a JSON object."""
         try:
             d = json.loads(raw_str)
         except Exception:
-            return
+            return False
 
+        if not isinstance(d, dict):
+            return False
+        console_log.add('sensors', 'data', raw_str.strip()[:240])
         with self.lock:
             self.sensor_state["raw_log"].append(f"[JSON] {raw_str[:90]}...")
             if len(self.sensor_state["raw_log"]) > 100:
@@ -259,11 +373,13 @@ class RobotState:
             self.sensor_state["alert"] = str(d.get("alert", "OK"))
             self.sensor_state["sd_ok"] = bool(d.get("sd_ok", True))
             self.sensor_state["uptime_ms"] = int(d.get("uptime_ms", 0))
+        return True
 
     def parse_sensor_line(self, line):
         line = line.strip()
         if not line:
             return
+        console_log.add('sensors', 'data', line)
 
         with self.lock:
             # Append line to raw_log (limit 100)
@@ -445,6 +561,124 @@ class RobotState:
             if 'sync_offset_deg' in upd:
                 self.commander_msgs.append(f"SYNC:{j_name}={upd['sync_offset_deg']:.1f}")
 
+    # ── link state (call with self.lock held unless noted) ────────────────
+    def commander_alive(self):
+        return self.arm_link is not None and time.time() - self.arm_link_rx_t < 3.5
+
+    def ingest_arm_link(self, raw):
+        """New /esp32_link_state JSON (lock not held)."""
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            return
+        if not isinstance(data, dict):
+            return
+        with self.lock:
+            if self.arm_link_last_state == 'no_commander':
+                console_log.add('arm', 'ok', f"servo_serial_commander is running ({data.get('target', '?')})")
+            self.arm_link = data
+            self.arm_link_rx_t = time.time()
+            self.arm_link_last_state = data.get('state')
+
+    def ingest_arm_legacy(self, text):
+        for prefix, ok in (("STATUS:CONNECTED:", True), ("STATUS:DISCONNECTED:", False)):
+            if text.startswith(prefix):
+                with self.lock:
+                    self.arm_legacy = (ok, text[len(prefix):].strip(), time.time())
+                return
+
+    @staticmethod
+    def ingest_arm_console(text):
+        kinds = {'RX': 'rx', 'TX': 'tx', 'SYS': 'info', 'ERR': 'error'}
+        prefix, sep, rest = text.partition(':')
+        if sep and prefix in kinds:
+            console_log.add('arm', kinds[prefix], rest)
+        else:
+            console_log.add('arm', 'rx', text)
+
+    def set_sensor_source(self, src, target=''):
+        """Switch the rover data source; bumps gen so the old reader stops."""
+        lk = self.sensor_link
+        lk.update(source=src, phase='connecting' if src in ('wifi', 'serial') else src, error='',
+                  last_rx=0.0, since=time.time(), gen=lk['gen'] + 1, target=target)
+        self.sensor_rx_times.clear()
+        st = self.sensor_state
+        st['simulating'] = src == 'sim'
+        st['wifi_connected'] = src == 'wifi'
+        st['connected'] = src == 'serial'
+        label = {'sim': "Showing simulated data (not from the rover)", 'off': "Rover data source off",
+                 'wifi': f"Connecting to {target} …", 'serial': f"Opening {target} …"}[src]
+        console_log.add('sensors', 'info', label)
+
+    def sensor_rx(self, gen):
+        lk = self.sensor_link
+        if gen != lk['gen']:
+            return
+        now = time.time()
+        if lk['phase'] != 'live' or now - lk['last_rx'] > 5.0:
+            console_log.add('sensors', 'ok', f"Receiving data from {lk['target']}")
+        lk['phase'], lk['error'], lk['last_rx'] = 'live', '', now
+        self.sensor_rx_times.append(now)
+
+    def sensor_event(self, gen, phase, detail=''):
+        lk = self.sensor_link
+        if gen != lk['gen']:
+            return
+        if phase == 'error' and detail != lk['error']:
+            console_log.add('sensors', 'error', f"{lk['target']}: {detail}")
+        elif phase == 'waiting':
+            console_log.add('sensors', 'info', f"Opened {lk['target']}; waiting for data…")
+        lk['phase'], lk['error'] = phase, (detail if phase == 'error' else '')
+        if phase == 'waiting':
+            lk['since'] = time.time()
+
+    def quard_record(self, ok, rtt_ms=None, error='', is_ping=False):
+        """Update the Quard Bot link after a ping or command."""
+        lk = self.quard_link
+        was = lk['online']
+        if ok:
+            lk.update(online=True, rtt_ms=rtt_ms, last_seen=time.time(), last_error='')
+            self.quard_cmd_failures = 0
+        else:
+            lk['last_error'] = error or 'no reply'
+            if is_ping:
+                lk['online'] = False
+            else:
+                self.quard_cmd_failures += 1
+                if self.quard_cmd_failures >= 2:   # one lost command isn't an outage
+                    lk['online'] = False
+        if lk['online'] is not None and lk['online'] != was:
+            if lk['online']:
+                rtt = f" (ping {rtt_ms:.0f} ms)" if rtt_ms is not None else ""
+                console_log.add('quard', 'ok', f"Quard Bot online at {self.quardbot_host}{rtt}")
+            else:
+                console_log.add('quard', 'error', f"Quard Bot unreachable: {lk['last_error']}")
+
+    def links_snapshot(self):
+        now = time.time()
+        if not ROS2_AVAILABLE:
+            arm = {'state': 'no_ros'}
+        elif self.commander_alive():
+            arm = dict(self.arm_link)
+            arm['age'] = round(now - self.arm_link_rx_t, 2)
+        elif self.arm_legacy and now - self.arm_legacy[2] < 5.0:
+            arm = {'state': 'legacy', 'connected': self.arm_legacy[0], 'detail': self.arm_legacy[1]}
+        else:
+            arm = {'state': 'no_commander', 'bridge': self.ros_bridge_active,
+                   'last_heard': round(now - self.arm_link_rx_t, 1) if self.arm_link_rx_t else None}
+            if self.arm_link_last_state not in (None, 'no_commander'):
+                console_log.add('arm', 'error', "Lost contact with servo_serial_commander")
+            self.arm_link_last_state = 'no_commander'
+        q = dict(self.quard_link)
+        q['host'] = self.quardbot_host
+        q['last_seen_age'] = round(now - q['last_seen'], 1) if q['last_seen'] else None
+        lk = self.sensor_link
+        sensors = {k: lk[k] for k in ('source', 'phase', 'error', 'target')}
+        sensors['last_rx_age'] = round(now - lk['last_rx'], 1) if lk['last_rx'] else None
+        sensors['rate'] = round(sum(1 for t in self.sensor_rx_times if now - t < 5.0) / 5.0, 1)
+        sensors['phase_age'] = round(now - lk['since'], 1)
+        return {'arm': arm, 'quard': q, 'sensors': sensors}
+
     def snapshot(self, obj):
         """Deep copy of shared state taken under the lock, safe to serialise later."""
         with self.lock:
@@ -546,6 +780,21 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
             self.send_json(self.get_robot_state_json())
         elif path == "/api/calibration":
             self.send_json(robot_state.snapshot(robot_state.calibration))
+        elif path == "/api/console":
+            qs = urllib.parse.parse_qs(parsed.query)
+            try:
+                since = int(qs.get("since", ["0"])[0])
+            except ValueError:
+                since = 0
+            latest, entries = console_log.since(since)
+            # since > latest: the server restarted; the client should start over
+            self.send_json({"seq": latest, "reset": since > latest, "entries": entries})
+        elif path == "/api/serial_ports":
+            with robot_state.lock:
+                arm = robot_state.arm_link or {}
+                arm_port = arm.get('port') if robot_state.commander_alive() and arm.get('transport') == 'serial' else None
+            self.send_json({"ports": [{"device": d, "description": desc, "arm": d == arm_port}
+                                      for d, desc in list_serial_ports()], "arm_port": arm_port})
         elif path == "/api/sensors/data":
             self.send_json(robot_state.snapshot(robot_state.sensor_state))
         elif path == "/api/quardbot/state":
@@ -736,34 +985,45 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
                             robot_state.commander_msgs.append(f"MODE:{mode}")
                     if not ROS2_AVAILABLE:
                         threading.Thread(target=send_comm_mode_udp_broadcast, args=(mode,), daemon=True).start()
+                        console_log.add('arm', 'warn', f"MODE:{mode} broadcast over UDP (no ROS 2, so no commander to switch)")
+                    elif not robot_state.commander_alive():
+                        console_log.add('arm', 'warn', f"MODE:{mode} published, but servo_serial_commander isn't running")
                     self.send_json({"status": "ok", "mode": mode})
                 else:
                     self.send_json({"status": "error", "message": "Invalid mode"})
             elif path == "/api/sensors/sim":
                 with robot_state.lock:
-                    robot_state.sensor_state["simulating"] = bool(data.get("simulating", True))
+                    robot_state.set_sensor_source('sim' if data.get("simulating", True) else 'off')
                 self.send_json({"status": "ok", "simulating": robot_state.sensor_state["simulating"]})
             elif path == "/api/sensors/connect":
-                port = data.get("port", "/dev/ttyUSB0")
+                port = str(data.get("port", "")).strip()
                 baud = int(data.get("baudrate", 115200))
+                if not re.match(r'^(/dev/[A-Za-z0-9_./+-]+|COM\d+)$', port):
+                    raise ValueError(f"invalid serial port {port!r}")
                 with robot_state.lock:
+                    arm = robot_state.arm_link or {}
+                    clash = (robot_state.commander_alive() and arm.get('transport') == 'serial'
+                             and arm.get('port') == port)
+                    if clash and not data.get("force"):
+                        self.send_json({"status": "conflict", "message":
+                                        f"{port} is the arm ESP32's port (servo_serial_commander has it open). "
+                                        "Opening it here too resets that ESP32 and steals its replies."}, code=409)
+                        return
                     robot_state.sensor_state["port"] = port
                     robot_state.sensor_state["baudrate"] = baud
-                    robot_state.sensor_state["connected"] = True
-                    robot_state.sensor_state["wifi_connected"] = False
-                    robot_state.sensor_state["simulating"] = False
+                    robot_state.set_sensor_source('serial', f"{port} @ {baud}")
                 self.send_json({"status": "ok", "port": port, "baudrate": baud})
             elif path == "/api/sensors/wifi_connect":
-                ip = data.get("ip", "192.168.1.100").strip()
+                ip = str(data.get("ip", "192.168.1.100")).strip()
+                url = sensor_wifi_url(ip)
                 with robot_state.lock:
                     robot_state.sensor_state["wifi_ip"] = ip
-                    robot_state.sensor_state["wifi_connected"] = True
-                    robot_state.sensor_state["connected"] = False
-                    robot_state.sensor_state["simulating"] = False
-                self.send_json({"status": "ok", "ip": ip})
-            elif path == "/api/sensors/wifi_disconnect":
+                    robot_state.set_sensor_source('wifi', url)
+                self.send_json({"status": "ok", "ip": ip, "url": url})
+            elif path in ("/api/sensors/wifi_disconnect", "/api/sensors/disconnect"):
                 with robot_state.lock:
-                    robot_state.sensor_state["wifi_connected"] = False
+                    if path == "/api/sensors/disconnect" or robot_state.sensor_link['source'] == 'wifi':
+                        robot_state.set_sensor_source('off')
                 self.send_json({"status": "ok"})
             elif path == "/api/sensors/push_raw":
                 raw_text = data.get("raw", "")
@@ -771,54 +1031,125 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
                     robot_state.parse_sensor_line(line)
                 self.send_json({"status": "ok"})
             elif path == "/api/quardbot/cmd":
-                target_host = self.quard_host(data)
-                cmd_url = f"{target_host.rstrip('/')}/cmd"
+                base = self.quard_host(data)
                 params = data.get("params", {})
                 if not isinstance(params, dict):
                     raise ValueError("'params' must be an object")
+                keepalive = bool(data.get("keepalive"))
+                query = urllib.parse.urlencode(params)
+                key = f"ch{params['ch']}" if 'ch' in params else None
+                t0 = time.monotonic()
                 try:
-                    query_str = urllib.parse.urlencode(params)
-                    full_url = f"{cmd_url}?{query_str}"
-                    req = urllib.request.Request(full_url)
+                    req = urllib.request.Request(f"{self.quard_request_base(base)}/cmd?{query}")
                     with urllib.request.urlopen(req, timeout=2.0) as resp:
-                        reply = resp.read().decode('utf-8', errors='ignore')
-                        with robot_state.lock:
-                            robot_state.quardbot_online = True
-                            if "mode" in params:
-                                robot_state.quardbot_mode = str(params["mode"])
-                        self.send_json({"status": "ok", "reply": reply})
+                        reply = resp.read().decode('utf-8', errors='ignore').strip()
+                    rtt = (time.monotonic() - t0) * 1000.0
+                    with robot_state.lock:
+                        robot_state.quardbot_online = True
+                        if "mode" in params:
+                            robot_state.quardbot_mode = str(params["mode"])
+                        robot_state.quard_link['sent'] += 1
+                        robot_state.quard_record(True, rtt)
+                    if not keepalive:
+                        console_log.add('quard', 'tx', f"/cmd?{query}  ←  {reply or 'OK'}  ({rtt:.0f} ms)", key=key)
+                    self.send_json({"status": "ok", "reply": reply, "rtt_ms": rtt})
                 except urllib.error.HTTPError as e:
                     # The robot answered (e.g. 400 "Bad Args"): it is online but
                     # did not accept these parameters.
+                    rtt = (time.monotonic() - t0) * 1000.0
+                    try:
+                        body = e.read().decode('utf-8', errors='ignore').strip()
+                    except Exception:
+                        body = ""
                     with robot_state.lock:
                         robot_state.quardbot_online = True
-                    self.send_json({"status": "rejected", "code": e.code, "message": str(e)})
+                        robot_state.quard_link['sent'] += 1
+                        robot_state.quard_link['failed'] += 1
+                        robot_state.quard_record(True, rtt)
+                    console_log.add('quard', 'warn', f"/cmd?{query}  ←  refused: HTTP {e.code} {body or e.reason}", key=key)
+                    self.send_json({"status": "rejected", "code": e.code, "message": body or str(e.reason)})
                 except Exception as e:
-                    self.send_json({"status": "error", "message": str(e)})
+                    reason = describe_net_error(e)
+                    with robot_state.lock:
+                        robot_state.quard_link['sent'] += 1
+                        robot_state.quard_link['failed'] += 1
+                        robot_state.quard_record(False, error=reason)
+                    if keepalive:
+                        console_log.add('quard', 'warn', f"Gait keep-alive failed: {reason}", key='keepalive')
+                    else:
+                        console_log.add('quard', 'error', f"/cmd?{query}  ✗  {reason}", key=key)
+                    self.send_json({"status": "error", "message": reason})
             elif path == "/api/quardbot/ping":
-                target_host = self.quard_host(data)
+                base = self.quard_host(data)
+                manual = bool(data.get("manual"))
+                parts = urllib.parse.urlsplit(base)
+                if manual:
+                    console_log.add('quard', 'tx', f"GET {base}/status")
+                t0 = time.monotonic()
                 try:
-                    req = urllib.request.Request(target_host.rstrip('/') + "/status")
-                    with urllib.request.urlopen(req, timeout=1.5) as resp:
-                        raw = resp.read().decode('utf-8', errors='ignore')
+                    name = parts.hostname or ""
+                    ip = socket.getaddrinfo(name, parts.port or 80, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
+                    t0 = time.monotonic()   # RTT excludes the name lookup
+                    netloc = ip + (f":{parts.port}" if parts.port else "")
+                    url = urllib.parse.urlunsplit((parts.scheme, netloc, "/status", "", ""))
+                    telemetry, note = {}, ""
+                    try:
+                        with urllib.request.urlopen(urllib.request.Request(url), timeout=2.0) as resp:
+                            raw = resp.read().decode('utf-8', errors='ignore')
                         try:
                             telemetry = json.loads(raw)
-                        except Exception:
-                            telemetry = {"status": "ok"}
-                        with robot_state.lock:
-                            robot_state.quardbot_online = True
-                        self.send_json({"status": "ok", "online": True, "telemetry": telemetry})
+                        except ValueError:
+                            note = raw.strip()[:120]
+                    except urllib.error.HTTPError as e:
+                        note = f"online (HTTP {e.code} on /status)"   # it answered
+                    rtt = (time.monotonic() - t0) * 1000.0
+                    with robot_state.lock:
+                        robot_state.quardbot_online = True
+                        robot_state.quard_resolved = {name: ip} if ip != name else {}
+                        robot_state.quard_link['rssi'] = telemetry.get('rssi') if isinstance(telemetry, dict) else None
+                        robot_state.quard_record(True, rtt, is_ping=True)
+                    if manual:
+                        console_log.add('quard', 'rx', json.dumps(telemetry) if telemetry else (note or "online"))
+                    self.send_json({"status": "ok", "online": True, "telemetry": telemetry, "rtt_ms": rtt})
                 except Exception as e:
-                    try:
-                        req2 = urllib.request.Request(target_host.rstrip('/') + "/")
-                        with urllib.request.urlopen(req2, timeout=1.2) as resp:
-                            with robot_state.lock:
-                                robot_state.quardbot_online = True
-                            self.send_json({"status": "ok", "online": True, "telemetry": {"status": "ok"}})
-                    except Exception as e2:
-                        with robot_state.lock:
-                            robot_state.quardbot_online = False
-                        self.send_json({"status": "ok", "online": False, "error": str(e2)})
+                    reason = describe_net_error(e)
+                    with robot_state.lock:
+                        robot_state.quardbot_online = False
+                        robot_state.quard_resolved = {}
+                        robot_state.quard_record(False, error=reason, is_ping=True)
+                    if manual:
+                        console_log.add('quard', 'error', f"No answer from {base}: {reason}")
+                    self.send_json({"status": "ok", "online": False, "error": reason})
+            elif path == "/api/arm/console":
+                line = str(data.get("line", "")).strip()
+                if not line or len(line) > 200 or "\n" in line:
+                    raise ValueError("line must be 1-200 characters, one line")
+                if not ROS2_AVAILABLE:
+                    console_log.add('arm', 'error', f"Not sent (ROS 2 not available): {line}")
+                    self.send_json({"status": "error", "message": "ROS 2 is not available"}, code=503)
+                    return
+                upper = line.upper()
+                prefix = next((k for k in ('MODE:', 'CMD:', 'CALIB:', 'SYNC:', 'LINK:', 'RAW:') if upper.startswith(k)), None)
+                payload = (prefix + line[len(prefix):]) if prefix else "RAW:" + line
+                with robot_state.lock:
+                    robot_state.commander_msgs.append(payload)
+                    alive = robot_state.commander_alive()
+                if not alive:
+                    console_log.add('arm', 'warn', f"{line}: published, but servo_serial_commander isn't running")
+                self.send_json({"status": "ok", "sent": payload})
+            elif path == "/api/arm/link":
+                cmd = str(data.get("cmd", "")).strip()
+                if not _LINK_CMD_RE.match(cmd):
+                    raise ValueError(f"unsupported link command {cmd!r}")
+                if not ROS2_AVAILABLE:
+                    self.send_json({"status": "error", "message": "ROS 2 is not available"}, code=503)
+                    return
+                with robot_state.lock:
+                    robot_state.commander_msgs.append(f"LINK:{cmd}")
+                    alive = robot_state.commander_alive()
+                if not alive:
+                    console_log.add('arm', 'warn', f"LINK:{cmd} sent, but servo_serial_commander isn't running")
+                self.send_json({"status": "ok"})
             else:
                 self.send_error(404)
         except (TypeError, ValueError) as err:
@@ -826,6 +1157,18 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
         except Exception as err:
             print(f"[Server] Error handling POST request to {self.path}: {err}")
             self.send_json({"status": "error", "message": str(err)}, code=500)
+
+    @staticmethod
+    def quard_request_base(base):
+        """base with the host name swapped for the IP the last good ping
+        resolved, so commands skip slow .local lookups."""
+        parts = urllib.parse.urlsplit(base)
+        with robot_state.lock:
+            ip = robot_state.quard_resolved.get(parts.hostname or "")
+        if not ip:
+            return base.rstrip('/')
+        netloc = ip + (f":{parts.port}" if parts.port else "")
+        return urllib.parse.urlunsplit((parts.scheme, netloc, parts.path, "", "")).rstrip('/')
 
     @staticmethod
     def quard_host(data):
@@ -837,8 +1180,11 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise ValueError(f"invalid Quard Bot host: {host!r}")
         with robot_state.lock:
+            if robot_state.quardbot_host != host:
+                robot_state.quard_resolved = {}
+                robot_state.quard_link.update(online=None, rtt_ms=None, last_error='')
             robot_state.quardbot_host = host
-        return host
+        return host.rstrip('/')
 
     def send_json(self, obj, code=200):
         data = json.dumps(obj).encode('utf-8')
@@ -871,7 +1217,8 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
                 "simulating": robot_state.is_simulating,
                 "sim_speed": robot_state.sim_speed,
                 "comm_mode": robot_state.comm_mode,
-                "ros_bridge": robot_state.ros_bridge_active
+                "ros_bridge": robot_state.ros_bridge_active,
+                "links": robot_state.links_snapshot()
             })
 
     def log_message(self, format, *args):
@@ -886,6 +1233,12 @@ if ROS2_AVAILABLE:
             self.calib_pub = self.create_publisher(StringMsg, '/servo_calibration', 10)
             self.create_timer(0.02, self.publish_joint_states) # 50 Hz loop
             self.create_timer(0.1, self.flush_commander_msgs)
+            self.create_subscription(StringMsg, '/esp32_link_state',
+                                     lambda m: robot_state.ingest_arm_link(m.data), LINK_STATE_QOS)
+            self.create_subscription(StringMsg, '/esp32_console',
+                                     lambda m: robot_state.ingest_arm_console(m.data), CONSOLE_QOS)
+            self.create_subscription(StringMsg, '/esp32_connection_status',
+                                     lambda m: robot_state.ingest_arm_legacy(m.data), 10)
             # Bring the commander's limits/offsets in line with the file the
             # dashboard is using, in case it loaded a different copy.
             with robot_state.lock:
@@ -955,120 +1308,154 @@ def simulation_loop():
             print(f"[Server] Simulation step error: {e}")
         time.sleep(0.02)
 
-def sensor_background_loop():
-    """Background thread polling Wi-Fi JSON endpoint, generating simulation telemetry, or reading hardware serial."""
-    while True:
-        try:
+def sensor_wifi_url(ip):
+    cur = (ip or "").strip() or "192.168.1.100"
+    if not cur.startswith(("http://", "https://")):
+        cur = "http://" + cur
+    cur = cur.rstrip('/')
+    return cur if cur.endswith('/data') else cur + "/data"
+
+
+def simulate_sensor_tick():
+    """One second of demo telemetry (the 'sim' source)."""
+    t = time.time()
+    temp_d = round(24.5 + 1.2 * math.sin(0.2 * t), 2)
+    hum = round(48.0 + 3.5 * math.cos(0.15 * t), 2)
+    temp_b = round(24.8 + 0.9 * math.sin(0.25 * t), 2)
+    pres = round(1013.25 + 2.5 * math.sin(0.1 * t), 2)
+    ax = round(0.4 * math.sin(0.5 * t), 2)
+    ay = round(0.3 * math.cos(0.4 * t), 2)
+    az = round(9.81 + 0.1 * math.sin(0.8 * t), 2)
+    gx = round(0.02 * math.sin(0.6 * t), 3)
+    gy = round(0.01 * math.cos(0.5 * t), 3)
+    gz = round(-0.01 * math.sin(0.3 * t), 3)
+    gas = int(410 + 25 * math.sin(0.1 * t) + random.randint(-4, 4))
+    water = int(120 + 15 * math.sin(0.05 * t) + random.randint(-2, 2))
+    uptime = int(t * 1000) % 10000000
+
+    block = [
+        "-----------------------------------",
+        f"DHT11   temp: {temp_d:.1f} C   hum: {hum:.1f} %",
+        f"BMP280  temp: {temp_b:.1f} C   pres: {pres:.1f} hPa",
+        f"Gas:    {gas}   Water: {water}",
+        "Flame:  clear",
+        f"Accel:  X={int(ax*1671)} Y={int(ay*1671)} Z={int(az*1671)}",
+        f"Gyro:   X={int(gx*7500)} Y={int(gy*7500)} Z={int(gz*7500)}",
+        "GPS:    17.38504, 78.48667   sats: 7",
+        "Alert:  OK",
+        "-----------------------------------"
+    ]
+
+    with robot_state.lock:
+        robot_state.sensor_state["temp_dht"] = temp_d
+        robot_state.sensor_state["temperature"] = temp_d
+        robot_state.sensor_state["humidity"] = hum
+        robot_state.sensor_state["temp_bmp"] = temp_b
+        robot_state.sensor_state["pressure"] = pres
+        robot_state.sensor_state["gas"] = gas
+        robot_state.sensor_state["water"] = water
+        robot_state.sensor_state["flame"] = 1
+        robot_state.sensor_state["alert"] = "OK"
+        robot_state.sensor_state["accel"] = {"x": ax, "y": ay, "z": az}
+        robot_state.sensor_state["gyro"] = {"x": gx, "y": gy, "z": gz}
+        robot_state.sensor_state["lat"] = 17.385044
+        robot_state.sensor_state["lng"] = 78.486671
+        robot_state.sensor_state["gps_valid"] = True
+        robot_state.sensor_state["gps_sats"] = 7
+        robot_state.sensor_state["sd_ok"] = True
+        robot_state.sensor_state["uptime_ms"] = uptime
+
+        pitch_rad = math.atan2(ay, math.sqrt(ax**2 + az**2))
+        roll_rad = math.atan2(-ax, az)
+        raw_p = round(pitch_rad * (180.0 / math.pi), 1)
+        raw_r = round(roll_rad * (180.0 / math.pi), 1)
+        robot_state.sensor_state["raw_pitch"] = raw_p
+        robot_state.sensor_state["raw_roll"] = raw_r
+        imu_t = robot_state.calibration.get("imu_offsets", {})
+        p_off = float(imu_t.get("pitch", 0.0))
+        r_off = float(imu_t.get("roll", 0.0))
+        robot_state.sensor_state["pitch"] = round(raw_p - p_off, 1)
+        robot_state.sensor_state["roll"] = round(raw_r - r_off, 1)
+
+        for line in block:
+            robot_state.sensor_state["raw_log"].append(line)
+        if len(robot_state.sensor_state["raw_log"]) > 100:
+            robot_state.sensor_state["raw_log"] = robot_state.sensor_state["raw_log"][-100:]
+        for line in block:
+            console_log.add('sensors', 'data', line)
+
+
+def read_sensor_serial(gen, port, baud):
+    """Read the rover over serial until the source changes. Raises on errors."""
+    import serial
+    with serial.Serial(port, baud, timeout=0.5) as ser:
+        with robot_state.lock:
+            robot_state.sensor_event(gen, 'waiting')
+        while True:
             with robot_state.lock:
-                simulating = robot_state.sensor_state.get("simulating", True)
-                connected = robot_state.sensor_state.get("connected", False)
-                wifi_connected = robot_state.sensor_state.get("wifi_connected", False)
-                wifi_ip = robot_state.sensor_state.get("wifi_ip", "192.168.1.100")
-                port = robot_state.sensor_state.get("port", "/dev/ttyUSB0")
-                baud = robot_state.sensor_state.get("baudrate", 115200)
+                if robot_state.sensor_link['gen'] != gen:
+                    return
+            raw_bytes = ser.readline()
+            if raw_bytes:
+                line = raw_bytes.decode('utf-8', errors='ignore').strip()
+                if line:
+                    robot_state.parse_sensor_line(line)
+                    with robot_state.lock:
+                        robot_state.sensor_rx(gen)
 
-            if wifi_connected:
-                cur_ip = wifi_ip.strip()
-                if not cur_ip.startswith("http://") and not cur_ip.startswith("https://"):
-                    url = f"http://{cur_ip}/data"
-                elif cur_ip.endswith("/data"):
-                    url = cur_ip
-                else:
-                    url = f"{cur_ip.rstrip('/')}/data"
 
+def sensor_background_loop():
+    """Feed rover telemetry from the selected source: sim, Wi-Fi (/data JSON) or serial."""
+    wifi_failures = 0
+    while True:
+        with robot_state.lock:
+            lk = robot_state.sensor_link
+            src, gen, target = lk['source'], lk['gen'], lk['target']
+            port = robot_state.sensor_state.get("port", "/dev/ttyUSB0")
+            baud = robot_state.sensor_state.get("baudrate", 115200)
+        try:
+            if src == 'sim':
+                simulate_sensor_tick()
+                time.sleep(1.0)
+            elif src == 'wifi':
                 try:
-                    req = urllib.request.Request(url, headers={"User-Agent": "RobotArm-Server/1.0"})
-                    with urllib.request.urlopen(req, timeout=1.5) as resp:
-                        if resp.status == 200:
-                            raw = resp.read().decode('utf-8', errors='ignore')
-                            robot_state.parse_sensor_json(raw)
+                    req = urllib.request.Request(target, headers={"User-Agent": "RobotArm-Server/1.0"})
+                    with urllib.request.urlopen(req, timeout=2.0) as resp:
+                        raw = resp.read().decode('utf-8', errors='ignore')
+                    if not robot_state.parse_sensor_json(raw):
+                        raise ValueError(f"reply from {target} is not JSON: {raw.strip()[:60]!r}")
+                    wifi_failures = 0
+                    with robot_state.lock:
+                        robot_state.sensor_rx(gen)
+                    time.sleep(0.5)
+                except Exception as err:
+                    wifi_failures += 1
+                    if isinstance(err, urllib.error.HTTPError) and err.code == 404:
+                        detail = f"HTTP 404: no /data page at {target}"
+                    elif isinstance(err, ValueError):
+                        detail = str(err)
+                    else:
+                        detail = describe_net_error(err)
+                    with robot_state.lock:
+                        robot_state.sensor_event(gen, 'error', detail)
+                    time.sleep(min(5.0, 0.5 * (2 ** min(wifi_failures, 4))))
+            elif src == 'serial':
+                try:
+                    read_sensor_serial(gen, port, baud)
+                except ImportError:
+                    with robot_state.lock:
+                        robot_state.sensor_event(gen, 'error', "pyserial is not installed (sudo apt install python3-serial)")
+                        robot_state.set_sensor_source('off')
                 except Exception as err:
                     with robot_state.lock:
-                        robot_state.sensor_state["raw_log"].append(f"[Wi-Fi Error] {err}")
-                        if len(robot_state.sensor_state["raw_log"]) > 100:
-                            robot_state.sensor_state["raw_log"].pop(0)
+                        robot_state.sensor_event(gen, 'error', explain_serial_error(err))
+                    time.sleep(2.0)
+            else:
+                time.sleep(0.3)
+        except Exception as e:
+            print(f"[Server] Sensor loop error: {e}")
+            time.sleep(1.0)
 
-            elif simulating:
-                t = time.time()
-                temp_d = round(24.5 + 1.2 * math.sin(0.2 * t), 2)
-                hum = round(48.0 + 3.5 * math.cos(0.15 * t), 2)
-                temp_b = round(24.8 + 0.9 * math.sin(0.25 * t), 2)
-                pres = round(1013.25 + 2.5 * math.sin(0.1 * t), 2)
-                ax = round(0.4 * math.sin(0.5 * t), 2)
-                ay = round(0.3 * math.cos(0.4 * t), 2)
-                az = round(9.81 + 0.1 * math.sin(0.8 * t), 2)
-                gx = round(0.02 * math.sin(0.6 * t), 3)
-                gy = round(0.01 * math.cos(0.5 * t), 3)
-                gz = round(-0.01 * math.sin(0.3 * t), 3)
-                gas = int(410 + 25 * math.sin(0.1 * t) + random.randint(-4, 4))
-                water = int(120 + 15 * math.sin(0.05 * t) + random.randint(-2, 2))
-                uptime = int(t * 1000) % 10000000
-
-                block = [
-                    "-----------------------------------",
-                    f"DHT11   temp: {temp_d:.1f} C   hum: {hum:.1f} %",
-                    f"BMP280  temp: {temp_b:.1f} C   pres: {pres:.1f} hPa",
-                    f"Gas:    {gas}   Water: {water}",
-                    "Flame:  clear",
-                    f"Accel:  X={int(ax*1671)} Y={int(ay*1671)} Z={int(az*1671)}",
-                    f"Gyro:   X={int(gx*7500)} Y={int(gy*7500)} Z={int(gz*7500)}",
-                    "GPS:    17.38504, 78.48667   sats: 7",
-                    "Alert:  OK",
-                    "-----------------------------------"
-                ]
-
-                with robot_state.lock:
-                    robot_state.sensor_state["temp_dht"] = temp_d
-                    robot_state.sensor_state["temperature"] = temp_d
-                    robot_state.sensor_state["humidity"] = hum
-                    robot_state.sensor_state["temp_bmp"] = temp_b
-                    robot_state.sensor_state["pressure"] = pres
-                    robot_state.sensor_state["gas"] = gas
-                    robot_state.sensor_state["water"] = water
-                    robot_state.sensor_state["flame"] = 1
-                    robot_state.sensor_state["alert"] = "OK"
-                    robot_state.sensor_state["accel"] = {"x": ax, "y": ay, "z": az}
-                    robot_state.sensor_state["gyro"] = {"x": gx, "y": gy, "z": gz}
-                    robot_state.sensor_state["lat"] = 17.385044
-                    robot_state.sensor_state["lng"] = 78.486671
-                    robot_state.sensor_state["gps_valid"] = True
-                    robot_state.sensor_state["gps_sats"] = 7
-                    robot_state.sensor_state["sd_ok"] = True
-                    robot_state.sensor_state["uptime_ms"] = uptime
-
-                    pitch_rad = math.atan2(ay, math.sqrt(ax**2 + az**2))
-                    roll_rad = math.atan2(-ax, az)
-                    raw_p = round(pitch_rad * (180.0 / math.pi), 1)
-                    raw_r = round(roll_rad * (180.0 / math.pi), 1)
-                    robot_state.sensor_state["raw_pitch"] = raw_p
-                    robot_state.sensor_state["raw_roll"] = raw_r
-                    imu_t = robot_state.calibration.get("imu_offsets", {})
-                    p_off = float(imu_t.get("pitch", 0.0))
-                    r_off = float(imu_t.get("roll", 0.0))
-                    robot_state.sensor_state["pitch"] = round(raw_p - p_off, 1)
-                    robot_state.sensor_state["roll"] = round(raw_r - r_off, 1)
-
-                    for line in block:
-                        robot_state.sensor_state["raw_log"].append(line)
-                    if len(robot_state.sensor_state["raw_log"]) > 100:
-                        robot_state.sensor_state["raw_log"] = robot_state.sensor_state["raw_log"][-100:]
-
-            elif connected and os.path.exists(port):
-                try:
-                    import serial
-                    with serial.Serial(port, baud, timeout=1.0) as s:
-                        while not robot_state.sensor_state["simulating"] and not robot_state.sensor_state.get("wifi_connected", False):
-                            raw_bytes = s.readline()
-                            if raw_bytes:
-                                line = raw_bytes.decode('utf-8', errors='ignore')
-                                robot_state.parse_sensor_line(line)
-                except Exception:
-                    with robot_state.lock:
-                        robot_state.sensor_state["connected"] = False
-        except Exception:
-            pass
-
-        time.sleep(1.0)
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(description="Robot WebGL dashboard server")
