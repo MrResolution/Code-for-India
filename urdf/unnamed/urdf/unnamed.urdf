@@ -1,278 +1,107 @@
-<?xml version="1.0" ?>
-<robot name="quard_bot">
-  <material name="teal_chassis">
-    <color rgba="0.35 0.65 0.58 1.0"/>
-  </material>
-  <material name="blue_r1">
-    <color rgba="0.38 0.55 0.72 1.0"/>
-  </material>
-  <material name="orange_r3">
-    <color rgba="0.72 0.50 0.40 1.0"/>
-  </material>
-  <material name="green_r2">
-    <color rgba="0.45 0.68 0.50 1.0"/>
-  </material>
-  <material name="purple_hip">
-    <color rgba="0.62 0.44 0.62 1.0"/>
-  </material>
-  <material name="purple_foot">
-    <color rgba="0.50 0.42 0.58 1.0"/>
-  </material>
-  <material name="top_cover_mat">
-    <color rgba="0.28 0.55 0.50 1.0"/>
-  </material>
-  <joint name="joint_l1_hip" type="revolute">
-    <parent link="Internal-Frame-v121_link"/>
-    <child link="L1-v117_link"/>
-    <origin xyz="0.024639 0.025830 0.020363" rpy="0.00000 0.00000 0.00000"/>
-    <axis xyz="0 0 1"/>
-    <limit lower="-0.7854" upper="0.7854" effort="2.5" velocity="6.0"/>
+<robot name="unnamed" version="1.0">
+  <joint name="Hipback-left-joint" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="-3.14159 1.57080 -0.00000" xyz="-1.01689 0.09211 -0.03398"/>
+    <parent link="Body_link"/>
+    <child link="Hipback-left_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
   </joint>
-  <joint name="joint_l3_foot" type="revolute">
-    <parent link="L1-v117_link"/>
-    <child link="L3-v117_link"/>
-    <origin xyz="-0.009338 0.036884 -0.019524" rpy="1.57080 0.00000 1.57080"/>
-    <axis xyz="0 0 1"/>
-    <limit lower="-0.7854" upper="1.0472" effort="2.5" velocity="6.0"/>
+  <joint name="Femurback-left-joint" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="1.14190 1.57080 -0.44834" xyz="0.20010 -0.63604 -0.09756"/>
+    <parent link="Hipback-left_link"/>
+    <child link="Femurback-left_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
   </joint>
-  <joint name="joint_l2_hip" type="revolute">
-    <parent link="Internal-Frame-v121_link"/>
-    <child link="L2-v117_link"/>
-    <origin xyz="-0.023953 0.025833 0.020363" rpy="0.00000 0.00000 3.14159"/>
-    <axis xyz="0 0 1"/>
-    <limit lower="-0.7854" upper="0.7854" effort="2.5" velocity="6.0"/>
+  <joint name="Femurfront-right-joint" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="1.57080 -1.57080 0.00000" xyz="0.19846 -0.64343 0.04818"/>
+    <parent link="Hipfront-right_link"/>
+    <child link="Femurfront-right_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
   </joint>
-  <joint name="joint_l4_foot" type="revolute">
-    <parent link="L2-v117_link"/>
-    <child link="L4-v117_link"/>
-    <origin xyz="-0.009349 -0.036870 -0.019547" rpy="1.55975 0.00000 1.57080"/>
-    <axis xyz="0 0 1"/>
-    <limit lower="-0.7854" upper="1.0472" effort="2.5" velocity="6.0"/>
+  <joint name="TibiaLfront-right" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="-0.01047 0.00000 0.01252" xyz="0.56805 -0.00026 0.01632"/>
+    <parent link="Femurfront-right_link"/>
+    <child link="TibiaLfront-right_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
   </joint>
-  <joint name="joint_r1_hip" type="revolute">
-    <parent link="Internal-Frame-v121_link"/>
-    <child link="R1-v117_link"/>
-    <origin xyz="0.024649 -0.025106 0.020363" rpy="0.00000 0.00000 0.00000"/>
-    <axis xyz="0 0 1"/>
-    <limit lower="-0.7854" upper="0.7854" effort="2.5" velocity="6.0"/>
+  <joint name="TibiaLback-left-joint" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="-0.03874 0.01647 0.01122" xyz="0.56915 -0.03142 -0.07694"/>
+    <parent link="Femurback-left_link"/>
+    <child link="TibiaLback-left_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
   </joint>
-  <joint name="joint_r3_foot" type="revolute">
-    <parent link="R1-v117_link"/>
-    <child link="R3-v117_link"/>
-    <origin xyz="-0.009414 -0.036856 -0.019531" rpy="1.55156 0.00000 1.57080"/>
-    <axis xyz="0 0 1"/>
-    <limit lower="-0.7854" upper="1.0472" effort="2.5" velocity="6.0"/>
+  <joint name="Hipback-right" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="0.00000 -1.57080 0.00000" xyz="-1.01689 -0.08910 -0.03466"/>
+    <parent link="Body_link"/>
+    <child link="Hipback-right_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
   </joint>
-  <joint name="joint_r2_hip" type="revolute">
-    <parent link="Internal-Frame-v121_link"/>
-    <child link="R2-v117_link"/>
-    <origin xyz="-0.024034 -0.024987 0.020363" rpy="0.00000 0.00000 3.14159"/>
-    <axis xyz="0 0 1"/>
-    <limit lower="-0.7854" upper="0.7854" effort="2.5" velocity="6.0"/>
+  <joint name="Femurback-right-joint" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="1.58477 1.57080 0.00000" xyz="-0.19846 -0.64343 -0.04818"/>
+    <parent link="Hipback-right_link"/>
+    <child link="Femurback-right_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
   </joint>
-  <joint name="joint_r4_foot" type="revolute">
-    <parent link="R2-v117_link"/>
-    <child link="R4-v117_link"/>
-    <origin xyz="-0.009550 0.036735 -0.019562" rpy="1.55156 0.00000 1.57080"/>
-    <axis xyz="0 0 1"/>
-    <limit lower="-0.7854" upper="1.0472" effort="2.5" velocity="6.0"/>
+  <joint name="TibiaLback-right_joint" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="-0.02291 0.02386 -0.00055" xyz="0.57104 0.00281 0.03004"/>
+    <parent link="Femurback-right_link"/>
+    <child link="TibiaLback-right_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
   </joint>
-  <link name="Internal-Frame-v121_link">
-    <inertial>
-      <mass value="0.28"/>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <inertia ixx="0.00018" ixy="0" ixz="0" iyy="0.00022" iyz="0" izz="0.0003"/>
-    </inertial>
-    <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+  <joint name="Hipfront-left-joint" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="-3.14159 -1.57080 0.00000" xyz="0.87024 0.09211 -0.03398"/>
+    <parent link="Body_link"/>
+    <child link="Hipfront-left_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
+  </joint>
+  <joint name="Femurfront-left-joint" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="1.34289 -1.57080 0.22791" xyz="-0.20056 -0.63601 0.09831"/>
+    <parent link="Hipfront-left_link"/>
+    <child link="Femurfront-left_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
+  </joint>
+  <joint name="TibiaLfront-left-joint" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="0.02448 0.00784 0.00019" xyz="0.56967 0.00379 0.01526"/>
+    <parent link="Femurfront-left_link"/>
+    <child link="TibiaLfront-left_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
+  </joint>
+  <joint name="Hipfront-right-joint_" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="0.00000 1.57080 0.00000" xyz="0.87024 -0.08910 -0.03466"/>
+    <parent link="Body_link"/>
+    <child link="Hipfront-right_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
+  </joint>
+  <link name="Body_link">
+    <visual name="Body">
+      <material name="None"/>
+      <origin rpy="0.00000 0.00000 0.00000" xyz="0.00000 0.00000 0.00000"/>
       <geometry>
-        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/chassis.stl" scale="1 1 1"/>
+        <box size="2.23178 0.54200 0.35652"/>
       </geometry>
-      <material name="teal_chassis">
-        <color rgba="0.35 0.65 0.58 1.0"/>
-      </material>
     </visual>
-    <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/chassis.stl" scale="1 1 1"/>
-      </geometry>
-    </collision>
   </link>
-  <link name="L1-v117_link">
-    <inertial>
-      <mass value="0.03"/>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <inertia ixx="1e-05" ixy="0" ixz="0" iyy="1e-05" iyz="0" izz="1e-05"/>
-    </inertial>
-    <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/L1.stl" scale="1 1 1"/>
-      </geometry>
-      <material name="purple_hip">
-        <color rgba="0.62 0.44 0.62 1.0"/>
-      </material>
-    </visual>
-    <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/L1.stl" scale="1 1 1"/>
-      </geometry>
-    </collision>
-  </link>
-  <link name="L3-v117_link">
-    <inertial>
-      <mass value="0.02"/>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <inertia ixx="1e-05" ixy="0" ixz="0" iyy="1e-05" iyz="0" izz="1e-05"/>
-    </inertial>
-    <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/L3.stl" scale="1 1 1"/>
-      </geometry>
-      <material name="purple_foot">
-        <color rgba="0.50 0.42 0.58 1.0"/>
-      </material>
-    </visual>
-    <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/L3.stl" scale="1 1 1"/>
-      </geometry>
-    </collision>
-  </link>
-  <link name="L2-v117_link">
-    <inertial>
-      <mass value="0.03"/>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <inertia ixx="1e-05" ixy="0" ixz="0" iyy="1e-05" iyz="0" izz="1e-05"/>
-    </inertial>
-    <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/L2.stl" scale="1 1 1"/>
-      </geometry>
-      <material name="purple_hip">
-        <color rgba="0.62 0.44 0.62 1.0"/>
-      </material>
-    </visual>
-    <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/L2.stl" scale="1 1 1"/>
-      </geometry>
-    </collision>
-  </link>
-  <link name="L4-v117_link">
-    <inertial>
-      <mass value="0.02"/>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <inertia ixx="1e-05" ixy="0" ixz="0" iyy="1e-05" iyz="0" izz="1e-05"/>
-    </inertial>
-    <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/L4.stl" scale="1 1 1"/>
-      </geometry>
-      <material name="purple_foot">
-        <color rgba="0.50 0.42 0.58 1.0"/>
-      </material>
-    </visual>
-    <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/L4.stl" scale="1 1 1"/>
-      </geometry>
-    </collision>
-  </link>
-  <link name="R1-v117_link">
-    <inertial>
-      <mass value="0.03"/>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <inertia ixx="1e-05" ixy="0" ixz="0" iyy="1e-05" iyz="0" izz="1e-05"/>
-    </inertial>
-    <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/R1.stl" scale="1 1 1"/>
-      </geometry>
-      <material name="blue_r1">
-        <color rgba="0.38 0.55 0.72 1.0"/>
-      </material>
-    </visual>
-    <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/R1.stl" scale="1 1 1"/>
-      </geometry>
-    </collision>
-  </link>
-  <link name="R3-v117_link">
-    <inertial>
-      <mass value="0.02"/>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <inertia ixx="1e-05" ixy="0" ixz="0" iyy="1e-05" iyz="0" izz="1e-05"/>
-    </inertial>
-    <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/R3.stl" scale="1 1 1"/>
-      </geometry>
-      <material name="orange_r3">
-        <color rgba="0.72 0.50 0.40 1.0"/>
-      </material>
-    </visual>
-    <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/R3.stl" scale="1 1 1"/>
-      </geometry>
-    </collision>
-  </link>
-  <link name="R2-v117_link">
-    <inertial>
-      <mass value="0.03"/>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <inertia ixx="1e-05" ixy="0" ixz="0" iyy="1e-05" iyz="0" izz="1e-05"/>
-    </inertial>
-    <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/R2.stl" scale="1 1 1"/>
-      </geometry>
-      <material name="green_r2">
-        <color rgba="0.45 0.68 0.50 1.0"/>
-      </material>
-    </visual>
-    <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/R2.stl" scale="1 1 1"/>
-      </geometry>
-    </collision>
-  </link>
-  <link name="R4-v117_link">
-    <inertial>
-      <mass value="0.02"/>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <inertia ixx="1e-05" ixy="0" ixz="0" iyy="1e-05" iyz="0" izz="1e-05"/>
-    </inertial>
-    <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/R4.stl" scale="1 1 1"/>
-      </geometry>
-      <material name="purple_foot">
-        <color rgba="0.50 0.42 0.58 1.0"/>
-      </material>
-    </visual>
-    <collision>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <mesh filename="file:///home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl/R4.stl" scale="1 1 1"/>
-      </geometry>
-    </collision>
-  </link>
+  <link name="Hipback-left_link"/>
+  <link name="Hipfront-right_link"/>
+  <link name="Femurfront-right_link"/>
+  <link name="TibiaLfront-right_link"/>
+  <link name="Femurback-left_link"/>
+  <link name="TibiaLback-left_link"/>
+  <link name="Hipback-right_link"/>
+  <link name="Femurback-right_link"/>
+  <link name="TibiaLback-right_link"/>
+  <link name="Hipfront-left_link"/>
+  <link name="Femurfront-left_link"/>
+  <link name="TibiaLfront-left_link"/>
 </robot>

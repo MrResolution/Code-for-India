@@ -4,7 +4,8 @@
   "files": [
     "../urdf/unnamed.urdf",
     "unnamed_joints.yml",
-    "unnamed_links.yml"
+    "unnamed_links.yml",
+    "unnamed_visuals.yml"
   ],
   "modelname": "unnamed",
   "version": "0.0.0"
