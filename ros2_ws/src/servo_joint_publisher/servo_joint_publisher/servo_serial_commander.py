@@ -26,7 +26,24 @@ from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import String as StringMsg
 
-CALIB_FILE_PATH = "/home/sabo/Documents/learn_/Hardware/servo_calibration.json"
+def _find_calib_file():
+    """servo_calibration.json at the repo root: $ROBOT_PROJECT_DIR, else the first
+    parent of this file that has it (works from source and from ros2_ws/install)."""
+    env_dir = os.environ.get("ROBOT_PROJECT_DIR")
+    if env_dir:
+        return os.path.join(env_dir, "servo_calibration.json")
+    d = os.path.dirname(os.path.abspath(__file__))
+    while True:
+        candidate = os.path.join(d, "servo_calibration.json")
+        if os.path.isfile(candidate):
+            return candidate
+        parent = os.path.dirname(d)
+        if parent == d:
+            return os.path.join(os.getcwd(), "servo_calibration.json")
+        d = parent
+
+
+CALIB_FILE_PATH = _find_calib_file()
 
 
 class ServoSerialCommander(Node):
@@ -330,9 +347,11 @@ class ServoSerialCommander(Node):
     def map_rad_to_calibrated_deg(self, rad_val, cfg):
         """Map radians → calibrated degrees applying bounds, inversion, sync offset, trim, and safety limits."""
         r_min, r_max = cfg['rad_min'], cfg['rad_max']
-        rad_clamped = max(r_min, min(r_max, rad_val))
-
-        ratio = (rad_clamped - r_min) / (r_max - r_min)
+        # No clamp here: the published angle includes the twin sync offset and
+        # may legitimately lie outside [r_min, r_max]. Clamping before the offset
+        # is removed would cut the servo's range short; the servo limits below
+        # are the real safety bound.
+        ratio = (rad_val - r_min) / (r_max - r_min)
         if cfg['invert']:
             ratio = 1.0 - ratio
 
@@ -351,6 +370,8 @@ class ServoSerialCommander(Node):
                 idx = msg.name.index(j_name)
                 if idx < len(msg.position):
                     rad_value = msg.position[idx]
+                    if not math.isfinite(rad_value):
+                        continue  # NaN/inf would defeat the min/max clamp
                     deg_value = self.map_rad_to_calibrated_deg(rad_value, cfg)
 
                     last_t = self.last_cmd_time.get(j_name, 0.0)

@@ -5,11 +5,15 @@ Python Web Dashboard Server & ROS 2 Node for Robotic Arm
 Features:
   • Built-in ThreadingHTTPServer serving static assets, URDF models, and STL meshes.
   • REST API endpoints for joint state streaming & calibration limit persistence.
-  • Subscribes to /publishes /joint_states and /servo_calibration ROS 2 topics at 50 Hz.
+  • Publishes /joint_states at 50 Hz and forwards calibration / sync / mode
+    changes to servo_serial_commander over /servo_calibration.
+  • Listens on 127.0.0.1 only by default. Pass --host 0.0.0.0 to expose it on
+    the LAN (anyone who can reach it can then move the robots).
 """
 
 import sys
 import os
+import copy
 import json
 import math
 import time
@@ -18,6 +22,7 @@ import urllib.parse
 import urllib.request
 import re
 import random
+import argparse
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
@@ -31,50 +36,82 @@ try:
 except ImportError:
     ROS2_AVAILABLE = False
 
-def send_comm_mode_to_esp32(mode_str):
-    """Broadcast and unicast MODE command via UDP port 8888 & Serial backup."""
+
+def find_project_dir():
+    """Locate the repository root (holds servo_calibration.json and urdf/).
+
+    Honours $ROBOT_PROJECT_DIR, otherwise walks up from this file, which works
+    both from the source tree and from a colcon install inside ros2_ws/.
+    """
+    env_dir = os.environ.get("ROBOT_PROJECT_DIR")
+    if env_dir:
+        return os.path.abspath(env_dir)
+    d = os.path.dirname(os.path.abspath(__file__))
+    while True:
+        if os.path.isfile(os.path.join(d, "servo_calibration.json")) and os.path.isdir(os.path.join(d, "urdf")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            return os.getcwd()
+        d = parent
+
+
+PROJECT_DIR = find_project_dir()
+CALIB_FILE_PATH = os.path.join(PROJECT_DIR, "servo_calibration.json")
+URDF_PATH = os.path.join(PROJECT_DIR, "urdf", "arm", "urdf", "arm.urdf")
+MESH_DIR = os.path.join(PROJECT_DIR, "urdf", "arm", "meshes", "stl")
+QUARD_URDF_PATH = os.path.join(PROJECT_DIR, "urdf", "quard_bot", "urdf", "quard_bot.urdf")
+QUARD_MESH_DIR = os.path.join(PROJECT_DIR, "urdf", "quard_bot", "meshes")
+UNNAMED_MESH_DIR = os.path.join(PROJECT_DIR, "urdf", "unnamed", "meshes", "stl")
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+# Arm joints driven by the dashboard. Slider degrees (0..180) map linearly onto
+# [rad_min, rad_max]; these ranges must match JOINTS in static/app.js and
+# joint_calib in servo_serial_commander.py.
+ARM_JOINTS = {
+    'turntable_link_joint_dup':   {'rad_min': -3.0,     'rad_max': 3.0,     'def': 90.0},
+    'turntable_link_joint':       {'rad_min': -2.0,     'rad_max': 2.0,     'def': 59.0},
+    'turntable_link_joint_dup_1': {'rad_min': -2.0,     'rad_max': 2.0,     'def': 153.1},
+    'turntable_link_joint_dup_2': {'rad_min': -2.0,     'rad_max': 2.0,     'def': 116.0},
+    'turntable_link_joint_dup_3': {'rad_min': -3.14159, 'rad_max': 3.14159, 'def': 90.0},
+}
+# Older clients / firmware name for the wrist joint.
+JOINT_ALIASES = {'wrist_twist_joint': 'turntable_link_joint_dup_3'}
+
+LOOPBACK_HOSTS = {'localhost', '127.0.0.1', '::1'}
+
+
+def finite_float(value):
+    """float(value), rejecting NaN/inf (float() happily accepts 'nan')."""
+    f = float(value)
+    if not math.isfinite(f):
+        raise ValueError(f"non-finite value: {value!r}")
+    return f
+
+
+def send_comm_mode_udp_broadcast(mode_str):
+    """Fallback when ROS 2 is unavailable: broadcast MODE over UDP port 8888.
+
+    Deliberately does not open a serial port: that would reset the ESP32 (DTR)
+    and steal bytes from servo_serial_commander, which owns the port.
+    """
     cmd_bytes = f"MODE:{mode_str}\n".encode('utf-8')
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         sock.settimeout(0.5)
         sock.sendto(cmd_bytes, ('255.255.255.255', 8888))
-        sock.sendto(cmd_bytes, ('10.216.192.100', 8888))
         sock.close()
-        print(f"[Server] Sent MODE:{mode_str} via UDP")
+        print(f"[Server] Sent MODE:{mode_str} via UDP broadcast")
     except Exception as e:
         print(f"[Server] UDP mode send error: {e}")
 
-    for port in ['/dev/ttyUSB0', '/dev/ttyACM0']:
-        if os.path.exists(port):
-            try:
-                import serial
-                s = serial.Serial(port, 115200, timeout=0.1)
-                s.write(cmd_bytes)
-                s.close()
-                print(f"[Server] Sent MODE:{mode_str} via Serial ({port})")
-            except Exception as e:
-                pass
-
-CALIB_FILE_PATH = "/home/sabo/Documents/learn_/Hardware/servo_calibration.json"
-URDF_PATH = "/home/sabo/Documents/learn_/Hardware/urdf/arm/urdf/arm.urdf"
-MESH_DIR = "/home/sabo/Documents/learn_/Hardware/urdf/arm/meshes/stl"
-QUARD_URDF_PATH = "/home/sabo/Documents/learn_/Hardware/urdf/quard_bot/urdf/quard_bot.urdf"
-QUARD_MESH_DIR = "/home/sabo/Documents/learn_/Hardware/urdf/quard_bot/meshes"
-STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
 # Shared state between HTTP Server and ROS 2 Node
 class RobotState:
     def __init__(self):
         self.lock = threading.Lock()
-        self.joint_positions = {
-            'turntable_link_joint_dup': 90.0,
-            'turntable_link_joint': 59.0,
-            'turntable_link_joint_dup_1': 153.1,
-            'turntable_link_joint_dup_2': 116.0,
-            'turntable_link_joint_dup_3': 90.0,
-            'wrist_twist_joint': 90.0
-        }
+        self.joint_positions = {j: cfg['def'] for j, cfg in ARM_JOINTS.items()}
         self.calibration = self.load_calibration()
         self.is_simulating = False
         self.sim_speed = 1.0
@@ -84,8 +121,13 @@ class RobotState:
         self.sim_blend_start_positions = {}
         self.sim_start_time = time.time()
         self.last_update = time.time()
+        self.comm_mode = "SERIAL"
+        # Text commands for servo_serial_commander (CALIB:/SYNC:/MODE:),
+        # drained by the ROS 2 bridge node onto /servo_calibration.
+        self.commander_msgs = []
         # Quard Bot (Sesame Quadruped) State
         self.quardbot_host = "http://sesame-robot.local"
+        self.quardbot_mode = "stand"
         self.quardbot_online = False
         self.quardbot_channels = [45, 45, 45, 45, 45, 45, 45, 45]
         self.quard_joints = {
@@ -339,117 +381,180 @@ class RobotState:
                     return json.load(f)
             except Exception as e:
                 print(f"[Server] Error loading calibration: {e}")
+        else:
+            print(f"[Server] Calibration file not found at {CALIB_FILE_PATH}; using defaults")
         return {}
 
+    @staticmethod
+    def validate_calibration(new_calib):
+        """Return a sanitised copy of a calibration update, or raise ValueError.
+
+        Every leaf must be a finite number or a bool; a null/NaN written to the
+        file would make servo_serial_commander abort its whole calibration load.
+        """
+        if not isinstance(new_calib, dict):
+            raise ValueError("calibration update must be a JSON object")
+        clean = {}
+        for key, val in new_calib.items():
+            key = str(key)
+            if isinstance(val, dict):
+                clean[key] = RobotState.validate_calibration(val)
+            elif isinstance(val, bool):
+                clean[key] = val
+            else:
+                clean[key] = finite_float(val)
+        for j_name in ARM_JOINTS:
+            cal = clean.get(j_name)
+            if isinstance(cal, dict) and 'servo_min_deg' in cal and 'servo_max_deg' in cal:
+                lo, hi = cal['servo_min_deg'], cal['servo_max_deg']
+                if not (0.0 <= lo < hi <= 180.0):
+                    raise ValueError(f"{j_name}: need 0 <= servo_min_deg < servo_max_deg <= 180")
+        return clean
+
     def save_calibration(self, new_calib):
+        """Merge, persist and forward a calibration update. Returns (ok, message)."""
+        try:
+            new_calib = self.validate_calibration(new_calib)
+        except (TypeError, ValueError) as e:
+            return False, str(e)
         with self.lock:
             self._deep_update(self.calibration, new_calib)
+            self._queue_commander_updates(new_calib)
             try:
                 with open(CALIB_FILE_PATH, 'w') as f:
                     json.dump(self.calibration, f, indent=2)
-                return True
+                return True, "saved"
             except Exception as e:
                 print(f"[Server] Error saving calibration: {e}")
-                return False
+                return False, str(e)
+
+    def _queue_commander_updates(self, new_calib):
+        """Tell servo_serial_commander about changed limits / sync offsets (lock held)."""
+        for j_name in ARM_JOINTS:
+            upd = new_calib.get(j_name)
+            if not isinstance(upd, dict):
+                continue
+            if 'servo_min_deg' in upd or 'servo_max_deg' in upd:
+                cal = self.calibration.get(j_name, {})
+                lo = cal.get('servo_min_deg', 0.0)
+                hi = cal.get('servo_max_deg', 180.0)
+                self.commander_msgs.append(f"CALIB:{j_name}={lo:.1f},{hi:.1f}")
+            if 'sync_offset_deg' in upd:
+                self.commander_msgs.append(f"SYNC:{j_name}={upd['sync_offset_deg']:.1f}")
+
+    def snapshot(self, obj):
+        """Deep copy of shared state taken under the lock, safe to serialise later."""
+        with self.lock:
+            return copy.deepcopy(obj)
+
+    def step_simulation(self):
+        """Advance the demo animation. Called at 50 Hz from a background thread so
+        the sim runs at real speed whether or not a browser is polling."""
+        with self.lock:
+            now = time.time()
+            if self.is_simulating:
+                dt = now - self.last_update
+                dt = min(max(dt, 0.0), 0.1)
+                self.sim_time += dt * self.sim_speed
+                t = self.sim_time
+
+                # Smooth cosine ease-in S-curve blend (C1-continuous)
+                blend_elapsed = now - self.sim_blend_start_time
+                progress = min(1.0, max(0.0, blend_elapsed / self.sim_blend_duration))
+                w = 0.5 - 0.5 * math.cos(progress * math.pi)
+
+                sim_targets = {
+                    'turntable_link_joint_dup': 90.0 + 45.0 * math.sin(0.3 * t),
+                    'turntable_link_joint': 59.0 + 20.0 * math.sin(0.4 * t + 1.0),
+                    'turntable_link_joint_dup_1': 110.0 + 35.0 * math.sin(0.5 * t + 2.0),
+                    'turntable_link_joint_dup_2': 116.0 + 25.0 * math.sin(0.6 * t + 1.5),
+                    'turntable_link_joint_dup_3': 90.0 + 35.0 * math.sin(0.4 * t + 0.5),
+                }
+
+                for jk, target_val in sim_targets.items():
+                    start_val = self.sim_blend_start_positions.get(
+                        jk, self.joint_positions.get(jk, target_val)
+                    )
+                    blended = (1.0 - w) * start_val + w * target_val
+                    cal = self.calibration.get(jk, {})
+                    min_lim = cal.get("servo_min_deg", 0.0)
+                    max_lim = cal.get("servo_max_deg", 180.0)
+                    self.joint_positions[jk] = max(min_lim, min(max_lim, round(blended, 2)))
+
+            self.last_update = now
+
 
 robot_state = RobotState()
-
-# Initialize Visual SLAM & ToF Manager
-try:
-    from slam_service import SLAMManager
-    slam_manager = SLAMManager(udp_port=5000)
-    slam_manager.start()
-    SLAM_AVAILABLE = True
-    print("[Server] Initialized and started Visual SLAM service on UDP 5000")
-except Exception as e:
-    print(f"[Server] Could not initialize SLAMManager: {e}")
-    slam_manager = None
-    SLAM_AVAILABLE = False
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     """Handle requests in separate threads for zero UI latency."""
     daemon_threads = True
 
 class DashboardHTTPHandler(SimpleHTTPRequestHandler):
+    # Set by main(): True when bound to a loopback address only.
+    loopback_only = True
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=STATIC_DIR, **kwargs)
 
+    @staticmethod
+    def _hostname(netloc):
+        """'host:port' / '[::1]:port' -> 'host' / '::1' (lower-cased)."""
+        netloc = (netloc or '').strip().lower()
+        if netloc.startswith('['):
+            return netloc[1:netloc.find(']')] if ']' in netloc else netloc
+        return netloc.rsplit(':', 1)[0] if netloc.count(':') == 1 else netloc
+
+    def request_allowed(self, is_post):
+        """Reject cross-site and DNS-rebinding requests.
+
+        * When bound to loopback, the Host header must be a loopback name, so a
+          malicious domain re-pointed at 127.0.0.1 cannot drive the robots.
+        * A browser-supplied Origin must match Host (blocks cross-site POSTs).
+        * POST bodies must be JSON, which forces a CORS preflight that this
+          server never approves.
+        """
+        host = self.headers.get('Host', '')
+        if self.loopback_only and self._hostname(host) not in LOOPBACK_HOSTS:
+            self.send_error(403, "Host not allowed")
+            return False
+        origin = self.headers.get('Origin')
+        if origin and origin != 'null':
+            if urllib.parse.urlparse(origin).netloc.lower() != host.lower():
+                self.send_error(403, "Cross-origin request rejected")
+                return False
+        elif origin == 'null' and is_post:
+            self.send_error(403, "Cross-origin request rejected")
+            return False
+        if is_post:
+            ctype = self.headers.get('Content-Type', '').split(';', 1)[0].strip().lower()
+            if ctype != 'application/json':
+                self.send_error(415, "Content-Type must be application/json")
+                return False
+        return True
+
     def do_GET(self):
+        if not self.request_allowed(is_post=False):
+            return
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
 
         if path == "/api/state":
             self.send_json(self.get_robot_state_json())
         elif path == "/api/calibration":
-            with robot_state.lock:
-                self.send_json(robot_state.calibration)
+            self.send_json(robot_state.snapshot(robot_state.calibration))
         elif path == "/api/sensors/data":
-            with robot_state.lock:
-                self.send_json(robot_state.sensor_state)
+            self.send_json(robot_state.snapshot(robot_state.sensor_state))
         elif path == "/api/quardbot/state":
             with robot_state.lock:
-                self.send_json({
+                quard = copy.deepcopy({
                     "host": robot_state.quardbot_host,
                     "online": robot_state.quardbot_online,
                     "mode": robot_state.quardbot_mode,
                     "channels": robot_state.quardbot_channels,
                     "joints": robot_state.quard_joints
                 })
-        elif path == "/api/slam/state":
-            if slam_manager:
-                self.send_json(slam_manager.get_state())
-            else:
-                self.send_json({"active": False, "status": "Unavailable"})
-        elif path == "/api/slam/map":
-            if slam_manager:
-                self.send_json(slam_manager.get_map_data())
-            else:
-                self.send_json({"points": [], "colors": [], "trajectory": [], "pose": []})
-        elif path == "/api/slam/frame":
-            if slam_manager:
-                jpeg = slam_manager.get_latest_hud_jpeg()
-                self.send_response(200)
-                self.send_header('Content-Type', 'image/jpeg')
-                self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.send_header('Content-Length', str(len(jpeg)))
-                self.end_headers()
-                self.wfile.write(jpeg)
-            else:
-                self.send_error(404, "SLAM Manager unavailable")
-        elif path == "/api/slam/map_2d":
-            if slam_manager:
-                jpeg = slam_manager.get_latest_map2d_jpeg()
-                self.send_response(200)
-                self.send_header('Content-Type', 'image/jpeg')
-                self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.send_header('Content-Length', str(len(jpeg)))
-                self.end_headers()
-                self.wfile.write(jpeg)
-            else:
-                self.send_error(404, "SLAM Manager unavailable")
-        elif path == "/api/slam/stream":
-            if slam_manager:
-                self.send_response(200)
-                self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=frame')
-                self.send_header('Cache-Control', 'no-cache, private')
-                self.send_header('Pragma', 'no-cache')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                try:
-                    while slam_manager.running:
-                        jpeg = slam_manager.get_latest_hud_jpeg()
-                        self.wfile.write(b"--frame\r\n")
-                        self.wfile.write(b"Content-Type: image/jpeg\r\n")
-                        self.wfile.write(f"Content-Length: {len(jpeg)}\r\n\r\n".encode('utf-8'))
-                        self.wfile.write(jpeg)
-                        self.wfile.write(b"\r\n")
-                        time.sleep(0.05)
-                except (BrokenPipeError, ConnectionResetError):
-                    pass
-            else:
-                self.send_error(404, "SLAM Manager unavailable")
+            self.send_json(quard)
         elif path.startswith("/meshes/"):
             mesh_filename = urllib.parse.unquote(os.path.basename(path))
             candidates = [
@@ -460,11 +565,7 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
                 mesh_filename.replace(' ', '+')
             ]
             found_filepath = None
-            search_dirs = [
-                MESH_DIR,
-                QUARD_MESH_DIR,
-                "/home/sabo/Documents/learn_/Hardware/urdf/unnamed/meshes/stl"
-            ]
+            search_dirs = [MESH_DIR, QUARD_MESH_DIR, UNNAMED_MESH_DIR]
             for sdir in search_dirs:
                 if not os.path.exists(sdir):
                     continue
@@ -493,6 +594,8 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
             super().do_GET()
 
     def do_POST(self):
+        if not self.request_allowed(is_post=True):
+            return
         try:
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
@@ -502,50 +605,72 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
             try:
                 data = json.loads(body) if body else {}
             except Exception:
-                data = {}
+                self.send_json({"status": "error", "message": "invalid JSON body"}, code=400)
+                return
+            if not isinstance(data, dict):
+                self.send_json({"status": "error", "message": "JSON body must be an object"}, code=400)
+                return
 
             if path == "/api/update_joints":
+                joints = data.get("joints", {})
+                if not isinstance(joints, dict):
+                    raise ValueError("'joints' must be an object")
+                updates = {}
+                for k, v in joints.items():
+                    k = JOINT_ALIASES.get(k, k)
+                    if k not in ARM_JOINTS:
+                        continue  # ignore unknown joints instead of growing state
+                    updates[k] = max(0.0, min(180.0, finite_float(v)))
                 with robot_state.lock:
-                    for k, v in data.get("joints", {}).items():
-                        robot_state.joint_positions[k] = float(v)
-                    if 'wrist_twist_joint' in data.get("joints", {}):
-                        robot_state.joint_positions['turntable_link_joint_dup_3'] = float(data["joints"]['wrist_twist_joint'])
-                    elif 'turntable_link_joint_dup_3' in data.get("joints", {}):
-                        robot_state.joint_positions['wrist_twist_joint'] = float(data["joints"]['turntable_link_joint_dup_3'])
+                    robot_state.joint_positions.update(updates)
                 self.send_json({"status": "ok"})
             elif path == "/api/quardbot/joints":
+                joints = data.get("joints")
+                channels = data.get("channels")
+                quard_updates = {}
+                if isinstance(joints, dict):
+                    for k, v in joints.items():
+                        if k in robot_state.quard_joints:
+                            quard_updates[k] = finite_float(v)
+                if isinstance(channels, list):
+                    if len(channels) != 8:
+                        raise ValueError("'channels' must have 8 entries")
+                    channels = [max(0, min(180, int(finite_float(c)))) for c in channels]
+                else:
+                    channels = None
                 with robot_state.lock:
-                    if "joints" in data and isinstance(data["joints"], dict):
-                        for k, v in data["joints"].items():
-                            robot_state.quard_joints[k] = float(v)
-                    if "channels" in data and isinstance(data["channels"], list):
-                        robot_state.quardbot_channels = data["channels"]
+                    robot_state.quard_joints.update(quard_updates)
+                    if channels is not None:
+                        robot_state.quardbot_channels = channels
                 self.send_json({"status": "ok"})
             elif path == "/api/save_calibration":
-                success = robot_state.save_calibration(data)
-                self.send_json({"status": "ok" if success else "error"})
+                ok, msg = robot_state.save_calibration(data)
+                self.send_json({"status": "ok" if ok else "error", "message": msg})
             elif path == "/api/sync_offset":
                 calib_update = {}
                 if "joint" in data and "offset" in data:
-                    j_name = data["joint"]
-                    off_val = float(data["offset"])
+                    j_name = JOINT_ALIASES.get(data["joint"], data["joint"])
+                    off_val = finite_float(data["offset"])
                     calib_update[j_name] = {"sync_offset_deg": off_val}
                 elif "offsets" in data and isinstance(data["offsets"], dict):
                     for j_name, off_val in data["offsets"].items():
-                        calib_update[j_name] = {"sync_offset_deg": float(off_val)}
+                        calib_update[JOINT_ALIASES.get(j_name, j_name)] = {"sync_offset_deg": finite_float(off_val)}
                 elif "quard_channel" in data and "offset" in data:
                     ch_key = str(data["quard_channel"])
-                    calib_update["quard_offsets"] = {ch_key: float(data["offset"])}
+                    calib_update["quard_offsets"] = {ch_key: finite_float(data["offset"])}
                 elif "quard_offsets" in data and isinstance(data["quard_offsets"], dict):
-                    calib_update["quard_offsets"] = {str(k): float(v) for k, v in data["quard_offsets"].items()}
+                    calib_update["quard_offsets"] = {str(k): finite_float(v) for k, v in data["quard_offsets"].items()}
                 elif "imu_offsets" in data and isinstance(data["imu_offsets"], dict):
-                    calib_update["imu_offsets"] = {str(k): float(v) for k, v in data["imu_offsets"].items()}
+                    calib_update["imu_offsets"] = {str(k): finite_float(v) for k, v in data["imu_offsets"].items()}
 
-                if calib_update:
-                    robot_state.save_calibration(calib_update)
-                self.send_json({"status": "ok", "calibration": robot_state.calibration})
+                ok, msg = (robot_state.save_calibration(calib_update) if calib_update else (True, "nothing to save"))
+                self.send_json({"status": "ok" if ok else "error", "message": msg,
+                                "calibration": robot_state.snapshot(robot_state.calibration)})
             elif path == "/api/tare_pose":
                 target = data.get("target", "all")
+                ref_pose = data.get("reference_pose", {})
+                if not isinstance(ref_pose, dict):
+                    raise ValueError("'reference_pose' must be an object")
                 calib_update = {}
                 with robot_state.lock:
                     if target in ["imu", "all"]:
@@ -559,16 +684,19 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
                         robot_state.sensor_state["pitch"] = 0.0
                         robot_state.sensor_state["roll"] = 0.0
                     if target in ["arm", "all"]:
-                        ref_pose = data.get("reference_pose", {})
-                        for j_name, cur_val in robot_state.joint_positions.items():
+                        # The twin renders (slider + sync_offset). The physical arm is
+                        # taken to be in its reference pose right now, so choose the
+                        # offset that makes the twin show that pose: ref - current.
+                        for j_name in ARM_JOINTS:
+                            cur_val = robot_state.joint_positions[j_name]
                             ref_val = ref_pose.get(j_name, robot_state.calibration.get(j_name, {}).get("home_deg", 90.0))
-                            calib_update[j_name] = {"sync_offset_deg": round(float(cur_val) - float(ref_val), 1)}
+                            calib_update[j_name] = {"sync_offset_deg": round(finite_float(ref_val) - float(cur_val), 1)}
                     if target in ["quard", "all"]:
                         calib_update["quard_offsets"] = {str(i): 0.0 for i in range(8)}
 
-                if calib_update:
-                    robot_state.save_calibration(calib_update)
-                self.send_json({"status": "ok", "calibration": robot_state.calibration})
+                ok, msg = (robot_state.save_calibration(calib_update) if calib_update else (True, "nothing to save"))
+                self.send_json({"status": "ok" if ok else "error", "message": msg,
+                                "calibration": robot_state.snapshot(robot_state.calibration)})
             elif path == "/api/toggle_sim":
                 with robot_state.lock:
                     new_sim = data.get("simulating", not robot_state.is_simulating)
@@ -578,24 +706,33 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
                         client_joints = data.get("current_joints")
                         if isinstance(client_joints, dict):
                             for jk, jv in client_joints.items():
+                                jk = JOINT_ALIASES.get(jk, jk)
+                                if jk not in ARM_JOINTS:
+                                    continue
                                 try:
-                                    val = float(jv)
+                                    val = max(0.0, min(180.0, finite_float(jv)))
                                     robot_state.sim_blend_start_positions[jk] = val
                                     robot_state.joint_positions[jk] = val
                                 except (ValueError, TypeError):
                                     pass
                         robot_state.sim_blend_start_time = time.time()
                         robot_state.sim_time = 0.0
-                    robot_state.is_simulating = new_sim
+                    robot_state.is_simulating = bool(new_sim)
                     if "speed" in data:
-                        robot_state.sim_speed = float(data["speed"])
-                self.send_json({"status": "ok", "simulating": robot_state.is_simulating})
+                        robot_state.sim_speed = max(0.0, min(10.0, finite_float(data["speed"])))
+                    simulating = robot_state.is_simulating
+                self.send_json({"status": "ok", "simulating": simulating})
             elif path == "/api/comm_mode":
                 mode = str(data.get("mode", "WIFI")).upper()
                 if mode in ["WIFI", "SERIAL"]:
                     with robot_state.lock:
                         robot_state.comm_mode = mode
-                    threading.Thread(target=send_comm_mode_to_esp32, args=(mode,), daemon=True).start()
+                        if ROS2_AVAILABLE:
+                            # servo_serial_commander relays MODE to the ESP32 over
+                            # both links and switches its own transport to match.
+                            robot_state.commander_msgs.append(f"MODE:{mode}")
+                    if not ROS2_AVAILABLE:
+                        threading.Thread(target=send_comm_mode_udp_broadcast, args=(mode,), daemon=True).start()
                     self.send_json({"status": "ok", "mode": mode})
                 else:
                     self.send_json({"status": "error", "message": "Invalid mode"})
@@ -631,9 +768,11 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
                     robot_state.parse_sensor_line(line)
                 self.send_json({"status": "ok"})
             elif path == "/api/quardbot/cmd":
-                target_host = data.get("host", robot_state.quardbot_host)
+                target_host = self.quard_host(data)
                 cmd_url = f"{target_host.rstrip('/')}/cmd"
                 params = data.get("params", {})
+                if not isinstance(params, dict):
+                    raise ValueError("'params' must be an object")
                 try:
                     query_str = urllib.parse.urlencode(params)
                     full_url = f"{cmd_url}?{query_str}"
@@ -642,11 +781,13 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
                         reply = resp.read().decode('utf-8', errors='ignore')
                         with robot_state.lock:
                             robot_state.quardbot_online = True
+                            if "mode" in params:
+                                robot_state.quardbot_mode = str(params["mode"])
                         self.send_json({"status": "ok", "reply": reply})
                 except Exception as e:
                     self.send_json({"status": "error", "message": str(e)})
             elif path == "/api/quardbot/ping":
-                target_host = data.get("host", robot_state.quardbot_host)
+                target_host = self.quard_host(data)
                 try:
                     req = urllib.request.Request(target_host.rstrip('/') + "/status")
                     with urllib.request.urlopen(req, timeout=1.5) as resp:
@@ -669,45 +810,32 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
                         with robot_state.lock:
                             robot_state.quardbot_online = False
                         self.send_json({"status": "ok", "online": False, "error": str(e2)})
-            elif path == "/api/slam/toggle":
-                if slam_manager:
-                    if slam_manager.running:
-                        slam_manager.stop()
-                    else:
-                        slam_manager.start()
-                    self.send_json({"status": "ok", "active": slam_manager.running, "state": slam_manager.get_state()})
-                else:
-                    self.send_json({"status": "error", "message": "SLAM service not available"})
-            elif path == "/api/slam/reset":
-                if slam_manager:
-                    slam_manager.reset_map()
-                    self.send_json({"status": "ok", "state": slam_manager.get_state()})
-                else:
-                    self.send_json({"status": "error", "message": "SLAM service not available"})
-            elif path == "/api/slam/connect":
-                target = data.get("target") or data.get("ip") or "10.88.106.30"
-                if slam_manager:
-                    res = slam_manager.connect_to(target)
-                    self.send_json({"status": "ok", "target": target, "state": slam_manager.get_state(), "result": res})
-                else:
-                    self.send_json({"status": "error", "message": "SLAM service not available"})
-            elif path == "/api/slam/disconnect":
-                if slam_manager:
-                    res = slam_manager.disconnect()
-                    self.send_json({"status": "ok", "state": slam_manager.get_state(), "result": res})
-                else:
-                    self.send_json({"status": "error", "message": "SLAM service not available"})
             else:
                 self.send_error(404)
+        except (TypeError, ValueError) as err:
+            self.send_json({"status": "error", "message": str(err)}, code=400)
         except Exception as err:
             print(f"[Server] Error handling POST request to {self.path}: {err}")
-            self.send_json({"status": "error", "message": str(err)})
+            self.send_json({"status": "error", "message": str(err)}, code=500)
 
-    def send_json(self, obj):
+    @staticmethod
+    def quard_host(data):
+        """Quard Bot base URL from the request (remembered), restricted to http(s)."""
+        host = str(data.get("host") or robot_state.quardbot_host).strip()
+        if not host.startswith(("http://", "https://")):
+            host = "http://" + host
+        parsed = urllib.parse.urlparse(host)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(f"invalid Quard Bot host: {host!r}")
+        with robot_state.lock:
+            robot_state.quardbot_host = host
+        return host
+
+    def send_json(self, obj, code=200):
         data = json.dumps(obj).encode('utf-8')
-        self.send_response(200)
+        self.send_response(code)
         self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Cache-Control', 'no-store')
         self.send_header('Content-Length', str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -718,7 +846,6 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
                 content = f.read()
             self.send_response(200)
             self.send_header('Content-Type', content_type)
-            self.send_header('Access-Control-Allow-Origin', '*')
             self.send_header('Content-Length', str(len(content)))
             self.end_headers()
             self.wfile.write(content)
@@ -726,46 +853,15 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
             self.send_error(500, str(e))
 
     def get_robot_state_json(self):
+        # Copy under the lock; serialising live dicts after releasing it could
+        # race a concurrent calibration update ("dict changed size").
         with robot_state.lock:
-            now = time.time()
-            if robot_state.is_simulating:
-                dt = now - robot_state.last_update
-                dt = min(max(dt, 0.0), 0.1)
-                robot_state.sim_time += dt * robot_state.sim_speed
-                t = robot_state.sim_time
-
-                # Smooth cosine ease-in S-curve blend (C1-continuous)
-                blend_elapsed = now - robot_state.sim_blend_start_time
-                progress = min(1.0, max(0.0, blend_elapsed / robot_state.sim_blend_duration))
-                w = 0.5 - 0.5 * math.cos(progress * math.pi)
-
-                sim_targets = {
-                    'turntable_link_joint_dup': 90.0 + 45.0 * math.sin(0.3 * t),
-                    'turntable_link_joint': 59.0 + 20.0 * math.sin(0.4 * t + 1.0),
-                    'turntable_link_joint_dup_1': 110.0 + 35.0 * math.sin(0.5 * t + 2.0),
-                    'turntable_link_joint_dup_2': 116.0 + 25.0 * math.sin(0.6 * t + 1.5),
-                    'turntable_link_joint_dup_3': 90.0 + 35.0 * math.sin(0.4 * t + 0.5),
-                    'wrist_twist_joint': 90.0 + 35.0 * math.sin(0.4 * t + 0.5),
-                }
-
-                for jk, target_val in sim_targets.items():
-                    start_val = robot_state.sim_blend_start_positions.get(
-                        jk, robot_state.joint_positions.get(jk, target_val)
-                    )
-                    blended = (1.0 - w) * start_val + w * target_val
-                    cal = robot_state.calibration.get(jk, {})
-                    min_lim = cal.get("min_deg", 0.0)
-                    max_lim = cal.get("max_deg", 180.0)
-                    robot_state.joint_positions[jk] = max(min_lim, min(max_lim, round(blended, 2)))
-
-            robot_state.last_update = now
-
-            return {
+            return copy.deepcopy({
                 "joints": robot_state.joint_positions,
                 "calibration": robot_state.calibration,
                 "simulating": robot_state.is_simulating,
                 "sim_speed": robot_state.sim_speed
-            }
+            })
 
     def log_message(self, format, *args):
         # Suppress verbose HTTP GET logs
@@ -778,6 +874,23 @@ if ROS2_AVAILABLE:
             self.joint_pub = self.create_publisher(JointState, '/joint_states', 10)
             self.calib_pub = self.create_publisher(StringMsg, '/servo_calibration', 10)
             self.create_timer(0.02, self.publish_joint_states) # 50 Hz loop
+            self.create_timer(0.1, self.flush_commander_msgs)
+            # Bring the commander's limits/offsets in line with the file the
+            # dashboard is using, in case it loaded a different copy.
+            with robot_state.lock:
+                robot_state._queue_commander_updates(robot_state.calibration)
+
+        @staticmethod
+        def slider_deg_to_rad(jname, deg, sync_deg):
+            """Same linear map as calibrated_joint_gui / app.js degToRad.
+
+            The published angle is the twin pose (slider + sync offset);
+            servo_serial_commander subtracts the sync offset again, so the
+            physical servo receives exactly the slider value.
+            """
+            cfg = ARM_JOINTS[jname]
+            r_min, r_max = cfg['rad_min'], cfg['rad_max']
+            return r_min + ((deg + sync_deg) / 180.0) * (r_max - r_min)
 
         def publish_joint_states(self):
             msg = JointState()
@@ -787,10 +900,9 @@ if ROS2_AVAILABLE:
 
             with robot_state.lock:
                 for jname, deg in robot_state.joint_positions.items():
+                    sync = float(robot_state.calibration.get(jname, {}).get('sync_offset_deg', 0.0))
                     names.append(jname)
-                    # Map 0..180 deg to URDF rad bounds
-                    rad = (deg - 90.0) * (math.pi / 180.0)
-                    positions.append(rad)
+                    positions.append(self.slider_deg_to_rad(jname, deg, sync))
                 for jname, rad in robot_state.quard_joints.items():
                     names.append(jname)
                     positions.append(float(rad))
@@ -799,15 +911,34 @@ if ROS2_AVAILABLE:
             msg.position = positions
             self.joint_pub.publish(msg)
 
+        def flush_commander_msgs(self):
+            with robot_state.lock:
+                pending, robot_state.commander_msgs = robot_state.commander_msgs, []
+            for text in pending:
+                self.calib_pub.publish(StringMsg(data=text))
+
 def start_ros2_node():
     if not ROS2_AVAILABLE:
-        print("[Server] ROS 2 dependencies not found. Skipping ROS 2 bridge node.")
+        print("[Server] ⚠️ rclpy not importable (did you source /opt/ros/<distro>/setup.bash?).")
+        print("[Server] ⚠️ Running UI-only: nothing will be published to the robots.")
         return
-    rclpy.init()
-    node = ROS2BridgeNode()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.init()
+        node = ROS2BridgeNode()
+        rclpy.spin(node)
+        node.destroy_node()
+        rclpy.shutdown()
+    except Exception as e:
+        print(f"[Server] ROS 2 bridge stopped: {e}")
+
+
+def simulation_loop():
+    while True:
+        try:
+            robot_state.step_simulation()
+        except Exception as e:
+            print(f"[Server] Simulation step error: {e}")
+        time.sleep(0.02)
 
 def sensor_background_loop():
     """Background thread polling Wi-Fi JSON endpoint, generating simulation telemetry, or reading hardware serial."""
@@ -924,32 +1055,46 @@ def sensor_background_loop():
 
         time.sleep(1.0)
 
+def parse_args(argv):
+    parser = argparse.ArgumentParser(description="Robot WebGL dashboard server")
+    parser.add_argument("port_pos", nargs="?", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("-p", "--port", type=int, default=int(os.environ.get("PORT", 8000)))
+    parser.add_argument("--host", default=os.environ.get("DASHBOARD_HOST", "127.0.0.1"),
+                        help="Interface to bind (default 127.0.0.1). Use 0.0.0.0 to allow other "
+                             "machines on the network; they get full control of the robots.")
+    args, _unknown = parser.parse_known_args(argv)  # tolerate --ros-args etc.
+    if args.port_pos is not None:
+        args.port = args.port_pos
+    return args
+
+
 def main():
-    port = int(os.environ.get("PORT", 8000))
-    if len(sys.argv) > 2 and sys.argv[1] in ["--port", "-p"]:
-        port = int(sys.argv[2])
-    elif len(sys.argv) > 1 and sys.argv[1].isdigit():
-        port = int(sys.argv[1])
-    server_address = ('', port)
-    httpd = ThreadedHTTPServer(server_address, DashboardHTTPHandler)
+    # Emoji in log lines would crash on consoles without UTF-8 (e.g. Windows cp1252).
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors='replace')
+        except Exception:
+            pass
+    args = parse_args(sys.argv[1:])
+    DashboardHTTPHandler.loopback_only = args.host in ("127.0.0.1", "localhost", "::1")
+    httpd = ThreadedHTTPServer((args.host, args.port), DashboardHTTPHandler)
     print(f"=========================================================")
     print(f" 🚀 Light-Themed Robot Arm WebGL Dashboard Server Started")
-    print(f" 🌐 Access Dashboard at: http://localhost:{port}")
+    print(f" 🌐 Access Dashboard at: http://localhost:{args.port}")
+    print(f" 📁 Project dir: {PROJECT_DIR}")
+    if not DashboardHTTPHandler.loopback_only:
+        print(f" ⚠️  Bound to {args.host}: anyone on this network can move the robots.")
     print(f"=========================================================")
 
-    ros_thread = threading.Thread(target=start_ros2_node, daemon=True)
-    ros_thread.start()
-
-    sensor_thread = threading.Thread(target=sensor_background_loop, daemon=True)
-    sensor_thread.start()
+    for target in (start_ros2_node, sensor_background_loop, simulation_loop):
+        threading.Thread(target=target, daemon=True).start()
 
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\n[Server] Shutting down...")
-        if slam_manager:
-            slam_manager.stop()
-        httpd.shutdown()
+    finally:
+        httpd.server_close()
 
 if __name__ == '__main__':
     main()

@@ -53,28 +53,13 @@ let sensorState = {
   raw_log: []
 };
 
-// ── Visual SLAM 3D & Telemetry State ───────────────────────────────────────
-let slamMeshes = {
-  container: null,
-  pointCloud: null,
-  trajectoryLine: null,
-  cameraFrustum: null,
-  tofRayLine: null
-};
-
-let slamState = {
-  active: false,
-  viewMode: 'cam' // 'cam' | 'map' | 'dual'
-};
-
 // ── Model Load & Dual View Management System ──────────────────────────────
 const modelLoadSystem = {
-  mode: 'auto', // 'auto' | 'quard' | 'arm' | 'dual' | 'sensors' | 'slam'
+  mode: 'auto', // 'auto' | 'quard' | 'arm' | 'dual' | 'sensors'
   loaded: {
     arm: false,
     quard: false,
-    sensors: true,
-    slam: true
+    sensors: true
   },
   loading: {
     arm: false,
@@ -85,6 +70,44 @@ const modelLoadSystem = {
     quard: []
   }
 };
+
+// ── Request Coalescing ───────────────────────────────────────────────────
+// Keeps at most one request in flight per endpoint and merges updates queued
+// meanwhile, so fast slider drags cannot pile up or arrive out of order.
+function createCoalescingPoster(url, merge, onResult) {
+  let inFlight = false;
+  let pending = null;
+
+  function flush() {
+    if (inFlight || pending === null) return;
+    const body = pending;
+    pending = null;
+    inFlight = true;
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+      .then(res => res.json())
+      .then(data => { if (onResult) onResult(data, null); })
+      .catch(err => { if (onResult) onResult(null, err); })
+      .finally(() => {
+        inFlight = false;
+        flush();
+      });
+  }
+
+  return function post(update) {
+    pending = merge(pending, update);
+    flush();
+  };
+}
+
+const postJointUpdate = createCoalescingPoster('/api/update_joints', (pending, update) => {
+  const merged = pending || { joints: {} };
+  Object.assign(merged.joints, update.joints);
+  return merged;
+});
 
 // ── Twin Orientation Synchronization System ──────────────────────────────
 let syncCalibration = {};
@@ -152,8 +175,6 @@ document.addEventListener('DOMContentLoaded', () => {
   loadSyncCalibration();
   startStatePolling();
   startSensorPolling();
-  initSLAMControls();
-  startSLAMPolling();
 });
 
 // ── Three.js 3D Viewport Setup ─────────────────────────────────────────────
@@ -208,9 +229,6 @@ function initThreeJS() {
   // Initialize procedural IMU Sensor Visual
   createSensorVisual();
 
-  // Initialize Visual SLAM 3D Point Cloud & Frustum
-  initSLAMThreeJS();
-
   // Window Resize Listener
   window.addEventListener('resize', onWindowResize);
 
@@ -235,84 +253,6 @@ function createSensorVisual() {
   robotMeshes.sensorGroup.add(sensorMesh);
   robotMeshes.sensorGroup.visible = false;
   scene.add(robotMeshes.sensorGroup);
-}
-
-function initSLAMThreeJS() {
-  slamMeshes.container = new THREE.Group();
-  slamMeshes.container.name = 'slam_container';
-  slamMeshes.container.visible = false;
-  scene.add(slamMeshes.container);
-
-  // 1. Sparse 3D Point Cloud with RGB vertex colors
-  const maxPts = 3000;
-  const posArr = new Float32Array(maxPts * 3);
-  const colArr = new Float32Array(maxPts * 3);
-  for (let i = 0; i < maxPts; i++) {
-    colArr[i * 3 + 0] = 0.0;
-    colArr[i * 3 + 1] = 0.85;
-    colArr[i * 3 + 2] = 1.0;
-  }
-  const ptGeom = new THREE.BufferGeometry();
-  ptGeom.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
-  ptGeom.setAttribute('color', new THREE.BufferAttribute(colArr, 3));
-  ptGeom.setDrawRange(0, 0);
-
-  const ptMat = new THREE.PointsMaterial({
-    size: 5,
-    vertexColors: true,
-    transparent: true,
-    opacity: 0.95
-  });
-  slamMeshes.pointCloud = new THREE.Points(ptGeom, ptMat);
-  slamMeshes.pointCloud.frustumCulled = false;
-  slamMeshes.container.add(slamMeshes.pointCloud);
-
-  // 2. Camera Trajectory Path Line
-  const maxTraj = 500;
-  const trajArr = new Float32Array(maxTraj * 3);
-  const trajGeom = new THREE.BufferGeometry();
-  trajGeom.setAttribute('position', new THREE.BufferAttribute(trajArr, 3));
-  trajGeom.setDrawRange(0, 0);
-  const trajMat = new THREE.LineBasicMaterial({ color: 0xef4444, linewidth: 2 });
-  slamMeshes.trajectoryLine = new THREE.Line(trajGeom, trajMat);
-  slamMeshes.trajectoryLine.frustumCulled = false;
-  slamMeshes.container.add(slamMeshes.trajectoryLine);
-
-  // 3. 3D Camera Wireframe Frustum & Orientation Axes
-  const frustumGroup = new THREE.Group();
-  const s = 22.0;
-  const fCorners = new Float32Array([
-    0, 0, 0,
-    -s * 0.8, -s * 0.6, s * 1.2,
-     s * 0.8, -s * 0.6, s * 1.2,
-     s * 0.8,  s * 0.6, s * 1.2,
-    -s * 0.8,  s * 0.6, s * 1.2
-  ]);
-  const fIndices = [
-    0, 1, 0, 2, 0, 3, 0, 4,
-    1, 2, 2, 3, 3, 4, 4, 1
-  ];
-  const fGeom = new THREE.BufferGeometry();
-  fGeom.setAttribute('position', new THREE.BufferAttribute(fCorners, 3));
-  fGeom.setIndex(fIndices);
-  const fMat = new THREE.LineBasicMaterial({ color: 0x0284c7, linewidth: 2 });
-  const fMesh = new THREE.LineSegments(fGeom, fMat);
-  frustumGroup.add(fMesh);
-
-  const axes = new THREE.AxesHelper(24);
-  frustumGroup.add(axes);
-
-  slamMeshes.cameraFrustum = frustumGroup;
-  slamMeshes.container.add(slamMeshes.cameraFrustum);
-
-  // 4. VL53L1X ToF Laser Ray Line
-  const tofArr = new Float32Array(6);
-  const tofGeom = new THREE.BufferGeometry();
-  tofGeom.setAttribute('position', new THREE.BufferAttribute(tofArr, 3));
-  const tofMat = new THREE.LineBasicMaterial({ color: 0x10b981, linewidth: 2 });
-  slamMeshes.tofRayLine = new THREE.Line(tofGeom, tofMat);
-  slamMeshes.tofRayLine.frustumCulled = false;
-  slamMeshes.container.add(slamMeshes.tofRayLine);
 }
 
 function loadRobotModel(onComplete) {
@@ -590,15 +530,13 @@ function updateQuardKinematics() {
   }
 }
 
+const postQuardJoints = createCoalescingPoster('/api/quardbot/joints', (pending, update) => update);
+
 function syncQuardJointsToServer() {
-  fetch('/api/quardbot/joints', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      joints: quardState.joints,
-      channels: quardState.channels
-    })
-  }).catch(() => {});
+  postQuardJoints({
+    joints: Object.assign({}, quardState.joints),
+    channels: quardState.channels.slice()
+  });
 }
 
 // ── Model Loading & Dual View Coordination ───────────────────────────────
@@ -606,7 +544,6 @@ function getEffectiveModelMode() {
   if (modelLoadSystem.mode === 'auto') {
     if (activeTab === 'quard') return 'quard';
     if (activeTab === 'sensors') return 'sensors';
-    if (activeTab === 'slam') return 'slam';
     return 'arm';
   }
   return modelLoadSystem.mode;
@@ -635,8 +572,6 @@ function refreshModelBadge() {
     }
   } else if (effectiveMode === 'sensors') {
     updateModelBadge('Loaded: 🧭 ESP32 IMU');
-  } else if (effectiveMode === 'slam') {
-    updateModelBadge('Loaded: 👁️ Visual SLAM 3D');
   } else {
     // arm
     if (!modelLoadSystem.loaded.arm) {
@@ -700,7 +635,7 @@ function ensureRequiredModelsLoaded(callback) {
       callback();
     }
   } else {
-    // sensors or slam
+    // sensors
     if (callback) callback();
   }
   refreshModelBadge();
@@ -708,10 +643,6 @@ function ensureRequiredModelsLoaded(callback) {
 
 function updateModelVisibilityAndCamera(updateCamera = true) {
   const effectiveMode = getEffectiveModelMode();
-
-  if (slamMeshes.container) {
-    slamMeshes.container.visible = (effectiveMode === 'slam');
-  }
 
   if (effectiveMode === 'dual') {
     // Both visible side-by-side: Arm at +110mm, Quard at -110mm
@@ -749,16 +680,6 @@ function updateModelVisibilityAndCamera(updateCamera = true) {
     if (updateCamera && camera && controls) {
       camera.position.set(140, 100, 140);
       controls.target.set(0, 50, 0);
-      controls.update();
-    }
-  } else if (effectiveMode === 'slam') {
-    if (robotMeshes.base) robotMeshes.base.visible = false;
-    if (quardMeshes.container) quardMeshes.container.visible = false;
-    if (robotMeshes.sensorGroup) robotMeshes.sensorGroup.visible = false;
-    if (slamMeshes.container) slamMeshes.container.visible = true;
-    if (updateCamera && camera && controls) {
-      camera.position.set(0, 240, 320);
-      controls.target.set(0, 50, 60);
       controls.update();
     }
   } else {
@@ -994,8 +915,11 @@ function buildJointControls() {
   });
 }
 
+const lastLocalJointEdit = {};
+
 function onSliderChanged(jointId, deg) {
   jointState[jointId] = deg;
+  lastLocalJointEdit[jointId] = Date.now();
 
   const readout = document.getElementById(`readout-${jointId}`);
   const jointDef = JOINTS.find(j => j.id === jointId);
@@ -1005,12 +929,9 @@ function onSliderChanged(jointId, deg) {
     readout.innerText = `${deg.toFixed(1)}° (${rad.toFixed(3)} rad)`;
   }
 
-  // Push updated joint positions to server
-  fetch('/api/update_joints', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ joints: jointState })
-  });
+  // Push only the changed joint, so stale values of other joints held in
+  // jointState can never overwrite the server's copy.
+  postJointUpdate({ joints: { [jointId]: deg } });
 }
 
 function degToRad(deg, rMin, rMax) {
@@ -1076,23 +997,38 @@ function setupEventListeners() {
   // Save Config
   document.getElementById('btn-save').addEventListener('click', () => {
     const calib = {};
+    const invalid = [];
     JOINTS.forEach(j => {
       const minVal = parseFloat(document.getElementById(`spin-min-${j.id}`).value);
       const maxVal = parseFloat(document.getElementById(`spin-max-${j.id}`).value);
+      if (!Number.isFinite(minVal) || !Number.isFinite(maxVal) ||
+          minVal < 0 || maxVal > 180 || minVal >= maxVal) {
+        invalid.push(j.name);
+        return;
+      }
       calib[j.id] = {
         servo_min_deg: minVal,
         servo_max_deg: maxVal,
-        home_deg: jointState[j.id]
+        home_deg: Math.max(minVal, Math.min(maxVal, jointState[j.id]))
       };
     });
+
+    if (invalid.length > 0) {
+      alert(`⚠️ Not saved. Min/Max must be numbers with 0 ≤ Min < Max ≤ 180 for: ${invalid.join(', ')}`);
+      return;
+    }
 
     fetch('/api/save_calibration', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(calib)
     }).then(res => res.json()).then(data => {
-      alert('💾 Homing & Safety Limits saved successfully to servo_calibration.json!');
-    });
+      if (data.status === 'ok') {
+        alert('💾 Homing & Safety Limits saved successfully to servo_calibration.json!');
+      } else {
+        alert(`⚠️ Save failed: ${data.message || 'server error'}`);
+      }
+    }).catch(() => alert('⚠️ Save failed! Check server connection.'));
   });
 
   // 🎯 Sync Virtual to Physical Robot Arm
@@ -1244,12 +1180,17 @@ function setupEventListeners() {
 
 // ── Real-time State Polling ──────────────────────────────────────────────
 function startStatePolling() {
-  setInterval(() => {
+  // Chained timeouts (not setInterval) so a slow server never accumulates
+  // overlapping /api/state requests.
+  const poll = () => {
     fetch('/api/state')
       .then(res => res.json())
       .then(data => {
         if (data.joints) {
+          const now = Date.now();
           for (let k in data.joints) {
+            // Don't let a poll that raced a local slider move snap it back.
+            if (!isSimulating && now - (lastLocalJointEdit[k] || 0) < 500) continue;
             jointState[k] = data.joints[k];
             // Update UI sliders if simulating
             if (isSimulating) {
@@ -1260,8 +1201,11 @@ function startStatePolling() {
             }
           }
         }
-      });
-  }, 40); // 25 Hz state sync
+      })
+      .catch(() => {})
+      .finally(() => setTimeout(poll, 40)); // ~25 Hz state sync
+  };
+  poll();
 }
 
 // ── Tab Management System ────────────────────────────────────────────────
@@ -1271,17 +1215,15 @@ function setupTabs() {
   const btnArm = document.getElementById('tab-btn-arm');
   const btnQuard = document.getElementById('tab-btn-quard');
   const btnSensors = document.getElementById('tab-btn-sensors');
-  const btnSlam = document.getElementById('tab-btn-slam');
 
   const panelArm = document.getElementById('panel-arm-control');
   const panelQuard = document.getElementById('panel-quard-control');
   const panelSensors = document.getElementById('panel-sensors-control');
-  const panelSlam = document.getElementById('panel-slam-control');
 
   function setActive(tabName, btn, panel) {
     activeTab = tabName;
-    [btnArm, btnQuard, btnSensors, btnSlam].forEach(b => b && b.classList.remove('active'));
-    [panelArm, panelQuard, panelSensors, panelSlam].forEach(p => p && p.classList.remove('active'));
+    [btnArm, btnQuard, btnSensors].forEach(b => b && b.classList.remove('active'));
+    [panelArm, panelQuard, panelSensors].forEach(p => p && p.classList.remove('active'));
 
     if (btn) btn.classList.add('active');
     if (panel) panel.classList.add('active');
@@ -1307,14 +1249,6 @@ function setupTabs() {
   if (btnSensors) {
     btnSensors.addEventListener('click', () => {
       setActive('sensors', btnSensors, panelSensors);
-      if (modelLoadSystem.mode === 'auto') {
-        setModelMode('auto');
-      }
-    });
-  }
-  if (btnSlam) {
-    btnSlam.addEventListener('click', () => {
-      setActive('slam', btnSlam, panelSlam);
       if (modelLoadSystem.mode === 'auto') {
         setModelMode('auto');
       }
@@ -1648,13 +1582,34 @@ function setupQuardKeyboard() {
   });
 }
 
+// Quard commands are sent strictly in order, one at a time. While a request is
+// in flight, repeated angle updates for the same channel collapse into the
+// latest value instead of queueing dozens of stale angles.
+const quardCmdQueue = [];
+let quardCmdInFlight = false;
+
 function sendQuardCmd(params) {
   const host = document.getElementById('input-quard-host') ? document.getElementById('input-quard-host').value.trim() : 'http://sesame-robot.local';
+  const entry = { host: host, params: params };
+
+  const last = quardCmdQueue[quardCmdQueue.length - 1];
+  if (last && last.host === host && params.ch !== undefined && last.params.ch === params.ch) {
+    quardCmdQueue[quardCmdQueue.length - 1] = entry;
+  } else {
+    quardCmdQueue.push(entry);
+  }
+  flushQuardCmdQueue();
+}
+
+function flushQuardCmdQueue() {
+  if (quardCmdInFlight || quardCmdQueue.length === 0) return;
+  const entry = quardCmdQueue.shift();
+  quardCmdInFlight = true;
 
   fetch('/api/quardbot/cmd', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ host: host, params: params })
+    body: JSON.stringify(entry)
   })
   .then(res => res.json())
   .then(data => {
@@ -1663,6 +1618,10 @@ function sendQuardCmd(params) {
   .catch(err => {
     console.warn('[Dashboard] Quard Bot command error:', err);
     updateQuardStatusPill(false);
+  })
+  .finally(() => {
+    quardCmdInFlight = false;
+    flushQuardCmdQueue();
   });
 }
 
@@ -1737,7 +1696,7 @@ function initSensorControls() {
 
   if (btnWifiDisconnect) {
     btnWifiDisconnect.addEventListener('click', () => {
-      fetch('/api/sensors/wifi_disconnect', { method: 'POST' })
+      fetch('/api/sensors/wifi_disconnect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
       .then(res => res.json())
       .then(data => {
         btnWifiDisconnect.style.display = 'none';
@@ -2029,415 +1988,4 @@ function startSensorPolling() {
       })
       .catch(err => {});
   }, 200); // 5 Hz telemetry sync
-}
-
-// ── Visual SLAM Controls & Real-Time Sync System ──────────────────────────
-const SLAM_SCALE = 250.0; // 1 meter = 250 units in Three.js viewport
-let slamClientFrames = 0;
-let slamClientTimer = Date.now();
-let slamWebFps = 0.0;
-
-function initSLAMControls() {
-  // 1. IP Input & Stream Connect/Disconnect controls
-  const inputIp = document.getElementById('input-slam-ip');
-  const btnConnect = document.getElementById('btn-slam-connect');
-  const btnDisconnect = document.getElementById('btn-slam-disconnect');
-
-  if (btnConnect) {
-    btnConnect.addEventListener('click', () => {
-      const target = (inputIp ? inputIp.value.trim() : '') || '10.88.106.30';
-      btnConnect.innerText = '⏳ Connecting...';
-      btnConnect.disabled = true;
-      fetch('/api/slam/connect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target: target })
-      })
-        .then(res => res.json())
-        .then(data => {
-          btnConnect.innerText = '🔗 Connect';
-          btnConnect.disabled = false;
-          if (data.status === 'ok') {
-            const pillStatus = document.getElementById('pill-slam-status');
-            if (pillStatus) {
-              pillStatus.innerText = 'Connecting (' + target + ')';
-              pillStatus.className = 'status-pill status-online';
-            }
-            if (btnDisconnect) btnDisconnect.style.display = 'inline-block';
-          }
-        })
-        .catch(err => {
-          btnConnect.innerText = '🔗 Connect';
-          btnConnect.disabled = false;
-        });
-    });
-  }
-
-  // Quick preset buttons (Wi-Fi, USB Serial, Auto-Detect)
-  const btnQuickWifi = document.getElementById('btn-slam-quick-wifi');
-  if (btnQuickWifi) {
-    btnQuickWifi.addEventListener('click', () => {
-      if (inputIp) inputIp.value = '10.88.106.30';
-      if (btnConnect) btnConnect.click();
-    });
-  }
-
-  const btnQuickSerial = document.getElementById('btn-slam-quick-serial');
-  if (btnQuickSerial) {
-    btnQuickSerial.addEventListener('click', () => {
-      if (inputIp) inputIp.value = '/dev/ttyUSB0';
-      if (btnConnect) btnConnect.click();
-    });
-  }
-
-  const btnQuickAuto = document.getElementById('btn-slam-quick-auto');
-  if (btnQuickAuto) {
-    btnQuickAuto.addEventListener('click', () => {
-      if (inputIp) inputIp.value = 'auto';
-      if (btnConnect) btnConnect.click();
-    });
-  }
-
-  if (inputIp) {
-    inputIp.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        if (btnConnect) btnConnect.click();
-      }
-    });
-  }
-
-  if (btnDisconnect) {
-    btnDisconnect.addEventListener('click', () => {
-      fetch('/api/slam/disconnect', { method: 'POST' })
-        .then(res => res.json())
-        .then(() => {
-          btnDisconnect.style.display = 'none';
-          const pillStatus = document.getElementById('pill-slam-status');
-          if (pillStatus) {
-            pillStatus.innerText = 'Disconnected';
-            pillStatus.className = 'status-pill status-offline';
-          }
-        })
-        .catch(() => {});
-    });
-  }
-
-  // 2. Focus 3D SLAM Viewport button
-  const btnLoadSlam = document.getElementById('btn-load-slam-view');
-  if (btnLoadSlam) {
-    btnLoadSlam.addEventListener('click', () => {
-      setModelMode('slam');
-    });
-  }
-
-  // 2. Reset Map button
-  const btnReset = document.getElementById('btn-slam-reset');
-  if (btnReset) {
-    btnReset.addEventListener('click', () => {
-      if (confirm('Reset 3D SLAM map, trajectory, and camera pose?')) {
-        fetch('/api/slam/reset', { method: 'POST' })
-          .then(res => res.json())
-          .then(() => {
-            if (slamMeshes.pointCloud) slamMeshes.pointCloud.geometry.setDrawRange(0, 0);
-            if (slamMeshes.trajectoryLine) slamMeshes.trajectoryLine.geometry.setDrawRange(0, 0);
-          })
-          .catch(() => {});
-      }
-    });
-  }
-
-  // 4. Engine Toggle button
-  const btnToggle = document.getElementById('btn-slam-toggle');
-  if (btnToggle) {
-    btnToggle.addEventListener('click', () => {
-      fetch('/api/slam/toggle', { method: 'POST' })
-        .then(res => res.json())
-        .then(data => {
-          if (data.status === 'ok') {
-            slamState.active = data.active;
-            btnToggle.innerText = data.active ? '⏹️ Stop Engine' : '▶️ Start Engine';
-          }
-        })
-        .catch(() => {});
-    });
-  }
-
-  // 5. Video Feeds View Switcher
-  const btnViewCam = document.getElementById('btn-slam-view-cam');
-  const btnViewMap = document.getElementById('btn-slam-view-map');
-  const btnViewDual = document.getElementById('btn-slam-view-dual');
-  const viewContainer = document.getElementById('slam-viewports-container');
-  const camViewport = document.getElementById('slam-cam-viewport');
-  const mapViewport = document.getElementById('slam-map-viewport');
-
-  function setSLAMView(mode) {
-    slamState.viewMode = mode;
-    [btnViewCam, btnViewMap, btnViewDual].forEach(b => b && b.classList.remove('active'));
-
-    if (mode === 'dual') {
-      if (btnViewDual) btnViewDual.classList.add('active');
-      if (viewContainer) viewContainer.className = 'slam-viewports-dual';
-      if (camViewport) camViewport.style.display = 'flex';
-      if (mapViewport) mapViewport.style.display = 'flex';
-    } else if (mode === 'map') {
-      if (btnViewMap) btnViewMap.classList.add('active');
-      if (viewContainer) viewContainer.className = 'slam-viewports-single';
-      if (camViewport) camViewport.style.display = 'none';
-      if (mapViewport) mapViewport.style.display = 'flex';
-    } else {
-      // cam
-      if (btnViewCam) btnViewCam.classList.add('active');
-      if (viewContainer) viewContainer.className = 'slam-viewports-single';
-      if (camViewport) camViewport.style.display = 'flex';
-      if (mapViewport) mapViewport.style.display = 'none';
-    }
-  }
-
-  if (btnViewCam) btnViewCam.addEventListener('click', () => setSLAMView('cam'));
-  if (btnViewMap) btnViewMap.addEventListener('click', () => setSLAMView('map'));
-  if (btnViewDual) btnViewDual.addEventListener('click', () => setSLAMView('dual'));
-}
-
-function startSLAMPolling() {
-  const imgCam = document.getElementById('img-slam-cam');
-  const imgMap = document.getElementById('img-slam-map');
-
-  // Fast frame updater for live video & 2D map feeds (12 Hz)
-  setInterval(() => {
-    if (activeTab !== 'slam') return;
-    const now = Date.now();
-
-    slamClientFrames++;
-    if (now - slamClientTimer >= 1000) {
-      slamWebFps = (slamClientFrames * 1000.0) / (now - slamClientTimer);
-      slamClientFrames = 0;
-      slamClientTimer = now;
-      const elWebFps = document.getElementById('val-slam-web-fps');
-      if (elWebFps) elWebFps.innerText = slamWebFps.toFixed(1);
-    }
-
-    if (slamState.viewMode === 'cam' || slamState.viewMode === 'dual') {
-      if (imgCam) imgCam.src = '/api/slam/frame?t=' + now;
-    }
-    if (slamState.viewMode === 'map' || slamState.viewMode === 'dual') {
-      if (imgMap) imgMap.src = '/api/slam/map_2d?t=' + now;
-    }
-  }, 80);
-
-  // Telemetry Polling (10 Hz)
-  setInterval(() => {
-    fetch('/api/slam/state')
-      .then(res => res.json())
-      .then(data => {
-        updateSLAMState(data);
-      })
-      .catch(() => {});
-  }, 100);
-
-  // 3D Point Cloud & Trajectory Polling (8 Hz)
-  setInterval(() => {
-    const effectiveMode = getEffectiveModelMode();
-    if (effectiveMode !== 'slam' && activeTab !== 'slam') return;
-
-    fetch('/api/slam/map')
-      .then(res => res.json())
-      .then(data => {
-        updateSLAM3DMap(data);
-      })
-      .catch(() => {});
-  }, 125);
-}
-
-function updateSLAMState(data) {
-  if (!data) return;
-
-  // 0. Disconnect button visibility & input target sync
-  const btnDisconnect = document.getElementById('btn-slam-disconnect');
-  if (btnDisconnect) {
-    btnDisconnect.style.display = (data.connected || (data.status && data.status.startsWith('Connecting'))) ? 'inline-block' : 'none';
-  }
-  const inputIp = document.getElementById('input-slam-ip');
-  if (inputIp && !inputIp.matches(':focus') && data.target && !inputIp.value) {
-    inputIp.value = data.target;
-  }
-  const elIngestIp = document.getElementById('val-slam-ingest-ip');
-  if (elIngestIp && data.local_ip) {
-    elIngestIp.innerText = `${data.local_ip}:${data.udp_port || 5000} (UDP)`;
-  }
-
-  // 1. Engine Button state
-  const btnToggle = document.getElementById('btn-slam-toggle');
-  if (btnToggle) {
-    btnToggle.innerText = data.active ? '⏹️ Stop Engine' : '▶️ Start Engine';
-  }
-
-  // 2. Status Pills
-  const pillStatus = document.getElementById('pill-slam-status');
-  if (pillStatus) {
-    pillStatus.innerText = data.status || 'Standby';
-    if (data.is_error || (data.status && data.status.includes('⚠️'))) {
-      pillStatus.className = 'status-pill status-offline';
-    } else if (data.status === 'Tracking' || data.connected) {
-      pillStatus.className = 'status-pill status-online';
-    } else if (data.active) {
-      pillStatus.className = 'status-pill status-online';
-    } else {
-      pillStatus.className = 'status-pill status-offline';
-    }
-  }
-
-  const elEngineState = document.getElementById('val-slam-engine-state');
-  if (elEngineState) {
-    elEngineState.innerText = data.active ? 'Active' : 'Halted';
-  }
-
-  // 3. FPS Metrics
-  const elUdpFps = document.getElementById('val-slam-udp-fps');
-  const elVoFps = document.getElementById('val-slam-vo-fps');
-  if (elUdpFps) elUdpFps.innerText = (data.udp_fps || 0.0).toFixed(1);
-  if (elVoFps) elVoFps.innerText = (data.vo_fps || 0.0).toFixed(1);
-
-  // 4. VL53L1X ToF Distance
-  const elDist = document.getElementById('val-slam-dist');
-  const badgeTof = document.getElementById('badge-slam-tof');
-  const meterDist = document.getElementById('meter-slam-dist');
-  if (elDist) {
-    const mm = data.distance_mm || 0;
-    const m = (mm / 1000.0).toFixed(2);
-    elDist.innerText = `${m} m (${mm} mm)`;
-  }
-  if (badgeTof) {
-    badgeTof.innerText = data.is_tof_valid ? 'VALID' : 'OUT OF RANGE';
-    badgeTof.className = data.is_tof_valid ? 'status-pill status-online' : 'status-pill status-offline';
-  }
-  if (meterDist) {
-    const pct = Math.min(100, Math.max(0, ((data.distance_mm || 0) / 4000.0) * 100));
-    meterDist.style.width = `${pct}%`;
-  }
-
-  // 5. Visual Odometry Metrics
-  const elFeatures = document.getElementById('val-slam-features');
-  const elMatches = document.getElementById('val-slam-matches');
-  const elScale = document.getElementById('val-slam-scale');
-  const elPoints = document.getElementById('val-slam-points');
-  const badgeTracking = document.getElementById('badge-slam-tracking');
-
-  if (elFeatures) elFeatures.innerText = data.num_features || 0;
-  if (elMatches) elMatches.innerText = data.num_matches || 0;
-  if (elScale) elScale.innerText = `${(data.metric_scale || 0.05).toFixed(3)} m`;
-  if (elPoints) elPoints.innerText = data.point_count || 0;
-
-  if (badgeTracking) {
-    badgeTracking.innerText = data.status || 'Standby';
-    badgeTracking.className = (data.status === 'Tracking')
-      ? 'status-pill status-online'
-      : (data.status === 'Tracking Lost' ? 'status-pill status-offline' : 'status-pill');
-  }
-
-  // 6. 6-DOF Pose & Heading
-  const elPosX = document.getElementById('val-slam-pos-x');
-  const elPosY = document.getElementById('val-slam-pos-y');
-  const elPosZ = document.getElementById('val-slam-pos-z');
-  const elHeading = document.getElementById('val-slam-heading');
-
-  if (data.curr_pos && data.curr_pos.length >= 3) {
-    if (elPosX) elPosX.innerText = data.curr_pos[0].toFixed(3);
-    if (elPosY) elPosY.innerText = data.curr_pos[1].toFixed(3);
-    if (elPosZ) elPosZ.innerText = data.curr_pos[2].toFixed(3);
-  }
-  if (elHeading) elHeading.innerText = `${(data.heading_deg || 0.0).toFixed(1)}°`;
-
-  // 7. Header IoT Badge
-  const statusSlamText = document.getElementById('status-slamnode-text');
-  const dotSlam = document.getElementById('dot-slamnode');
-  if (statusSlamText && dotSlam) {
-    if (data.status === 'Tracking') {
-      statusSlamText.innerText = 'Tracking';
-      dotSlam.parentElement.className = 'node-badge status-online';
-    } else if (data.active) {
-      statusSlamText.innerText = 'Listening (Port 5000)';
-      dotSlam.parentElement.className = 'node-badge status-online';
-    } else {
-      statusSlamText.innerText = 'Standby';
-      dotSlam.parentElement.className = 'node-badge status-offline';
-    }
-  }
-}
-
-function updateSLAM3DMap(data) {
-  if (!data || !slamMeshes.pointCloud) return;
-
-  // 1. Update Sparse 3D Point Cloud
-  const pts = data.points || [];
-  const cols = data.colors || [];
-  const ptGeom = slamMeshes.pointCloud.geometry;
-  const posAttr = ptGeom.getAttribute('position');
-  const colAttr = ptGeom.getAttribute('color');
-  const maxPts = posAttr.count;
-
-  const count = Math.min(pts.length, maxPts);
-  for (let i = 0; i < count; i++) {
-    const px = pts[i][0] * SLAM_SCALE;
-    const py = -pts[i][1] * SLAM_SCALE + 60.0;
-    const pz = pts[i][2] * SLAM_SCALE;
-
-    posAttr.setXYZ(i, px, py, pz);
-
-    if (cols[i]) {
-      colAttr.setXYZ(i, cols[i][0], cols[i][1], cols[i][2]);
-    } else {
-      colAttr.setXYZ(i, 0.0, 0.85, 1.0);
-    }
-  }
-  posAttr.needsUpdate = true;
-  colAttr.needsUpdate = true;
-  ptGeom.setDrawRange(0, count);
-
-  // 2. Update Camera Trajectory
-  const traj = data.trajectory || [];
-  const trajGeom = slamMeshes.trajectoryLine.geometry;
-  const trajAttr = trajGeom.getAttribute('position');
-  const maxTraj = trajAttr.count;
-  const trajCount = Math.min(traj.length, maxTraj);
-
-  for (let i = 0; i < trajCount; i++) {
-    const tx = traj[i][0] * SLAM_SCALE;
-    const ty = -traj[i][1] * SLAM_SCALE + 60.0;
-    const tz = traj[i][2] * SLAM_SCALE;
-    trajAttr.setXYZ(i, tx, ty, tz);
-  }
-  trajAttr.needsUpdate = true;
-  trajGeom.setDrawRange(0, trajCount);
-
-  // 3. Update Camera Frustum & Heading
-  if (data.pose && slamMeshes.cameraFrustum) {
-    const P = data.pose;
-    const camX = P[0][3] * SLAM_SCALE;
-    const camY = -P[1][3] * SLAM_SCALE + 60.0;
-    const camZ = P[2][3] * SLAM_SCALE;
-
-    slamMeshes.cameraFrustum.position.set(camX, camY, camZ);
-
-    const fwdX = P[0][2];
-    const fwdY = -P[1][2];
-    const fwdZ = P[2][2];
-
-    const targetPos = new THREE.Vector3(camX + fwdX * 50.0, camY + fwdY * 50.0, camZ + fwdZ * 50.0);
-    slamMeshes.cameraFrustum.lookAt(targetPos);
-
-    // 4. Update ToF Laser Ray Line
-    if (slamMeshes.tofRayLine && data.tof_ray) {
-      const tofGeom = slamMeshes.tofRayLine.geometry;
-      const tofAttr = tofGeom.getAttribute('position');
-      const rayLen = (data.tof_ray.length || 0.0) * SLAM_SCALE;
-      const isValid = data.tof_ray.valid;
-
-      tofAttr.setXYZ(0, camX, camY, camZ);
-      tofAttr.setXYZ(1, camX + fwdX * rayLen, camY + fwdY * rayLen, camZ + fwdZ * rayLen);
-      tofAttr.needsUpdate = true;
-      tofGeom.setDrawRange(0, 2);
-
-      slamMeshes.tofRayLine.material.color.setHex(isValid ? 0x10b981 : 0xef4444);
-    }
-  }
 }

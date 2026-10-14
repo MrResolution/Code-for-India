@@ -6,6 +6,10 @@ setup(
     name=package_name,
     version='0.1.0',
     packages=find_packages(exclude=['test']),
+    package_data={
+        'servo_joint_publisher.web_dashboard': ['static/*'],
+    },
+    include_package_data=True,
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
@@ -26,6 +30,7 @@ setup(
             'calibrated_joint_gui = servo_joint_publisher.calibrated_joint_gui:main',
             'gesture_teleop_node = servo_joint_publisher.gesture_teleop_node:main',
             'unified_robot_commander = servo_joint_publisher.unified_robot_commander:main',
+            'web_dashboard = servo_joint_publisher.web_dashboard.server:main',
         ],
     },
 )

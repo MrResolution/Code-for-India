@@ -392,11 +392,10 @@ Monocular cameras cannot determine absolute metric distance without depth sensor
 
 ### 1. PyQt5 Desktop Cockpit (`calibrated_joint_gui`)
 - **Embedded RViz2 Container**: 3D digital twin rendered directly inside the Qt window.
-- **4 Dedicated Subsystem Tabs**:
+- **3 Dedicated Subsystem Tabs**:
   - `🦾 Robot Arm`: Slider limits, S-curve homing, sync offsets.
   - `🤖 Quard Bot`: Gait triggers & stance buttons.
   - `🚀 Rover`: Motor speeds & steering overrides.
-  - `👁️ Visual SLAM`: Live camera stream & feature matches.
 - **Live Terminal & Telemetry**: Serial & Wi-Fi console with connection heartbeat badges (🟢 Connected / 🔴 Disconnected).
 
 </div>
@@ -505,13 +504,8 @@ Monocular cameras cannot determine absolute metric distance without depth sensor
 ### 3. Launch WebGL 3D Browser Dashboard
 ```bash
 ./launch_web_dashboard.sh
-# Open http://localhost:8000 on laptop or mobile browser
-```
-
-### 4. Launch ESP32-CAM Visual SLAM & 3D Point Cloud
-```bash
-cd lidr_slam && ./run.sh
-# Streams video over UDP, estimates metric scale, displays 3D point cloud
+# Open http://localhost:8000 on this machine
+# (add --host 0.0.0.0 to reach it from a phone; anyone on the network can then drive the robots)
 ```
 
 ---

@@ -38,10 +38,6 @@
           <span class="dot" id="dot-sensornode"></span>
           <span>ESP32 #3 (Sensors): <strong id="status-sensornode-text">Simulating</strong></span>
         </div>
-        <div class="node-badge status-online" id="badge-slamnode">
-          <span class="dot" id="dot-slamnode"></span>
-          <span>ESP32-CAM (SLAM): <strong id="status-slamnode-text">Listening</strong></span>
-        </div>
       </div>
 
       <!-- Communication Mode Toggle -->
@@ -69,7 +65,6 @@
           <button id="tab-btn-arm" class="tab-btn active">🦾 Robotic Arm</button>
           <button id="tab-btn-quard" class="tab-btn">🤖 Quard Bot (Quadruped)</button>
           <button id="tab-btn-sensors" class="tab-btn">🌡️ ESP32 Sensor Node</button>
-          <button id="tab-btn-slam" class="tab-btn">👁️ Visual SLAM (Sensor Bot)</button>
         </div>
 
         <!-- PANEL 1: Robotic Arm Control -->
@@ -393,158 +388,6 @@
             </div>
           </div>
         </div>
-
-        <!-- PANEL 4: ESP32-CAM Visual SLAM (Sensor Bot) -->
-        <div id="panel-slam-control" class="tab-panel">
-          <div class="tile-header">
-            <h2>👁️ ESP32-CAM Visual SLAM & ToF Mapping</h2>
-            <div style="display:flex;gap:6px;">
-              <button id="btn-load-slam-view" class="btn btn-outline btn-sm" title="Focus and load Visual SLAM in 3D Viewport">👁️ 3D View</button>
-              <button id="btn-slam-reset" class="btn btn-danger btn-sm">🔄 Reset Map</button>
-            </div>
-          </div>
-
-          <div class="scroll-container">
-            <!-- Connection & Engine Status Card -->
-            <div class="card slam-conn-card">
-              <div class="card-title flex-between">
-                <span>📡 Camera Stream & SLAM Engine Connection</span>
-                <span id="pill-slam-status" class="status-pill status-online">Listening</span>
-              </div>
-              <div class="slam-engine-row" style="flex-wrap: wrap; gap: 8px;">
-                <div class="input-pill" style="flex: 1; min-width: 280px; display: flex; align-items: center; gap: 6px;">
-                  <span class="pill-label">Target:</span>
-                  <input type="text" id="input-slam-ip" class="input-text" style="background:#0f172a; color:#38bdf8; border:1px solid #334155; border-radius:4px; padding:3px 8px; font-weight:bold; font-size:12px; width:125px;" value="10.88.106.30" placeholder="IP or /dev/ttyUSB0" />
-                  <button id="btn-slam-connect" class="btn btn-primary btn-xs" title="Connect to ESP32 stream">🔗 Connect</button>
-                  <button id="btn-slam-quick-wifi" class="btn btn-outline btn-xs" title="Target default ESP32 IP">🌐 Wi-Fi</button>
-                  <button id="btn-slam-quick-serial" class="btn btn-outline btn-xs" title="Target /dev/ttyUSB0">🔌 USB</button>
-                  <button id="btn-slam-quick-auto" class="btn btn-outline btn-xs" title="Auto-detect hardware">🔍 Auto</button>
-                  <button id="btn-slam-disconnect" class="btn btn-outline btn-xs" style="display:none;" title="Disconnect stream">Disconnect</button>
-                </div>
-                <div class="input-pill">
-                  <span class="pill-label">Ingest:</span>
-                  <strong id="val-slam-ingest-ip">10.35.234.59:5000 (UDP)</strong>
-                </div>
-                <div class="input-pill">
-                  <span class="pill-label">Status:</span>
-                  <strong id="val-slam-engine-state">Active</strong>
-                </div>
-                <button id="btn-slam-toggle" class="btn btn-outline btn-xs">⏹️ Stop Engine</button>
-              </div>
-            </div>
-
-            <!-- Live Camera Feed & 2D Top-Down SLAM Map Card -->
-            <div class="card slam-feed-card">
-              <div class="card-title flex-between">
-                <span>📹 Visual Mapping Feeds</span>
-                <div class="view-toggle-group">
-                  <button id="btn-slam-view-cam" class="btn btn-xs btn-outline active">📹 Camera HUD</button>
-                  <button id="btn-slam-view-map" class="btn btn-xs btn-outline">🗺️ 2D Map</button>
-                  <button id="btn-slam-view-dual" class="btn btn-xs btn-outline">⚡ Dual View</button>
-                </div>
-              </div>
-
-              <div id="slam-viewports-container" class="slam-viewports-single">
-                <div id="slam-cam-viewport" class="slam-viewport-box">
-                  <img id="img-slam-cam" src="/api/slam/frame" alt="ESP32-CAM Live Feed" class="slam-video-feed">
-                  <span class="slam-feed-tag">Camera & Telemetry HUD</span>
-                </div>
-                <div id="slam-map-viewport" class="slam-viewport-box" style="display:none;">
-                  <img id="img-slam-map" src="/api/slam/map_2d" alt="2D SLAM Top-Down Map" class="slam-video-feed">
-                  <span class="slam-feed-tag">2D Top-Down Map</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- Performance FPS Card -->
-            <div class="card sensor-data-card">
-              <div class="card-title">⚡ Real-Time Pipeline Rates</div>
-              <div class="slam-metrics-triplet">
-                <div class="metric-box">
-                  <span class="metric-label">UDP Ingest FPS</span>
-                  <span id="val-slam-udp-fps" class="metric-val">0.0</span>
-                  <span class="metric-subval">Network Stream</span>
-                </div>
-                <div class="metric-box">
-                  <span class="metric-label">VO Processing FPS</span>
-                  <span id="val-slam-vo-fps" class="metric-val">0.0</span>
-                  <span class="metric-subval">ORB Tracking</span>
-                </div>
-                <div class="metric-box">
-                  <span class="metric-label">Web Client FPS</span>
-                  <span id="val-slam-web-fps" class="metric-val">0.0</span>
-                  <span class="metric-subval">Dashboard Sync</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- VL53L1X ToF Distance Card -->
-            <div class="card sensor-data-card">
-              <div class="card-title flex-between">
-                <span>📏 VL53L1X Time-of-Flight Distance</span>
-                <span id="badge-slam-tof" class="status-pill status-offline">Awaiting</span>
-              </div>
-              <div class="sensor-single-metric">
-                <div class="metric-row">
-                  <span class="metric-label">Front Target Range:</span>
-                  <span id="val-slam-dist" class="readout-pill">0.00 m (0 mm)</span>
-                </div>
-                <div class="meter-bar meter-lg">
-                  <div id="meter-slam-dist" class="meter-fill meter-tof-fill" style="width: 0%"></div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Visual Odometry Tracking Card -->
-            <div class="card sensor-data-card">
-              <div class="card-title flex-between">
-                <span>🔍 Visual Odometry & Landmark Triangulation</span>
-                <span id="badge-slam-tracking" class="status-pill status-online">Tracking</span>
-              </div>
-              <div class="sensor-metrics-grid">
-                <div class="metric-box">
-                  <span class="metric-label">ORB Keypoints</span>
-                  <span id="val-slam-features" class="metric-val">0</span>
-                  <span class="metric-subval">Features Extracted</span>
-                </div>
-                <div class="metric-box">
-                  <span class="metric-label">Inlier Matches</span>
-                  <span id="val-slam-matches" class="metric-val">0</span>
-                  <span class="metric-subval">Epipolar Inliers</span>
-                </div>
-                <div class="metric-box">
-                  <span class="metric-label">Metric Scale</span>
-                  <span id="val-slam-scale" class="metric-val">0.050 m</span>
-                  <span class="metric-subval">ToF Constrained</span>
-                </div>
-                <div class="metric-box">
-                  <span class="metric-label">3D Map Landmarks</span>
-                  <span id="val-slam-points" class="metric-val">0</span>
-                  <span class="metric-subval">Voxel Deduplicated</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- Robot Pose & Heading Card -->
-            <div class="card sensor-data-card">
-              <div class="card-title">🧭 6-DOF Robot Pose (World Frame)</div>
-              <div class="imu-grid">
-                <div class="imu-col">
-                  <h4>Position (m)</h4>
-                  <div class="axis-row"><span>X:</span><strong id="val-slam-pos-x">0.000</strong></div>
-                  <div class="axis-row"><span>Y:</span><strong id="val-slam-pos-y">0.000</strong></div>
-                  <div class="axis-row"><span>Z:</span><strong id="val-slam-pos-z">0.000</strong></div>
-                </div>
-                <div class="imu-col">
-                  <h4>Orientation</h4>
-                  <div class="axis-row"><span>Yaw:</span><strong id="val-slam-heading">0.0°</strong></div>
-                  <div class="axis-row"><span>Target:</span><strong>Forward +Z</strong></div>
-                  <div class="axis-row"><span>Frame:</span><strong>Camera Optical</strong></div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
       </section>
 
       <!-- Right 3D Viewport Tile -->
@@ -556,7 +399,6 @@
               <label for="select-model-mode">📦 Load Mode:</label>
               <select id="select-model-mode" class="form-select-sm">
                 <option value="auto">🔄 Auto (By Section)</option>
-                <option value="slam">👁️ Visual SLAM 3D Map</option>
                 <option value="quard">🤖 Quard Bot (Quadruped)</option>
                 <option value="arm">🦾 Robotic Arm (6-DOF)</option>
                 <option value="dual">⚡ Dual View (Both Bots)</option>

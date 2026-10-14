@@ -2,6 +2,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export ROBOT_PROJECT_DIR="$SCRIPT_DIR"
 ROBOT_MODE="arm"
 USE_WEB=false
 
@@ -20,17 +21,8 @@ for arg in "$@"; do
 done
 
 if [ "$USE_WEB" = true ]; then
-  echo "🌐 Starting WebGL 3D Dashboard on http://localhost:8000 ..."
-  pkill -9 -f "web_dashboard/server.py" 2>/dev/null || true
-  (
-    sleep 1.2
-    if command -v xdg-open &>/dev/null; then
-      xdg-open "http://localhost:8000" >/dev/null 2>&1 || true
-    elif command -v brave-browser &>/dev/null; then
-      brave-browser "http://localhost:8000" >/dev/null 2>&1 || true
-    fi
-  ) &
-  exec python3 "$SCRIPT_DIR/ros2_ws/src/servo_joint_publisher/servo_joint_publisher/web_dashboard/server.py"
+  # Sources ROS, starts servo_serial_commander and opens the browser.
+  exec "$SCRIPT_DIR/launch_web_dashboard.sh"
 fi
 
 # Environment for Native Desktop App
@@ -53,9 +45,20 @@ if [ -f /opt/ros/jazzy/setup.bash ]; then
   fi
   pkill -9 -f robot_state_publisher 2>/dev/null || true
   pkill -9 -f rviz2 2>/dev/null || true
+  pkill -9 -f servo_serial_commander 2>/dev/null || true
+
+  # Stop background helpers when the dashboard exits or Ctrl+C is pressed.
+  CHILD_PIDS=()
+  cleanup() {
+    for pid in "${CHILD_PIDS[@]}"; do
+      kill "$pid" 2>/dev/null || true
+    done
+  }
+  trap cleanup EXIT INT TERM
 
   if [ "$ROBOT_MODE" = "arm" ] || [ "$ROBOT_MODE" = "dual" ]; then
-    (ros2 run servo_joint_publisher servo_serial_commander &)
+    ros2 run servo_joint_publisher servo_serial_commander &
+    CHILD_PIDS+=($!)
   fi
 
   echo "🤖 Launching ROS 2 Desktop Dashboard for $ROBOT_MODE ..."
