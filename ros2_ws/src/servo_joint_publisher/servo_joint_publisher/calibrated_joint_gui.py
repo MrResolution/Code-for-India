@@ -21,6 +21,7 @@ import json
 import math
 import time
 import subprocess
+import shutil
 import xml.etree.ElementTree as ET
 import urllib.request
 import urllib.parse
@@ -46,6 +47,20 @@ except Exception:
 
 if "QT_QPA_PLATFORM_PLUGIN_PATH" in os.environ and "cv2" in os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"]:
     del os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"]
+
+# Auto-discover and source ROS 2 Jazzy environment if available
+if os.path.exists("/opt/ros/jazzy"):
+    if "/opt/ros/jazzy/bin" not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = f"/opt/ros/jazzy/bin:{os.environ.get('PATH', '')}"
+    if "/opt/ros/jazzy/lib/python3.12/site-packages" not in sys.path:
+        sys.path.insert(0, "/opt/ros/jazzy/lib/python3.12/site-packages")
+    if "AMENT_PREFIX_PATH" not in os.environ:
+        os.environ["AMENT_PREFIX_PATH"] = "/opt/ros/jazzy"
+    if "PYTHONPATH" not in os.environ:
+        os.environ["PYTHONPATH"] = "/opt/ros/jazzy/lib/python3.12/site-packages"
+    if "LD_LIBRARY_PATH" not in os.environ or "/opt/ros/jazzy" not in os.environ.get("LD_LIBRARY_PATH", ""):
+        ros_ld = "/opt/ros/jazzy/opt/rviz_ogre_vendor/lib:/opt/ros/jazzy/lib/x86_64-linux-gnu:/opt/ros/jazzy/lib"
+        os.environ["LD_LIBRARY_PATH"] = f"{ros_ld}:{os.environ.get('LD_LIBRARY_PATH', '')}"
 
 try:
     import rclpy
@@ -2627,13 +2642,13 @@ class CalibratedJointPublisherGUI(QMainWindow):
     def init_rviz_embed(self):
         """Spawn RViz2 as child process or embed WebGL twin if ROS 2 is not present."""
         import sys as sys
-        import shutil
-        if not shutil.which("ros2") or not shutil.which("rviz2"):
+        rviz_bin = shutil.which("rviz2") or ("/opt/ros/jazzy/bin/rviz2" if os.path.exists("/opt/ros/jazzy/bin/rviz2") else None)
+        if not rviz_bin:
             print("[Dashboard] ROS 2 / RViz2 not found on system. Loading WebGL 3D Twin...", file=sys.stderr, flush=True)
             self._load_webgl_twin()
             return
 
-        print("[Dashboard] init_rviz_embed: Starting RViz2 process...", file=sys.stderr, flush=True)
+        print(f"[Dashboard] init_rviz_embed: Starting RViz2 process ({rviz_bin})...", file=sys.stderr, flush=True)
 
         target_robot = os.environ.get("ROBOT_TARGET", "arm").lower()
         if target_robot == "quard":
@@ -2648,9 +2663,16 @@ class CalibratedJointPublisherGUI(QMainWindow):
         env = QProcessEnvironment.systemEnvironment()
         env.insert("QT_QPA_PLATFORM", "xcb")
         env.insert("GDK_BACKEND", "x11")
+        if os.path.exists("/opt/ros/jazzy"):
+            env.insert("AMENT_PREFIX_PATH", os.environ.get("AMENT_PREFIX_PATH", "/opt/ros/jazzy"))
+            env.insert("PATH", os.environ.get("PATH", f"/opt/ros/jazzy/bin:{os.environ.get('PATH', '')}"))
+            env.insert("PYTHONPATH", os.environ.get("PYTHONPATH", "/opt/ros/jazzy/lib/python3.12/site-packages"))
+            ros_ld = "/opt/ros/jazzy/opt/rviz_ogre_vendor/lib:/opt/ros/jazzy/lib/x86_64-linux-gnu:/opt/ros/jazzy/lib"
+            curr_ld = os.environ.get("LD_LIBRARY_PATH", "")
+            env.insert("LD_LIBRARY_PATH", f"{ros_ld}:{curr_ld}")
         self.rviz_process.setProcessEnvironment(env)
 
-        self.rviz_process.start("ros2", ["run", "rviz2", "rviz2", "-d", rviz_config])
+        self.rviz_process.start(rviz_bin, ["-d", rviz_config])
 
         self.already_docked = False
         self._embed_attempt = 0
@@ -2696,62 +2718,76 @@ class CalibratedJointPublisherGUI(QMainWindow):
         self.rviz_frame_layout.addWidget(lbl)
 
     def _find_rviz_x11_window(self):
-        """Find the main RViz2 X11 window ID using xdotool (without --onlyvisible for XWayland compat)."""
+        """Find the main RViz2 X11 window ID using PID and WM_CLASS validation."""
         import sys as sys
         try:
             main_win_id = str(int(self.winId()))
-        except Exception as e:
-            print(f"[Dashboard] _find_rviz: Error getting main winId: {e}", file=sys.stderr, flush=True)
-            return None, []
+        except Exception:
+            return None
 
-        print(f"[Dashboard] _find_rviz: main_win_id={main_win_id}", file=sys.stderr, flush=True)
+        rviz_pid = None
+        if self.rviz_process and self.rviz_process.state() != QProcess.NotRunning:
+            rviz_pid = self.rviz_process.processId()
 
-        # Search without --onlyvisible since it doesn't work under XWayland on Wayland compositors
-        search_queries = [
-            ["xdotool", "search", "--name", "RViz"],
-            ["xdotool", "search", "--name", "robot.rviz"],
-            ["xdotool", "search", "--class", "rviz2"],
-            ["xdotool", "search", "--class", "rviz"],
-        ]
-
-        for cmd in search_queries:
+        candidate_ids = []
+        # Search by RViz PID first (most specific and safe)
+        if rviz_pid:
             try:
-                out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, timeout=5).decode().strip()
+                out = subprocess.check_output(
+                    ["xdotool", "search", "--pid", str(rviz_pid)],
+                    stderr=subprocess.DEVNULL, timeout=2
+                ).decode().strip()
                 if out:
-                    ids = [i.strip() for i in out.split('\n') if i.strip()]
-                    valid_ids = [i for i in ids if i != main_win_id]
-                    print(f"[Dashboard] _find_rviz: cmd={cmd[-1]}, found ids={ids}, valid={valid_ids}", file=sys.stderr, flush=True)
-                    if not valid_ids:
-                        continue
+                    candidate_ids.extend([i.strip() for i in out.split('\n') if i.strip()])
+            except Exception:
+                pass
 
-                    # Pick the window whose WM_NAME contains "RViz" (the main viewport window)
-                    for wid in reversed(valid_ids):
-                        try:
-                            props = subprocess.check_output(
-                                ["xprop", "-id", wid, "WM_NAME"],
-                                stderr=subprocess.DEVNULL,
-                                timeout=3
-                            ).decode()
-                            if "RViz" in props or "robot.rviz" in props:
-                                print(f"[Dashboard] _find_rviz: Found RViz window {wid}: {props.strip()}", file=sys.stderr, flush=True)
-                                return int(wid), valid_ids
-                        except Exception:
-                            continue
+        # If not found by PID, search strictly by rviz2 WM_CLASS
+        if not candidate_ids:
+            for cls_name in ["rviz2", "rviz"]:
+                try:
+                    out = subprocess.check_output(
+                        ["xdotool", "search", "--class", cls_name],
+                        stderr=subprocess.DEVNULL, timeout=2
+                    ).decode().strip()
+                    if out:
+                        candidate_ids.extend([i.strip() for i in out.split('\n') if i.strip()])
+                        break
+                except Exception:
+                    pass
 
-                    # Fallback: return last valid id
-                    print(f"[Dashboard] _find_rviz: Fallback to window {valid_ids[-1]}", file=sys.stderr, flush=True)
-                    return int(valid_ids[-1]), valid_ids
-            except subprocess.TimeoutExpired:
-                print(f"[Dashboard] _find_rviz: Timeout on {cmd}", file=sys.stderr, flush=True)
+        if not candidate_ids:
+            return None
+
+        for wid in reversed(candidate_ids):
+            if wid == main_win_id:
                 continue
-            except subprocess.CalledProcessError:
-                continue
-            except Exception as e:
-                print(f"[Dashboard] _find_rviz: Error on {cmd}: {e}", file=sys.stderr, flush=True)
+            try:
+                # Strictly verify WM_CLASS belongs to RViz
+                cls_prop = subprocess.check_output(
+                    ["xprop", "-id", wid, "WM_CLASS"],
+                    stderr=subprocess.DEVNULL, timeout=2
+                ).decode().lower()
+
+                # Guard: NEVER touch Antigravity or other IDE/browser windows
+                if any(x in cls_prop for x in ["antigravity", "code", "chrome", "firefox", "terminal"]):
+                    continue
+                if "rviz" not in cls_prop:
+                    continue
+
+                # Check if this is the main RViz window with a title
+                name_prop = subprocess.check_output(
+                    ["xprop", "-id", wid, "WM_NAME"],
+                    stderr=subprocess.DEVNULL, timeout=2
+                ).decode()
+
+                if "RViz" in name_prop or "rviz" in name_prop.lower():
+                    print(f"[Dashboard] _find_rviz: Found verified RViz window {wid}: {name_prop.strip()}", file=sys.stderr, flush=True)
+                    return int(wid)
+            except Exception:
                 continue
 
-        print(f"[Dashboard] _find_rviz: No RViz window found", file=sys.stderr, flush=True)
-        return None, []
+        return None
 
     def embed_rviz_window(self):
         """Locate X11 Window ID of spawned RViz process and embed into container."""
@@ -2767,20 +2803,11 @@ class CalibratedJointPublisherGUI(QMainWindow):
                 QTimer.singleShot(1000, self.embed_rviz_window)
                 return
 
-            rviz_win_id, valid_ids = self._find_rviz_x11_window()
+            rviz_win_id = self._find_rviz_x11_window()
 
             if rviz_win_id is not None:
                 try:
-                    # 1. Hide auxiliary RViz windows (toolbars, selection-owner, etc.)
-                    for wid in valid_ids:
-                        if int(wid) != rviz_win_id:
-                            try:
-                                subprocess.call(["xdotool", "windowunmap", str(wid)],
-                                                stderr=subprocess.DEVNULL, timeout=2)
-                            except Exception:
-                                pass
-
-                    # 2. Strip window decorations & set window type to utility so compositor allows embedding
+                    # Strip window decorations & set window type to utility so compositor allows embedding
                     try:
                         subprocess.call([
                             "xprop", "-id", str(rviz_win_id), "-f", "_MOTIF_WM_HINTS", "32c",
@@ -2796,11 +2823,11 @@ class CalibratedJointPublisherGUI(QMainWindow):
                     container_win_id = str(int(self.rviz_frame.winId()))
                     self.rviz_win_id = rviz_win_id
 
-                    # 3. Perform native X11 reparent into container widget
+                    # Perform native X11 reparent into container widget
                     subprocess.call(["xdotool", "windowreparent", str(rviz_win_id), container_win_id], stderr=subprocess.DEVNULL, timeout=2)
                     subprocess.call(["xdotool", "windowmap", str(rviz_win_id)], stderr=subprocess.DEVNULL, timeout=2)
 
-                    # 4. Wrap with Qt window container for layout management
+                    # Wrap with Qt window container for layout management
                     qwin = QWindow.fromWinId(rviz_win_id)
                     qwin.setFlags(Qt.SubWindow | Qt.FramelessWindowHint)
 
@@ -2810,14 +2837,10 @@ class CalibratedJointPublisherGUI(QMainWindow):
                     self.already_docked = True
                     self.log_to_console("✅ Integrated RViz 3D Viewport docked successfully.")
 
-                    # 5. Sync size & position
+                    # Sync size & position
                     QTimer.singleShot(100, self._resize_embedded_rviz)
                     QTimer.singleShot(500, self._resize_embedded_rviz)
                     QTimer.singleShot(1200, self._resize_embedded_rviz)
-
-                    # 6. Hide RViz menu bar and toolbars for clean 3D-only view
-                    QTimer.singleShot(800, self._hide_rviz_chrome)
-                    QTimer.singleShot(2000, self._hide_rviz_chrome)
                 except Exception as e:
                     print(f"[Dashboard] embed_rviz_window: ERROR: {e}", file=sys.stderr, flush=True)
             else:
@@ -2843,51 +2866,8 @@ class CalibratedJointPublisherGUI(QMainWindow):
             print(f"[Dashboard] _resize_embedded_rviz: ERROR: {e}", file=sys.stderr, flush=True)
 
     def _hide_rviz_chrome(self):
-        """Hide RViz menu bar, toolbars, and status bar for a clean 3D-only viewport."""
-        import sys
-        if not hasattr(self, 'rviz_win_id') or not self.rviz_win_id:
-            return
-        if getattr(self, '_rviz_chrome_hidden', False):
-            return
-        try:
-            wid = str(self.rviz_win_id)
-            # Focus the RViz window and use Panels menu to hide Displays/Views
-            subprocess.call(["xdotool", "windowfocus", "--sync", wid], stderr=subprocess.DEVNULL, timeout=3)
-            import time
-            time.sleep(0.1)
-
-            # Use xdotool to find and unmap toolbar/menubar child windows
-            # Get all child windows of the RViz main window
-            try:
-                children_out = subprocess.check_output(
-                    ["xdotool", "search", "--pid", str(self.rviz_process.processId())],
-                    stderr=subprocess.DEVNULL, timeout=5
-                ).decode().strip()
-                if children_out:
-                    child_ids = [c.strip() for c in children_out.split('\n') if c.strip()]
-                    main_wid = int(wid)
-                    for cid in child_ids:
-                        cid_int = int(cid)
-                        if cid_int != main_wid:
-                            # Unmap auxiliary windows (toolbars, panels, etc.)
-                            subprocess.call(["xdotool", "windowunmap", cid],
-                                            stderr=subprocess.DEVNULL, timeout=2)
-            except Exception:
-                pass
-
-            # Restore focus back to the dashboard
-            try:
-                dashboard_wid = str(int(self.winId()))
-                subprocess.call(["xdotool", "windowfocus", dashboard_wid],
-                                stderr=subprocess.DEVNULL, timeout=2)
-            except Exception:
-                pass
-
-            self._rviz_chrome_hidden = True
-            self._resize_embedded_rviz()
-            print(f"[Dashboard] _hide_rviz_chrome: Chrome hidden for clean 3D view", file=sys.stderr, flush=True)
-        except Exception as e:
-            print(f"[Dashboard] _hide_rviz_chrome: ERROR: {e}", file=sys.stderr, flush=True)
+        """Safe placeholder for viewport adjustments without touching unrelated desktop windows."""
+        pass
 
 
     def closeEvent(self, event):
@@ -3240,7 +3220,10 @@ class CalibratedJointPublisherGUI(QMainWindow):
         msg.name = names
         msg.position = positions
 
-        self.ros_node.joint_pub.publish(msg)
+        try:
+            self.ros_node.joint_pub.publish(msg)
+        except Exception:
+            pass
 
 
 if ROS2_AVAILABLE:

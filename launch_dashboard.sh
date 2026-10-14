@@ -25,8 +25,7 @@ if [ "$USE_WEB" = true ]; then
   exec "$SCRIPT_DIR/launch_web_dashboard.sh"
 fi
 
-# Environment for Native Desktop App
-export LD_LIBRARY_PATH="/home/sabo/miniconda3/lib:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}:/home/sabo/miniconda3/lib"
 export QT_QPA_PLATFORM=xcb
 export ROBOT_TARGET="$ROBOT_MODE"
 
