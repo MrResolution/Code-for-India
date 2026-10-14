@@ -1,0 +1,107 @@
+<robot name="unnamed" version="1.0">
+  <joint name="Hipback-left-joint" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="-3.14159 1.57080 -0.00000" xyz="-1.01689 0.09211 -0.03398"/>
+    <parent link="Body_link"/>
+    <child link="Hipback-left_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
+  </joint>
+  <joint name="Femurback-left-joint" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="1.14190 1.57080 -0.44834" xyz="0.20010 -0.63604 -0.09756"/>
+    <parent link="Hipback-left_link"/>
+    <child link="Femurback-left_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
+  </joint>
+  <joint name="Femurfront-right-joint" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="1.57080 -1.57080 0.00000" xyz="0.19846 -0.64343 0.04818"/>
+    <parent link="Hipfront-right_link"/>
+    <child link="Femurfront-right_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
+  </joint>
+  <joint name="TibiaLfront-right" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="-0.01047 0.00000 0.01252" xyz="0.56805 -0.00026 0.01632"/>
+    <parent link="Femurfront-right_link"/>
+    <child link="TibiaLfront-right_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
+  </joint>
+  <joint name="TibiaLback-left-joint" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="-0.03874 0.01647 0.01122" xyz="0.56915 -0.03142 -0.07694"/>
+    <parent link="Femurback-left_link"/>
+    <child link="TibiaLback-left_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
+  </joint>
+  <joint name="Hipback-right" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="0.00000 -1.57080 0.00000" xyz="-1.01689 -0.08910 -0.03466"/>
+    <parent link="Body_link"/>
+    <child link="Hipback-right_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
+  </joint>
+  <joint name="Femurback-right-joint" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="1.58477 1.57080 0.00000" xyz="-0.19846 -0.64343 -0.04818"/>
+    <parent link="Hipback-right_link"/>
+    <child link="Femurback-right_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
+  </joint>
+  <joint name="TibiaLback-right_joint" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="-0.02291 0.02386 -0.00055" xyz="0.57104 0.00281 0.03004"/>
+    <parent link="Femurback-right_link"/>
+    <child link="TibiaLback-right_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
+  </joint>
+  <joint name="Hipfront-left-joint" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="-3.14159 -1.57080 0.00000" xyz="0.87024 0.09211 -0.03398"/>
+    <parent link="Body_link"/>
+    <child link="Hipfront-left_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
+  </joint>
+  <joint name="Femurfront-left-joint" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="1.34289 -1.57080 0.22791" xyz="-0.20056 -0.63601 0.09831"/>
+    <parent link="Hipfront-left_link"/>
+    <child link="Femurfront-left_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
+  </joint>
+  <joint name="TibiaLfront-left-joint" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="0.02448 0.00784 0.00019" xyz="0.56967 0.00379 0.01526"/>
+    <parent link="Femurfront-left_link"/>
+    <child link="TibiaLfront-left_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
+  </joint>
+  <joint name="Hipfront-right-joint_" type="revolute">
+    <limit lower="-3.14000" upper="3.14000" effort="0.00000" velocity="0.00000"/>
+    <origin rpy="0.00000 1.57080 0.00000" xyz="0.87024 -0.08910 -0.03466"/>
+    <parent link="Body_link"/>
+    <child link="Hipfront-right_link"/>
+    <axis xyz="0.00000 0.00000 1.00000"/>
+  </joint>
+  <link name="Body_link">
+    <visual name="Body">
+      <material name="None"/>
+      <origin rpy="0.00000 0.00000 0.00000" xyz="0.00000 0.00000 0.00000"/>
+      <geometry>
+        <box size="2.23178 0.54200 0.35652"/>
+      </geometry>
+    </visual>
+  </link>
+  <link name="Hipback-left_link"/>
+  <link name="Hipfront-right_link"/>
+  <link name="Femurfront-right_link"/>
+  <link name="TibiaLfront-right_link"/>
+  <link name="Femurback-left_link"/>
+  <link name="TibiaLback-left_link"/>
+  <link name="Hipback-right_link"/>
+  <link name="Femurback-right_link"/>
+  <link name="TibiaLback-right_link"/>
+  <link name="Hipfront-left_link"/>
+  <link name="Femurfront-left_link"/>
+  <link name="TibiaLfront-left_link"/>
+</robot>

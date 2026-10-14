@@ -104,35 +104,43 @@ The gripper consists of intermeshing spur gears and 4-bar parallel follower link
 
 ## 🛠️ 4. Applied Patches to Phobos Add-on
 
-The Phobos add-on inside `~/.config/blender/5.2/scripts/addons/phobos/` was patched to prevent export exceptions:
+The Phobos add-on (installed in `~/.config/blender/4.2/scripts/addons/phobos/`, `~/.config/blender/5.2/scripts/addons/phobos/`, and Flatpak `~/.var/app/org.blender.Blender/config/blender/5.2/scripts/addons/phobos/`) has been patched to fix GUI crashes, undefined geometry errors, and export exceptions:
 
 1. **`deriveGeometry` in `blender2phobos.py`**:
    ```python
-   # Line 117
    if 'geometry/type' not in obj:
-       obj['geometry/type'] = 'mesh'
+       obj['geometry/type'] = 'mesh' if obj.type == 'MESH' else 'box'
    ```
-   *Prevents `AttributeError: The geometry of object TrunTable has not yet been defined`.*
+   *Prevents `AttributeError: The geometry of object ... has not yet been defined` when clicking or deriving visual/collision meshes.*
 
 2. **`deriveJoint` in `blender2phobos.py`**:
    ```python
-   # Line 491
    if "joint/type" not in values:
        values["joint/type"] = "revolute"
    ```
-   *Prevents `KeyError: joint/type not defined`.*
+   *Prevents `KeyError: joint/type not defined` during derivation and export.*
 
-3. **`add_aggregate` in `xmlrobot.py`**:
+3. **`deriveRepresentation` in `blender2phobos.py`**:
    ```python
-   # Line 348 & Line 358
-   if id(self.get_aggregate("joint", elem.name)) != id(elem):
-       orig_name = elem.name
-       idx = 1
-       while elem.name in [str(j) for j in self.joints]:
-           elem.name = f"{orig_name}_{idx}"
-           idx += 1
+   elif obj.phobostype == 'link':
+       repr_instance = deriveLink(obj, logging=logging)
    ```
-   *Prevents `AssertionError` when duplicate joint names or duplicate child links are encountered.*
+   *Properly derives link representations and catches derivation errors cleanly without crashing.*
+
+4. **`PhobosPropertyInformationPanel.draw` in `phobosgui.py`**:
+   - Wrapped derivation calls in `try...except` blocks so that panel redrawing never throws unhandled errors or freezes the 3D viewport.
+   - Handled root links (`sUtils.isRoot(obj)`) cleanly without joint/motor errors.
+   - Added `update_phobostype` callback to automatically assign `geometry/type` whenever an object's Phobostype is switched to `visual` or `collision`.
+
+5. **`_MessageWithBox` in `phoboslog.py`**:
+   - Added `not bpy.app.background` guard before `popup_menu` to prevent freezes in headless/batch execution.
+
+6. **`add_aggregate` in `xmlrobot.py`**:
+   - Automatic unique suffix incrementing (`elem.name = f"{orig_name}_{idx}"`) to prevent `AssertionError` on duplicate joints or child links.
+
+7. **`export` in `robot.py`**:
+   - Normalized `export_config` so list of strings (e.g. `['urdf']`) are parsed into configuration dicts without raising `AttributeError: 'str' object has no attribute 'get'`.
+   - Fixed `TypeError: unsupported operand type(s) for |=: 'bool' and 'NoneType'` via `ros_pkg |= bool(export.get("ros_pathes", False))`.
 
 ---
 

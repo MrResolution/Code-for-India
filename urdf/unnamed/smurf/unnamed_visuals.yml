@@ -1,0 +1,29 @@
+{
+  "visuals": [
+    {
+      "geometry": {
+        "geometry_type": "box",
+        "size": [
+          2.231778144836426,
+          0.5419999361038208,
+          0.35652026534080505
+        ]
+      },
+      "name": "Body",
+      "origin": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "relative_to": "Body_link",
+        "rotation": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "original_name": "Body"
+    }
+  ]
+}

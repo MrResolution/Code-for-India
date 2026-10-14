@@ -1,0 +1,227 @@
+{
+  "links": [
+    {
+      "name": "Body_link",
+      "originRoot": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "relative_to": "Body_link",
+        "rotation": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "visuals": [
+        "Body"
+      ]
+    },
+    {
+      "name": "Hipback-left_link",
+      "originRoot": {
+        "position": [
+          -1.0168925523757935,
+          0.0921139121055603,
+          -0.03397779166698456
+        ],
+        "relative_to": "Body_link",
+        "rotation": [
+          -3.1415925025939937,
+          1.5707960128784442,
+          -3.1086244689504383e-15
+        ]
+      },
+      "visuals": []
+    },
+    {
+      "name": "Femurback-left_link",
+      "originRoot": {
+        "position": [
+          -0.9193314462900162,
+          0.728156566619873,
+          -0.2340732580050826
+        ],
+        "relative_to": "Body_link",
+        "rotation": [
+          -1.5513514672091722,
+          -5.684341886080802e-14,
+          -1.432187701766452e-14
+        ]
+      },
+      "visuals": []
+    },
+    {
+      "name": "TibiaLback-left_link",
+      "originRoot": {
+        "position": [
+          -0.3501765727996826,
+          0.6506209373474121,
+          -0.2041599303483963
+        ],
+        "relative_to": "Body_link",
+        "rotation": [
+          -1.590272904926918,
+          0.01153795697069615,
+          -0.016249965878292638
+        ]
+      },
+      "visuals": []
+    },
+    {
+      "name": "Hipback-right_link",
+      "originRoot": {
+        "position": [
+          -1.0168925523757935,
+          -0.08909988403320312,
+          -0.03466224670410156
+        ],
+        "relative_to": "Body_link",
+        "rotation": [
+          0.0,
+          -1.5707962512969982,
+          0.0
+        ]
+      },
+      "visuals": []
+    },
+    {
+      "name": "Femurback-right_link",
+      "originRoot": {
+        "position": [
+          -0.9687168896198273,
+          -0.732532374560833,
+          -0.2331255804747343
+        ],
+        "relative_to": "Body_link",
+        "rotation": [
+          1.5847730235085074,
+          1.4210854715202004e-14,
+          -2.220446049250313e-16
+        ]
+      },
+      "visuals": []
+    },
+    {
+      "name": "TibiaLback-right_link",
+      "originRoot": {
+        "position": [
+          -0.3976796865463257,
+          -0.7626080811023712,
+          -0.23073311196640134
+        ],
+        "relative_to": "Body_link",
+        "rotation": [
+          1.5618741512132306,
+          0.00021289502346855116,
+          0.02386263529788546
+        ]
+      },
+      "visuals": []
+    },
+    {
+      "name": "Hipfront-left_link",
+      "originRoot": {
+        "position": [
+          0.8702373504638672,
+          0.0921139121055603,
+          -0.03397779166698456
+        ],
+        "relative_to": "Body_link",
+        "rotation": [
+          -3.141592506459083,
+          -1.5707957446576566,
+          3.8650991296407256e-09
+        ]
+      },
+      "visuals": []
+    },
+    {
+      "name": "Femurfront-left_link",
+      "originRoot": {
+        "position": [
+          0.9685443639755249,
+          0.7281196117401123,
+          -0.2345340675674379
+        ],
+        "relative_to": "Body_link",
+        "rotation": [
+          -1.5707962512969982,
+          0.0,
+          0.0
+        ]
+      },
+      "visuals": []
+    },
+    {
+      "name": "TibiaLfront-left_link",
+      "originRoot": {
+        "position": [
+          1.5382184982299805,
+          0.7433785200119019,
+          -0.23832195065915585
+        ],
+        "relative_to": "Body_link",
+        "rotation": [
+          -1.5463182924914198,
+          0.0001919031022572515,
+          -0.007835263897049027
+        ]
+      },
+      "visuals": []
+    },
+    {
+      "name": "Hipfront-right_link",
+      "originRoot": {
+        "position": [
+          0.8702373504638672,
+          -0.08909988403320312,
+          -0.03466224670410156
+        ],
+        "relative_to": "Body_link",
+        "rotation": [
+          0.0,
+          1.5707960128784726,
+          0.0
+        ]
+      },
+      "visuals": []
+    },
+    {
+      "name": "Femurfront-right_link",
+      "originRoot": {
+        "position": [
+          0.9184129238128662,
+          -0.7325324937701225,
+          -0.2331256251782179
+        ],
+        "relative_to": "Body_link",
+        "rotation": [
+          1.5707962512969982,
+          0.0,
+          0.0
+        ]
+      },
+      "visuals": []
+    },
+    {
+      "name": "TibiaLfront-right_link",
+      "originRoot": {
+        "position": [
+          1.4864635467529297,
+          -0.7488544061779976,
+          -0.23338703997433186
+        ],
+        "relative_to": "Body_link",
+        "rotation": [
+          1.5603241918087067,
+          -0.01251727612337361,
+          6.089263893116481e-08
+        ]
+      },
+      "visuals": []
+    }
+  ]
+}

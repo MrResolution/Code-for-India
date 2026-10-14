@@ -1,7 +1,7 @@
 {
   "turntable_link_joint_dup": {
     "servo_min_deg": 0.0,
-    "servo_max_deg": 1.0,
+    "servo_max_deg": 180.0,
     "trim_deg": 0.0,
     "invert": false,
     "home_deg": 90.0,
@@ -9,7 +9,7 @@
   },
   "turntable_link_joint": {
     "servo_min_deg": 9.0,
-    "servo_max_deg": 62.1,
+    "servo_max_deg": 180.0,
     "trim_deg": 0.0,
     "invert": false,
     "home_deg": 9.3,
@@ -17,7 +17,7 @@
   },
   "turntable_link_joint_dup_1": {
     "servo_min_deg": 56.9,
-    "servo_max_deg": 122.9,
+    "servo_max_deg": 180.0,
     "trim_deg": 0.0,
     "invert": false,
     "home_deg": 176.3,
@@ -25,7 +25,7 @@
   },
   "turntable_link_joint_dup_2": {
     "servo_min_deg": 0.0,
-    "servo_max_deg": 100.0,
+    "servo_max_deg": 180.0,
     "trim_deg": 0.0,
     "invert": false,
     "home_deg": 80.7,
@@ -41,7 +41,7 @@
   },
   "turntable_link_joint_dup_3": {
     "servo_min_deg": 0.0,
-    "servo_max_deg": 177.0,
+    "servo_max_deg": 180.0,
     "trim_deg": 0.0,
     "invert": false,
     "home_deg": 10.6,
