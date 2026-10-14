@@ -21,7 +21,7 @@ Key Principles:
 import pcbnew
 import os
 
-OUTPUT_DIR = "/home/chakradhar/Nurobots_kerela/robotic_arm_motherboard"
+OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
 PCB_PATH = os.path.join(OUTPUT_DIR, "robotic_arm_motherboard.kicad_pcb")
 
 board = pcbnew.BOARD()

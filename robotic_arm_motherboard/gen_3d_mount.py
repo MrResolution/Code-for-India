@@ -16,7 +16,7 @@ import numpy as np
 import struct
 import os
 
-OUTPUT_DIR = "/home/chakradhar/Nurobots_kerela/robotic_arm_motherboard"
+OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
 SCAD_PATH = os.path.join(OUTPUT_DIR, "pca9685_mount_bracket.scad")
 STL_PATH = os.path.join(OUTPUT_DIR, "pca9685_mount_bracket.stl")
 

@@ -3,8 +3,9 @@ from launch import LaunchDescription
 from launch_ros.actions import Node
 
 def generate_launch_description():
-    urdf_file = '/home/chakradhar/Nurobots_kerela/Code-for-india/urdf/unnamed/urdf/unnamed_gazebo.urdf'
-    rviz_config = '/home/chakradhar/Nurobots_kerela/Code-for-india/urdf/unnamed/robot.rviz'
+    pkg_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+    urdf_file = os.path.join(pkg_dir, 'urdf/unnamed/urdf/unnamed_gazebo.urdf')
+    rviz_config = os.path.join(pkg_dir, 'urdf/unnamed/robot.rviz')
 
     with open(urdf_file, 'r') as f:
         robot_desc = f.read()

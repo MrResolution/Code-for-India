@@ -34,8 +34,15 @@ from PyQt5.QtWidgets import (
     QScrollArea, QMessageBox, QSplitter, QTextEdit, QLineEdit,
     QTabWidget, QGridLayout, QComboBox
 )
-from PyQt5.QtCore import Qt, QTimer, QProcess, QProcessEnvironment, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, QProcess, QProcessEnvironment, pyqtSignal, QCoreApplication, QUrl
 from PyQt5.QtGui import QFont, QWindow, QTextCursor, QPainter, QPen, QBrush, QColor, QPainterPath, QRadialGradient, QLinearGradient
+
+try:
+    QCoreApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
+    from PyQt5.QtWebEngineWidgets import QWebEngineView
+    WEBENGINE_AVAILABLE = True
+except Exception:
+    WEBENGINE_AVAILABLE = False
 
 try:
     from .visual_slam_widget import VisualSLAMWidget
@@ -56,7 +63,19 @@ try:
     ROS2_AVAILABLE = True
 except ImportError:
     ROS2_AVAILABLE = False
-    JointState = object
+    class JointState:
+        def __init__(self):
+            self.header = self
+            self.stamp = self
+            self.name = []
+            self.position = []
+            self.velocity = []
+            self.effort = []
+        def to_msg(self):
+            return self
+    class StringMsg:
+        def __init__(self):
+            self.data = ""
 
 CALIB_FILE_PATH = "/home/sabo/Documents/learn_/Hardware/servo_calibration.json"
 URDF_PATH = "/home/sabo/Documents/learn_/Hardware/urdf/arm/urdf/arm.urdf"
@@ -2621,8 +2640,14 @@ class CalibratedJointPublisherGUI(QMainWindow):
         QTimer.singleShot(250, self._resize_embedded_rviz)
 
     def init_rviz_embed(self):
-        """Spawn RViz2 as child process and schedule embedding."""
+        """Spawn RViz2 as child process or embed WebGL twin if ROS 2 is not present."""
         import sys as sys
+        import shutil
+        if not shutil.which("ros2") or not shutil.which("rviz2"):
+            print("[Dashboard] ROS 2 / RViz2 not found on system. Loading WebGL 3D Twin...", file=sys.stderr, flush=True)
+            self._load_webgl_twin()
+            return
+
         print("[Dashboard] init_rviz_embed: Starting RViz2 process...", file=sys.stderr, flush=True)
 
         target_robot = os.environ.get("ROBOT_TARGET", "arm").lower()
@@ -2648,6 +2673,42 @@ class CalibratedJointPublisherGUI(QMainWindow):
         for delay_ms in [3000, 5000, 7000, 10000, 14000, 18000, 23000, 28000]:
             QTimer.singleShot(delay_ms, self.embed_rviz_window)
         print(f"[Dashboard] init_rviz_embed: Scheduled 8 embed attempts", file=sys.stderr, flush=True)
+
+    def _load_webgl_twin(self):
+        """Embeds the WebGL 3D Robot Digital Twin into the native application frame."""
+        import urllib.request
+        server_running = False
+        try:
+            with urllib.request.urlopen("http://localhost:8000/api/state", timeout=0.5) as resp:
+                if resp.status == 200:
+                    server_running = True
+        except Exception:
+            pass
+
+        if not server_running:
+            server_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_dashboard", "server.py")
+            if os.path.exists(server_script):
+                subprocess.Popen([sys.executable, server_script, "--port", "8000"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                time.sleep(1.2)
+
+        if WEBENGINE_AVAILABLE:
+            try:
+                self.web_view = QWebEngineView(self.rviz_frame)
+                self.web_view.load(QUrl("http://localhost:8000"))
+                self.rviz_frame_layout.addWidget(self.web_view)
+                self.rviz_header_label.setText("🌐 Integrated 3D Digital Twin (WebGL)")
+                self.rviz_header_label.setStyleSheet("color: #38bdf8;")
+                self.already_docked = True
+                print("[Dashboard] Successfully docked WebGL 3D digital twin via QtWebEngine.", file=sys.stderr, flush=True)
+                return
+            except Exception as e:
+                print(f"[Dashboard] QWebEngineView error: {e}", file=sys.stderr, flush=True)
+
+        lbl = QLabel("3D Viewport Active at: http://localhost:8000")
+        lbl.setAlignment(Qt.AlignCenter)
+        lbl.setStyleSheet("color: #38bdf8; font-size: 14px; font-weight: bold;")
+        self.rviz_frame_layout.addWidget(lbl)
 
     def _find_rviz_x11_window(self):
         """Find the main RViz2 X11 window ID using xdotool (without --onlyvisible for XWayland compat)."""
@@ -3240,17 +3301,46 @@ if ROS2_AVAILABLE:
             self.calib_pub.publish(msg)
             self.get_logger().info(f"Broadcasted Calibration: {calib_str}")
 else:
+    class DummyClock:
+        def now(self):
+            return self
+        def to_msg(self):
+            return self
+
+    class DummyPub:
+        def publish(self, msg):
+            pass
+
+    class DummyLogger:
+        def info(self, msg):
+            print(f"[GUI Info] {msg}")
+        def warn(self, msg):
+            print(f"[GUI Warn] {msg}")
+        def error(self, msg):
+            print(f"[GUI Error] {msg}")
+
     class CalibratedGUINode:
         def __init__(self):
             self.gui_ref = None
+            self._clock = DummyClock()
+            self._logger = DummyLogger()
+            self.joint_pub = DummyPub()
+            self.calib_pub = DummyPub()
+        def get_clock(self):
+            return self._clock
+        def get_logger(self):
+            return self._logger
         def publish_calibration(self, calib_str):
+            pass
+        def destroy_node(self):
             pass
 
 
 def main(args=None):
     if "QT_QPA_PLATFORM_PLUGIN_PATH" in os.environ and "cv2" in os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"]:
         del os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"]
-    rclpy.init(args=args)
+    if ROS2_AVAILABLE:
+        rclpy.init(args=args)
     ros_node = CalibratedGUINode()
 
     app = QApplication(sys.argv)
@@ -3264,7 +3354,7 @@ def main(args=None):
     gui.publish_joint_states()
 
     def _on_tick():
-        if rclpy.ok():
+        if ROS2_AVAILABLE and rclpy.ok():
             try:
                 rclpy.spin_once(ros_node, timeout_sec=0.001)
             except Exception:
@@ -3282,7 +3372,8 @@ def main(args=None):
         gui.gesture_process.waitForFinished(1000)
 
     ros_node.destroy_node()
-    rclpy.shutdown()
+    if ROS2_AVAILABLE:
+        rclpy.shutdown()
     sys.exit(exit_code)
 
 
