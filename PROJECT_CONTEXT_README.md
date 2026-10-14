@@ -18,12 +18,20 @@ This repository contains the complete codebase, URDF robot models, 3D STL mesh a
 
 ```text
 ./
-├── README.md                              # Main quick-start guide
+├── README.md                              # Main quick-start and system overview
 ├── PROJECT_CONTEXT_README.md              # Detailed project context & agent handoff documentation
+├── launch_dashboard.sh                    # Main launcher (Arm by default, flags: --quard, --dual, --web)
+├── launch_quard_dashboard.sh              # One-click launcher for Quard Bot (Quadruped)
+├── launch_dual_dashboard.sh               # One-click launcher for Dual Robots simultaneous view
+├── launch_web_dashboard.sh                # One-click launcher for Three.js WebGL twin
+├── launch_gesture_teleop.sh               # MediaPipe hand gesture teleoperation launcher
+├── docs/                                  # Documentation guides
+│   ├── QUICK_INSTALL_GUIDE.md             # Fast step-by-step ROS 2 & RViz2 setup
+│   └── DASHBOARD_AND_RVIZ_GUIDE.md        # Architecture, RViz docking & safety filtering guide
 ├── platformio.ini                         # PlatformIO configuration for ESP32/Arduino firmware
 ├── extracted_stls/                        # 29 binary STL files extracted from 3MF archives
 ├── scripts/
-│   └── convert_3mf_to_stl.py             # Python utility to convert 3MF archives into binary STL files
+│   └── convert_3mf_to_stl.py              # Python utility to convert 3MF archives into binary STL files
 ├── src/
 │   ├── main.cpp                           # Original VL53L1X ToF sensor code
 │   ├── main_servo.cpp                     # Microcontroller servo firmware (streams "ANGLE: 90.0")
@@ -36,18 +44,11 @@ This repository contains the complete codebase, URDF robot models, 3D STL mesh a
 ├── bts_motor_control/                     # Dual BTS7960 43A H-Bridge Motor Controller
 │   ├── README.md                          # BTS7960 wiring pinout & Bluetooth protocol guide
 │   └── firmware/                          # Modular & single-file C++ driver source
-
-
 ├── urdf/
-│   ├── single_servo.urdf                 # 1-DOF servo URDF model
-│   ├── robot_arm.urdf                    # 5-DOF robotic arm URDF model
-│   ├── servo_view.rviz                   # Tuned RViz display configuration for single servo
-│   ├── arm_view.rviz                     # Tuned RViz display configuration for multi-DOF arm
-│   ├── meshes/                           # Raw binary STL meshes for robot arm links
-│   └── unnamed/                          # Phobos exported complete robot model
-│       ├── urdf/unnamed.urdf             # Full exported URDF with links, revolute joints & mimic tags
-│       └── meshes/stl/                   # Collada/STL meshes exported by Phobos
-└── ros2_ws/                              # ROS 2 Colcon Workspace
+│   ├── arm/                               # 6-DOF Arm URDF, meshes, and tuned rviz config
+│   ├── quard_bot/                         # Quard Bot URDF, meshes, and tuned rviz config
+│   └── dual_robots.urdf                   # Combined multi-robot URDF & rviz config
+└── ros2_ws/                               # ROS 2 Colcon Workspace
     └── src/
         └── servo_joint_publisher/
             ├── package.xml
@@ -55,8 +56,10 @@ This repository contains the complete codebase, URDF robot models, 3D STL mesh a
             ├── setup.cfg
             └── servo_joint_publisher/
                 ├── __init__.py
+                ├── calibrated_joint_gui.py   # PyQt5 Dashboard with embedded RViz2 container
                 ├── servo_serial_publisher.py # Microcontroller USB serial state reader node
-                └── servo_simulator.py       # Automated 50 Hz sinusoidal trajectory generator node
+                ├── servo_simulator.py        # Automated 50 Hz sinusoidal trajectory generator node
+                └── web_dashboard/            # Three.js WebGL Digital Twin server & frontend
 ```
 
 ---
@@ -170,6 +173,11 @@ python3 scripts/convert_3mf_to_stl.py path/to/input.3mf extracted_stls
 ## 📝 6. Handoff Checklist for Future Agents
 
 - [x] ROS 2 Jazzy workspace `ros2_ws` compiled cleanly with `colcon build`.
+- [x] ROS 2 Jazzy, RViz2, and `xdotool` installation documented in `docs/QUICK_INSTALL_GUIDE.md`.
+- [x] PyQt5 Dashboard (`calibrated_joint_gui.py`) with side-by-side native RViz2 3D viewport embedding.
+- [x] Strict PID and window-class (`WM_CLASS == "rviz2"`) isolation to safeguard host IDE (Antigravity/VS Code) windows.
+- [x] Three.js WebGL Digital Twin fallback server running independently at `http://localhost:8000`.
+- [x] Dual-robot simultaneous visualization support (`launch_dual_dashboard.sh`).
 - [x] Phobos add-on installed and configured for Blender 5.2.0 LTS.
 - [x] All 29 STL mesh files converted to valid binary STL format.
 - [x] Phobos export bug fixes applied directly to `blender2phobos.py` and `xmlrobot.py`.

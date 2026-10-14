@@ -33,8 +33,7 @@ if [ "$USE_WEB" = true ]; then
   exec python3 "$SCRIPT_DIR/ros2_ws/src/servo_joint_publisher/servo_joint_publisher/web_dashboard/server.py"
 fi
 
-# Environment for Native Desktop App
-export LD_LIBRARY_PATH="/home/sabo/miniconda3/lib:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}:/home/sabo/miniconda3/lib"
 export QT_QPA_PLATFORM=xcb
 export ROBOT_TARGET="$ROBOT_MODE"
 
