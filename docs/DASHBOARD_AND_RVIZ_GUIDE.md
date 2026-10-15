@@ -19,9 +19,9 @@ Both drive the same robots and read/write the same `servo_calibration.json`.
 ├────────────────────────────────────────────────────────────────────────────────────────┤
 │ (red banner while E-STOP is engaged)                                                   │
 ├─────────────────────────────────────────┬──────────────────────────────────────────────┤
-│  [ 🦾 Robot Arm | 🤖 Quard Bot | 🚀 Rover ]│  🧊 Embedded RViz2 viewport                │
+│  [ 🦾 Arm | 🤖 Quard | 🚀 Rover | 🐕 Dogu ]│  🧊 Embedded RViz2 viewport                │
 │                                         │                                              │
-│  MOTION       Start Sim · Go Home ·     │   Arm / Quard / Dual robot models            │
+│  MOTION       Start Sim · Go Home ·     │   Arm / Quard / Dual / Dogu robot models     │
 │               Center All · Gesture      │                                              │
 │  CALIBRATION  Set Home · Sync · Comm    │   (falls back to the Three.js WebGL twin     │
 │               ························ Save│    when RViz2 is not installed)              │
@@ -36,7 +36,7 @@ Both drive the same robots and read/write the same `servo_calibration.json`.
 - **Header:** the ROS 2 badge shows whether the app is publishing `/joint_states`. "ROS 2 not found: UI only" means nothing reaches the robots.
 - **Dividers:** both the left/right split and the joints/console split can be dragged.
 - **Connections and consoles:** every tab has a link card and a console; see [section 4](#-4-connections--consoles).
-- **Remembered layout:** window size and both divider positions are saved on exit to `~/.config/CodeForIndia/RobotDashboard.conf`. Delete that file to reset. The starting tab follows the launcher (`--quard` opens the Quard Bot tab).
+- **Remembered layout:** window size and both divider positions are saved on exit to `~/.config/CodeForIndia/RobotDashboard.conf`. Delete that file to reset. The starting tab follows the launcher (`--quard` opens the Quard Bot tab, `--dogu` the Dogu tab).
 - **Feedback:** saving shows a status-bar message instead of a popup. Errors still open a dialog.
 
 ---
@@ -88,6 +88,18 @@ The dashboard embeds the native **RViz2** 3D viewport side-by-side using an X11 
 - **IMU (MPU6050):** accelerometer, gyroscope, pitch/roll, **Tare Horizon**.
 - **GPS & storage:** NEO-6M fix, coordinates, satellites, microSD status, uptime.
 - **Console:** the raw stream from the node plus connection events.
+
+### 🐕 Dogu (12-joint quadruped, model preview)
+Dogu has no firmware or link yet, so this tab only moves the 3D model: nothing is sent to a robot. In the desktop app the angles go out on `/joint_states`, so RViz shows them when started with `./launch_dogu_dashboard.sh` (or `./launch_dashboard.sh --dogu`).
+- **Poses:** Stand, Crouch, Sit. The model eases into each pose in about 0.6 s and holds it.
+- **Moves:** Walk (trot), Turn left, Turn right, Wave (front-right paw), Idle (breathing). These loop until you press **Stop** or pick something else.
+- **Speed:** 0.25× to 2×.
+- **Joint angles:** a live table of all 12 joints (hip, femur, tibia per leg), in degrees from standing.
+- **Console:** what was played, and load errors (for example a missing `urdf/dogu/animations.json`).
+- **E-STOP** stops the animation and blocks new ones until released.
+- In the web twin the body is levelled and lowered so the lowest feet touch the ground.
+
+The poses and clips are generated, not hand-edited: see [`urdf/dogu/README.md`](../urdf/dogu/README.md).
 
 ---
 
@@ -160,7 +172,8 @@ ros2 topic pub --once /servo_calibration std_msgs/msg/String "{data: 'LINK:PORT=
 Press the **E-STOP** button in the header or press **Esc**. It:
 1. stops the arm simulation, homing and gesture mode (the arm holds its current pose);
 2. cancels Quard Bot gaits and animations and sends `stand` immediately;
-3. locks the motion controls and shows a red banner until you press **Release**.
+3. stops the Dogu model animation;
+4. locks the motion controls and shows a red banner until you press **Release**.
 
 > ⚠️ This is a **software stop**. It does not cut servo power, and it can't help if the dashboard has lost contact with a robot. Keep a hardware power switch within reach.
 
@@ -199,7 +212,7 @@ Walk keys are ignored while E-STOP is engaged.
 | `--host 0.0.0.0` | Allow other devices on the network (phones/tablets). **No authentication**: anyone on the network can move the robots. |
 | `--port N` / `PORT=N` | Listen on another port |
 
-**Layout:** robot tabs on the left and the Three.js twin on the right. Under 1100 px wide the twin moves on top; phone widths are supported. The last tab is remembered.
+**Layout:** robot tabs (Arm, Quard Bot, Sensor Node, Dogu) on the left and the Three.js twin on the right. The twin's **Model** menu follows the tab, or can be pinned to one robot (Dogu included). Under 1100 px wide the twin moves on top; phone widths are supported. The last tab is remembered.
 
 **Header badges:**
 - **Arm:** the commander's link state: `Online · Serial`, `No reply`, `Mode mismatch`, `Port error`, `No commander`, or `UI only (no ROS)` when rclpy wasn't available.

@@ -16,52 +16,9 @@ This repository contains the complete codebase, URDF robot models, 3D STL mesh a
 
 ## 📁 2. File & Directory Structure
 
-```text
-./
-├── README.md                              # Main quick-start and system overview
-├── PROJECT_CONTEXT_README.md              # Detailed project context & agent handoff documentation
-├── launch_dashboard.sh                    # Main launcher (Arm by default, flags: --quard, --dual, --web)
-├── launch_quard_dashboard.sh              # One-click launcher for Quard Bot (Quadruped)
-├── launch_dual_dashboard.sh               # One-click launcher for Dual Robots simultaneous view
-├── launch_web_dashboard.sh                # One-click launcher for Three.js WebGL twin
-├── launch_gesture_teleop.sh               # MediaPipe hand gesture teleoperation launcher
-├── docs/                                  # Documentation guides
-│   ├── QUICK_INSTALL_GUIDE.md             # Fast step-by-step ROS 2 & RViz2 setup
-│   └── DASHBOARD_AND_RVIZ_GUIDE.md        # Architecture, RViz docking & safety filtering guide
-├── platformio.ini                         # PlatformIO configuration for ESP32/Arduino firmware
-├── extracted_stls/                        # 29 binary STL files extracted from 3MF archives
-├── scripts/
-│   └── convert_3mf_to_stl.py              # Python utility to convert 3MF archives into binary STL files
-├── src/
-│   ├── main.cpp                           # Original VL53L1X ToF sensor code
-│   ├── main_servo.cpp                     # Microcontroller servo firmware (streams "ANGLE: 90.0")
-│   ├── bts7960_motor_bt.cpp               # ESP32 Bluetooth BTS7960 motor driver firmware
-│   └── quadruped_sesame.cpp               # Sesame 8-servo quadruped robot firmware
-├── Quard bot/                             # Sesame Quadruped Robot CAD meshes & firmware
-│   ├── README.md                          # PCA9685 pinout, OLED graphics & Web AP guide
-│   ├── stl/                               # 10x 3D printable STL mesh parts (L1..L4, R1..R4, Frame, Covers)
-│   └── firmware/                          # ESP32 firmware (PCA9685, SSD1306 OLED, WebServer)
-├── bts_motor_control/                     # Dual BTS7960 43A H-Bridge Motor Controller
-│   ├── README.md                          # BTS7960 wiring pinout & Bluetooth protocol guide
-│   └── firmware/                          # Modular & single-file C++ driver source
-├── urdf/
-│   ├── arm/                               # 6-DOF Arm URDF, meshes, and tuned rviz config
-│   ├── quard_bot/                         # Quard Bot URDF, meshes, and tuned rviz config
-│   └── dual_robots.urdf                   # Combined multi-robot URDF & rviz config
-└── ros2_ws/                               # ROS 2 Colcon Workspace
-    └── src/
-        └── servo_joint_publisher/
-            ├── package.xml
-            ├── setup.py
-            ├── setup.cfg
-            └── servo_joint_publisher/
-                ├── __init__.py
-                ├── calibrated_joint_gui.py   # PyQt5 Dashboard with embedded RViz2 container
-                ├── servo_serial_commander.py # /joint_states → arm ESP32 (serial or Wi-Fi UDP), owns the serial port
-                ├── servo_serial_publisher.py # Microcontroller USB serial state reader node
-                ├── servo_simulator.py        # Automated 50 Hz sinusoidal trajectory generator node
-                └── web_dashboard/            # Three.js WebGL Digital Twin server & frontend
-```
+The directory map lives in one place, **[`PROJECT_MAP.md`](../PROJECT_MAP.md)** at the repo root, so it can't drift out of sync with copies here. It covers where to find each thing, the runtime data flow, topics and ports, and known pitfalls. Rules for changing the repo are in [`AGENTS.md`](../AGENTS.md).
+
+In short: runtime code is in `ros2_ws/`, runtime robot models are in `urdf/`, firmware is in `src/` (PlatformIO), CAD sources are in `cad/`, PCBs are in `hardware/`, and documents are in `docs/`.
 
 ---
 
@@ -146,15 +103,18 @@ The Phobos add-on (installed in `~/.config/blender/4.2/scripts/addons/phobos/`, 
 
 ## 🚀 5. Execution & Simulation Commands
 
-### A. Launch Full Exported Robot Arm in RViz2
+### A. Launch a Robot Model in RViz2
 ```bash
 source /opt/ros/jazzy/setup.bash
 cd <project-root>
 
-ros2 launch urdf_tutorial display.launch.py \
-  model:=$(pwd)/urdf/unnamed/urdf/unnamed.urdf \
-  rvizconfig:=$(pwd)/urdf/arm_view.rviz
+# robot:= arm | quard | dual | dogu  (simulate:=true runs the arm simulator)
+ros2 launch urdf/unnamed/display_ros2.launch.py robot:=arm simulate:=false
 ```
+The launch file reads `urdf/<robot>/urdf/<robot>.urdf` and rewrites the absolute
+`file:///home/sabo/Documents/learn_/Hardware` mesh prefix to wherever the repo lives.
+`urdf/unnamed/urdf/unnamed.urdf` is no longer the arm: upstream commit `7944d8d`
+replaced it with Dogu's raw Phobos export (also kept in `cad/dogu/phobos_export/`).
 
 ### B. Run Automated Motion Simulator Node
 ```bash
@@ -174,7 +134,7 @@ ros2 run servo_joint_publisher servo_serial_publisher --ros-args -p port:=/dev/t
 
 ### D. Convert 3MF Archives to Binary STLs
 ```bash
-python3 scripts/convert_3mf_to_stl.py path/to/input.3mf extracted_stls
+python3 scripts/convert_3mf_to_stl.py path/to/input.3mf cad/arm/extracted_stls
 ```
 
 ---
@@ -198,9 +158,14 @@ python3 scripts/convert_3mf_to_stl.py path/to/input.3mf extracted_stls
 - [x] Quard commands match the firmware: channel moves send `deg` (not `angle`); active gait is resent every 1 s to satisfy the 2 s `LOCOMOTION_WATCHDOG_MS`.
 - [x] Link monitoring: `servo_serial_commander` publishes `/esp32_link_state` (JSON, transient local) and `/esp32_console`, and accepts `RAW:` / `LINK:` commands (raw joint CMDs clamped to limits).
 - [x] Connection cards + shared console in every tab of both dashboards (`ConsoleWidget` in the Qt GUI; `ConsolePanel` + `/api/console` in the web UI). Late Quard motion commands (>2 s) are dropped, never replayed.
+- [x] Dogu (12-joint quadruped) added as a model preview: `scripts/dogu/export_dogu_from_blender.py` exports `cad/dogu/Dogu.blend` to metric meshes and joint frames, `scripts/dogu/build_dogu.py` solves the standing pose (IK) and writes `urdf/dogu/` (URDF with zero = standing, `model.json`, `animations.json`). Both dashboards have a Dogu tab with poses and looping clips; `./launch_dogu_dashboard.sh` shows it in RViz.
+- [x] Repo reorganised: CAD sources in `cad/`, PCB and motor-driver hardware in `hardware/`, documents and diagrams in `docs/`, byte-identical duplicate STLs and firmware removed, `PROJECT_MAP.md` + `AGENTS.md` added.
 - [x] No fake rover data: the simulated sensor source and every placeholder reading were removed from both dashboards and the web server. Unknown readings are `None` / "--", JSON replies only update the fields they contain, and changing source clears readings.
 - [ ] Quard firmware has no `face` command; the OLED face buttons get `400 Bad Args`.
 - [ ] Desktop app: arm **Start Sim** also starts the Quard Bot walking. Decide whether to decouple them.
 - [ ] `launch_gesture_teleop.sh` and `launch_quard_rviz.sh` still hardcode `/home/sabo/Documents/learn_/Hardware`.
+- [ ] Dogu has no firmware, servo map or real joint limits yet; its ±90° limits and animations are provisional. Hardware questions for the owner: which controller and servo driver, the channel for each joint, the servo neutral and travel, and how it should connect (Wi-Fi HTTP like Quard, or UDP like the arm).
+- [ ] Upstream commit `7944d8d` raised every arm joint's `servo_max_deg` to 180 in `servo_calibration.json`. Check this against the physical end stops.
+- [ ] `docs/QUARD_BOT.md` publishes the Quard Bot's Wi-Fi AP password.
 
-See [`docs/DASHBOARD_AND_RVIZ_GUIDE.md`](docs/DASHBOARD_AND_RVIZ_GUIDE.md) for the user-facing description of both dashboards.
+See [`DASHBOARD_AND_RVIZ_GUIDE.md`](DASHBOARD_AND_RVIZ_GUIDE.md) for the user-facing description of both dashboards.

@@ -1,28 +1,33 @@
 # 🤖 Quard Bot (Sesame Quadruped Robot)
 
-This folder contains the **3D printable CAD mesh assets (STLs)** and **ESP32 firmware** for the **Sesame 8-Servo Quadruped Robot**, featuring an integrated PCA9685 servo driver, SSD1306 OLED animated face display, brownout-proof staggered servo startup, and a dark-mode Web AP dashboard.
+This guide covers the **3D printable CAD mesh assets (STLs)** and **ESP32 firmware** for the **Sesame 8-Servo Quadruped Robot**, featuring an integrated PCA9685 servo driver, SSD1306 OLED animated face display, brownout-proof staggered servo startup, and a dark-mode Web AP dashboard.
 
 ---
 
-## 📁 Directory Structure
+## 📁 Where the Quard Bot files are
+
+| What | Path |
+|---|---|
+| Firmware (PlatformIO env `quard_bot`) | `src/quadruped_sesame.cpp` (build: `pio run -e quard_bot -t upload`) |
+| Printable STLs (11 parts) | `cad/quard_bot/stl/` |
+| Runtime URDF + meshes (RViz, web twin) | `urdf/quard_bot/urdf/quard_bot.urdf`, `urdf/quard_bot/meshes/` |
+| URDF generator | `scripts/build_configured_urdf.py` |
+| Blender leg-rig helper | `scripts/setup_r1_r3.py` |
+| Dashboard code | the Quard tab in `calibrated_joint_gui.py` (`QuardBotWidget`) and `web_dashboard/static/app.js` |
 
 ```text
-Quard bot/
-├── README.md                          # Comprehensive technical documentation & pinout guide
-├── stl/                               # 3D Printable STL files (Chassis, legs, covers)
-│   ├── Bottom-Cover-v121.stl          # Lower chassis base cover
-│   ├── Internal-Frame-v121.stl        # Internal mounting frame for ESP32 & PCA9685
-│   ├── L1-v117.stl                    # Left Front Hip Link (Servo Ch 2)
-│   ├── L3-v117.stl                    # Left Front Foot Link (Servo Ch 6)
-│   ├── L4-v117.stl                    # Left Rear Foot Link (Servo Ch 7)
-│   ├── R1-v117.stl                    # Right Front Hip Link (Servo Ch 0)
-│   ├── R2-v117.stl                    # Right Rear Hip Link (Servo Ch 1)
-│   ├── R3-v117.stl                    # Right Front Foot Link (Servo Ch 5)
-│   ├── R4-v117.stl                    # Right Rear Foot Link (Servo Ch 4)
-│   └── Top-Cover-Enclosed-v117.stl    # Top enclosure cover
-└── firmware/                          # ESP32 Firmware Source
-    └── src/
-        └── main.cpp                    # Full Sesame Robot firmware (PCA9685, OLED, Web Server)
+cad/quard_bot/stl/
+├── Bottom-Cover-v121.stl          # Lower chassis base cover
+├── Internal-Frame-v121.stl        # Internal mounting frame for ESP32 & PCA9685
+├── L1-v117.stl                    # Left Front Hip Link (Servo Ch 2)
+├── L2-v117.stl                    # Left Rear Hip Link (Servo Ch 3)
+├── L3-v117.stl                    # Left Front Foot Link (Servo Ch 6)
+├── L4-v117.stl                    # Left Rear Foot Link (Servo Ch 7)
+├── R1-v117.stl                    # Right Front Hip Link (Servo Ch 0)
+├── R2-v117.stl                    # Right Rear Hip Link (Servo Ch 1)
+├── R3-v117.stl                    # Right Front Foot Link (Servo Ch 5)
+├── R4-v117.stl                    # Right Rear Foot Link (Servo Ch 4)
+└── Top-Cover-Enclosed-v117.stl    # Top enclosure cover
 ```
 
 ---

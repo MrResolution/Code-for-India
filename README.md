@@ -5,7 +5,7 @@
 [![3D Viewport](https://img.shields.io/badge/3D_Viewport-Embedded_RViz2_%2B_Three.js-blue)](docs/DASHBOARD_AND_RVIZ_GUIDE.md)
 [![Microcontroller](https://img.shields.io/badge/Firmware-ESP32_%2F_Arduino-e7352f?logo=espressif&logoColor=white)](src/)
 
-A unified robotics engineering platform featuring a **Multi-DOF Robotic Arm with a parallel geared gripper**, an **8-servo Sesame Quadruped Robot ("Quard Bot")**, an **ESP32 Rover Telemetry Node**, and an **interactive PyQt5 Dashboard** with side-by-side **embedded native RViz2 3D visualization** and **Three.js WebGL digital twins**.
+A unified robotics engineering platform featuring a **Multi-DOF Robotic Arm with a parallel geared gripper**, an **8-servo Sesame Quadruped Robot ("Quard Bot")**, an **ESP32 Rover Telemetry Node**, **Dogu** (a 12-joint quadruped, model preview only for now), and an **interactive PyQt5 Dashboard** with side-by-side **embedded native RViz2 3D visualization** and **Three.js WebGL digital twins**.
 
 ---
 
@@ -23,11 +23,16 @@ From the project root directory:
 # ⚡ Launch Dual Robots (Arm + Quadruped simultaneously in RViz2)
 ./launch_dual_dashboard.sh
 
+# 🐕 Launch Dogu (12-joint quadruped model preview + animations) in RViz2
+./launch_dogu_dashboard.sh
+
 # 🌐 Launch Standalone WebGL 3D Dashboard (Browser: http://localhost:8000)
 ./launch_web_dashboard.sh                  # add --host 0.0.0.0 for phones/tablets (no auth!)
 ```
 
 > ⛔ **E-STOP:** both dashboards have an E-STOP button in the header (or press **Esc**). It stops all dashboard-driven motion and locks the controls. It is a software stop and does not cut servo power. See [Safety Controls](docs/DASHBOARD_AND_RVIZ_GUIDE.md#-5-safety-controls).
+
+> 🗺️ **New to the repo (human or AI agent)?** Start with [PROJECT_MAP.md](PROJECT_MAP.md): where everything lives, how the pieces talk, and the pitfalls.
 
 > **First time running?** See the [🛠️ Quick Installation Guide](docs/QUICK_INSTALL_GUIDE.md) to set up ROS 2 Jazzy, RViz2, and `xdotool` in under 3 minutes.
 
@@ -55,6 +60,9 @@ From the project root directory:
   - "📍 Set Low" and "📍 Set High" safety boundary calibration (the web UI shows the saved range on each slider).
   - Smooth homing (`🏠 Go Home`), `📌 Set Home`, and automated sinusoidal motion simulation.
   - Save calibration with `💾 Save Config` or Ctrl+S (desktop).
+- **Dogu (12-joint quadruped, preview)**:
+  - Its own tab in both UIs: Stand / Crouch / Sit poses and Walk, Turn, Wave and Idle animations, with a speed slider and live joint angles.
+  - The model is built from `cad/dogu/Dogu.blend` by `scripts/dogu/`. There is no Dogu firmware yet, so nothing is sent to a robot.
 - **Rover Telemetry & Sensors**:
   - Climate: DHT11 & BMP280 temperature, humidity, and barometric pressure.
   - Hazards: MQ Gas, water level, and optical flame detector with emergency fire alerts.
@@ -65,42 +73,22 @@ From the project root directory:
 
 ## 📂 Project Structure
 
+The full map, with "where do I find X" tables, data flow, topics, ports and pitfalls, is in **[PROJECT_MAP.md](PROJECT_MAP.md)**.
+
 ```text
 .
-├── launch_dashboard.sh             # Main dashboard launcher (Arm by default, flags: --quard, --dual, --web)
-├── launch_quard_dashboard.sh       # One-click launcher for Quard Bot (Quadruped)
-├── launch_dual_dashboard.sh        # One-click launcher for Dual Robots simultaneous view
-├── launch_web_dashboard.sh         # One-click launcher for WebGL Three.js twin
-├── launch_gesture_teleop.sh        # MediaPipe hand gesture teleoperation launcher
-│
-├── docs/                           # Clean documentation & guides
-│   ├── QUICK_INSTALL_GUIDE.md      # Fast step-by-step ROS 2 & RViz2 setup
-│   └── DASHBOARD_AND_RVIZ_GUIDE.md # Deep-dive into dashboard layout & window docking
-│
-├── ros2_ws/                        # ROS 2 Colcon Workspace
-│   └── src/servo_joint_publisher/  # Main ROS 2 package
-│       ├── servo_joint_publisher/
-│       │   ├── calibrated_joint_gui.py   # PyQt5 Dashboard with embedded RViz2 container
-│       │   ├── servo_serial_commander.py # Sends /joint_states to the arm ESP32 (serial or Wi-Fi)
-│       │   ├── servo_serial_publisher.py # ESP32 USB serial joint state reader
-│       │   ├── servo_simulator.py        # Automated trajectory generator
-│       │   └── web_dashboard/            # Three.js WebGL Digital Twin server & frontend
-│
-├── urdf/                           # Robot URDF models & RViz configurations
-│   ├── arm/                        # 6-DOF Arm URDF, meshes, and tuned rviz config
-│   ├── quard_bot/                  # Quard Bot URDF, meshes, and tuned rviz config
-│   └── dual_robots.urdf            # Combined multi-robot URDF & rviz config
-│
-├── Quard bot/                      # Sesame Quadruped Robot STLs & firmware
-│   ├── stl/                        # 3D printable STL parts (L1..L4, R1..R4, Frame)
-│   └── firmware/                   # ESP32 firmware (PCA9685, SSD1306 OLED, WebServer)
-│
-├── arm/                            # Blender 3D models & STL part files
-├── extracted_stls/                 # STL parts extracted from 3MF archives
-├── bts_motor_control/              # Dual BTS7960 43A H-Bridge Motor Controller
-├── robotic_arm_motherboard/        # Modular Carrier PCB, KiCad files & Gerbers
-├── src/                            # Embedded C++ firmware (PlatformIO)
-└── platformio.ini                  # PlatformIO environment configuration
+├── launch_*.sh            # One-click launchers (dashboard, quard, dual, dogu, web, gesture teleop)
+├── run_all.sh             # Older all-in-one launcher (sim / real menu)
+├── servo_calibration.json # Arm calibration, read and written by both dashboards
+├── ros2_ws/               # ROS 2 package servo_joint_publisher: dashboards, commanders, web twin
+├── urdf/                  # Runtime robot models used by RViz and the web twin
+│   ├── arm/  quard_bot/  dogu/  dual_robots.urdf
+│   └── unnamed/           # Arm launch file (display_ros2.launch.py), sim + legacy Gazebo tools
+├── src/  include/  lib/   # ESP32 / ESP8266 firmware (PlatformIO; envs in platformio.ini)
+├── scripts/               # Model build tools (Dogu export/build, Quard/arm URDF generator, 3MF→STL)
+├── cad/                   # Source CAD: Blender scenes and printable STLs (not loaded at runtime)
+├── hardware/              # Carrier PCB (KiCad, Gerbers) and the BTS7960 motor controller
+└── docs/                  # Guides, Quard Bot manual, project context, presentation, diagrams
 ```
 
 ---
@@ -132,15 +120,30 @@ From the project root directory:
 | **Ch 6** | Left Rear (L4)   | Knee Joint | 45° |
 | **Ch 7** | Left Front (L3)  | Knee Joint | 45° |
 
+### 3. Dogu (12-joint quadruped, model preview)
+
+| Joints | Legs | Role | Zero |
+|---|---|---|---|
+| `{fl,fr,bl,br}_hip_joint` | front/back × left/right | Abduction (leg out to the side) | Standing |
+| `{fl,fr,bl,br}_femur_joint` | | Upper leg pitch | Standing |
+| `{fl,fr,bl,br}_tibia_joint` | | Knee | Standing |
+
+Every joint turns about its own z axis and reads 0 in the standing pose. The ±90° limits are provisional until Dogu has servos and firmware.
+
 ---
 
 ## 📚 Documentation Reference
 
+- **[Project Map](PROJECT_MAP.md)**: directory map, where to find things, data flow, topics, ports and pitfalls. Start here.
+- **[Agent Guide](AGENTS.md)**: rules and checks for AI coding agents (and humans) changing this repo.
 - **[Quick Installation Guide](docs/QUICK_INSTALL_GUIDE.md)**: ROS 2 Jazzy, RViz2, and `xdotool` setup.
 - **[Dashboard & RViz Docking Guide](docs/DASHBOARD_AND_RVIZ_GUIDE.md)**: Both UIs, control panels, connections & consoles, E-STOP and safety, keyboard shortcuts, web dashboard options, troubleshooting.
-- **[Project Context & Handoff](PROJECT_CONTEXT_README.md)**: Phobos patch details, gripper mimic joint math, and developer notes.
-- **[Quard Bot Firmware & Hardware](Quard%20bot/README.md)**: Pinouts, OLED animations, and Web AP instructions.
-- **[Robotic Arm Carrier PCB](robotic_arm_motherboard/README.md)**: Custom KiCad carrier board and Gerbers.
+- **[Project Context & Handoff](docs/PROJECT_CONTEXT.md)**: Phobos patch details, gripper mimic joint math, and developer notes.
+- **[Quard Bot Firmware & Hardware](docs/QUARD_BOT.md)**: Pinouts, OLED animations, Web AP instructions and the HTTP API.
+- **[Dogu model](urdf/dogu/README.md)**: how the Dogu URDF and animations are built from the Blender scene.
+- **[Robotic Arm Carrier PCB](hardware/robotic_arm_motherboard/README.md)**: Custom KiCad carrier board and Gerbers.
+- **[CAD sources](cad/README.md)**: Blender scenes and printable STLs for every robot.
+- **[Project Presentation](docs/PROJECT_PRESENTATION.md)**: the long-form project write-up.
 
 ---
 

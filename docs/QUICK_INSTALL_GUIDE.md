@@ -78,10 +78,11 @@ From the repository root directory, run any of the dedicated launch scripts:
 | **🤖 Quard Bot (Quadruped)** | `./launch_quard_dashboard.sh` | Desktop GUI + Embedded RViz2 |
 | **🦾 6-DOF Robotic Arm** | `./launch_dashboard.sh` | Desktop GUI + Embedded RViz2 |
 | **⚡ Dual Robots (Both)** | `./launch_dual_dashboard.sh` | Desktop GUI + Embedded RViz2 |
+| **🐕 Dogu (model preview)** | `./launch_dogu_dashboard.sh` | Desktop GUI + Embedded RViz2 |
 | **🌐 WebGL Browser Twin** | `./launch_web_dashboard.sh` | Three.js Web (http://localhost:8000) |
 | **🎮 Gesture Teleoperation** | `./launch_gesture_teleop.sh` | MediaPipe Hand Tracking |
 
-The dashboard launchers (`launch_dashboard.sh`, `launch_quard_dashboard.sh`, `launch_dual_dashboard.sh`, `launch_web_dashboard.sh`) find the project from their own location (`ROBOT_PROJECT_DIR`), so the repository can live anywhere. `launch_gesture_teleop.sh` and `launch_quard_rviz.sh` still expect it at `/home/sabo/Documents/learn_/Hardware`.
+The dashboard launchers (`launch_dashboard.sh`, `launch_quard_dashboard.sh`, `launch_dual_dashboard.sh`, `launch_dogu_dashboard.sh`, `launch_web_dashboard.sh`) find the project from their own location (`ROBOT_PROJECT_DIR`), so the repository can live anywhere. `launch_gesture_teleop.sh` and `launch_quard_rviz.sh` still expect it at `/home/sabo/Documents/learn_/Hardware`.
 
 Web dashboard options: `--no-commander` (don't start `servo_serial_commander`), `--host 0.0.0.0` (reachable from phones/tablets on your network; there is no authentication), `--port N`.
 
