@@ -36,6 +36,11 @@ import socket
 import collections
 import urllib.error
 
+try:
+    from . import rover_link          # installed package (ros2 run / ros2 launch)
+except ImportError:
+    import rover_link                 # run as a script from the checkout
+
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QSlider, QDoubleSpinBox, QPushButton, QGroupBox,
@@ -2272,29 +2277,9 @@ class QuardBotWidget(QWidget):
 
 
 # Rover readings before (or between) real data: None means "no reading", shown
-# as "--" instead of a made-up value.
-EMPTY_SENSOR_READINGS = {
-    "temperature": None, "temp_dht": None, "humidity": None, "temp_bmp": None, "pressure": None,
-    "dht_error": None, "accel": None, "gyro": None, "pitch": None, "roll": None,
-    "raw_pitch": None, "raw_roll": None, "gas": None, "water": None, "flame": None,
-    "air_quality": None, "lat": None, "lng": None, "gps_valid": None, "gps_sats": None,
-    "alert": None, "sd_ok": None, "uptime_ms": None,
-}
-
-
-def _reading(d, keys, cast=float):
-    """First present, finite value among keys in a rover JSON reply, else None."""
-    for k in keys:
-        if d.get(k) is None:
-            continue
-        try:
-            v = float(d[k])
-        except (TypeError, ValueError):
-            return None
-        if not math.isfinite(v):
-            return None
-        return int(v) if cast is int else v
-    return None
+# as "--" instead of a made-up value. Parsing lives in rover_link.py, shared
+# with the web dashboard.
+EMPTY_SENSOR_READINGS = rover_link.EMPTY_READINGS
 
 
 # Badge styles for the rover read-outs
@@ -2341,6 +2326,7 @@ class ESP32SensorNodeWidget(QWidget):
         self.active_baud = None
         self.link_phase = 'off'
         self.link_error = ''
+        self.link_note = ''         # what the board turned out to be, e.g. "Sensor_Rover (src/rover.cpp) found…"
         self.last_rx = 0.0
         self.phase_since = time.time()
         self.rx_times = collections.deque(maxlen=200)
@@ -2376,7 +2362,7 @@ class ESP32SensorNodeWidget(QWidget):
         self.lbl_fire_banner.setVisible(False)
         main_layout.addWidget(self.lbl_fire_banner)
 
-        # ── 1. Connection card: Wi-Fi (HTTP /data) or USB serial ───────────
+        # ── 1. Connection card: Wi-Fi (UDP rover protocol or HTTP /data) or USB serial
         conn_box = QGroupBox("🔌 Rover Connection")
         conn_box.setStyleSheet("""
             QGroupBox { font-weight: bold; font-size: 13px; border: 1px solid #444; border-radius: 6px; margin-top: 6px; padding-top: 10px; background-color: #242424; color: #38bdf8; }
@@ -2391,7 +2377,9 @@ class ESP32SensorNodeWidget(QWidget):
         lbl_wifi.setStyleSheet("color: #cccccc; font-weight: bold; font-size: 12px;")
         lbl_wifi.setFixedWidth(70)
         self.txt_wifi_ip = QLineEdit(str(_ui_settings().value("rover/wifi_host", "192.168.1.100")))
-        self.txt_wifi_ip.setPlaceholderText("Rover IP, e.g. 192.168.1.50 (reads http://<ip>/data)")
+        self.txt_wifi_ip.setPlaceholderText("Rover IP or rover-sensors.local (UDP 8888; an http:// URL reads /data)")
+        self.txt_wifi_ip.setToolTip("src/rover.cpp answers on UDP port 8888 (host:port to change it).\n"
+                                    "An http://… address reads an older sensor node's /data page instead.")
         self.txt_wifi_ip.setStyleSheet(field_qss)
         self.txt_wifi_ip.returnPressed.connect(lambda: self.set_source('wifi'))
         self.btn_wifi_connect = QPushButton("🌐 Connect Wi-Fi")
@@ -2610,14 +2598,6 @@ class ESP32SensorNodeWidget(QWidget):
         main_layout.addWidget(log_box, 1)
 
     # ── Data source / connection ──────────────────────────────────────────
-    @staticmethod
-    def _wifi_url(text):
-        cur = (text or "").strip() or "192.168.1.100"
-        if not cur.startswith(("http://", "https://")):
-            cur = "http://" + cur
-        cur = cur.rstrip('/')
-        return cur if cur.endswith('/data') else cur + "/data"
-
     def source_label(self):
         if self.source == 'wifi':
             return f"Wi-Fi {self.active_url}"
@@ -2655,6 +2635,7 @@ class ESP32SensorNodeWidget(QWidget):
         self.source = src
         self.link_phase = 'connecting' if src in ('wifi', 'serial') else src
         self.link_error = ''
+        self.link_note = ''
         self.rx_times.clear()
         self.last_rx = 0.0
         self.phase_since = time.time()
@@ -2665,10 +2646,12 @@ class ESP32SensorNodeWidget(QWidget):
         st['connected'] = src == 'serial'
         self.on_data_updated(st)
         if src == 'wifi':
-            self.active_url = self._wifi_url(self.txt_wifi_ip.text())
-            _ui_settings().setValue("rover/wifi_host", self.txt_wifi_ip.text().strip())
+            text = self.txt_wifi_ip.text().strip()
+            link = rover_link.WifiRover(text)
+            self.active_url = link.label
+            _ui_settings().setValue("rover/wifi_host", text)
             self.console.log(f"Connecting to {self.active_url} …", 'info')
-            threading.Thread(target=self._wifi_worker, args=(gen, self.active_url), daemon=True).start()
+            threading.Thread(target=self._wifi_worker, args=(gen, link), daemon=True).start()
         elif src == 'serial':
             self.console.log(f"Opening {self.active_port} @ {self.active_baud} …", 'info')
             threading.Thread(target=self._serial_worker, args=(gen, self.active_port, self.active_baud), daemon=True).start()
@@ -2707,36 +2690,43 @@ class ESP32SensorNodeWidget(QWidget):
         self.sensor_state['port'], self.sensor_state['baudrate'] = port, baud
         self.set_source('serial')
 
-    def _wifi_worker(self, gen, url):
+    def _wifi_worker(self, gen, link):
+        """Poll the rover over Wi-Fi: UDP PING / CMD:read (src/rover.cpp), or HTTP /data."""
         failures = 0
-        while gen == self._gen:
-            try:
-                req = urllib.request.Request(url, headers={"User-Agent": "RobotArm-GUI/1.0"})
-                with urllib.request.urlopen(req, timeout=2.0) as resp:
-                    raw = resp.read().decode('utf-8', errors='ignore')
-                if gen != self._gen:
-                    return
-                if not self.parse_sensor_json(raw):
-                    raise ValueError(f"reply from {url} is not JSON: {raw.strip()[:60]!r}")
-                failures = 0
-                self.console.log(raw.strip()[:240], 'data')
-                self.link_signal.emit(gen, 'live', '')
-                self.update_data_signal.emit(self.sensor_state)
-                time.sleep(0.5)
-            except Exception as e:
-                if gen != self._gen:
-                    return
-                failures += 1
-                if isinstance(e, urllib.error.HTTPError) and e.code == 404:
-                    detail = f"HTTP 404: no /data page at {url}"
-                elif isinstance(e, ValueError):
-                    detail = str(e)
-                else:
-                    detail = describe_net_error(e)
-                self.link_signal.emit(gen, 'error', detail)
-                time.sleep(min(5.0, 0.5 * (2 ** min(failures, 4))))
+        label = link.label
+        try:
+            while gen == self._gen:
+                try:
+                    kind, raw = link.poll()
+                    if gen != self._gen:
+                        return
+                    if kind == 'json':
+                        if not self.parse_sensor_json(raw):
+                            raise rover_link.RoverLinkError(f"reply from {link.url} is not JSON: {raw.strip()[:60]!r}")
+                        got = True
+                    else:
+                        got = self.parse_sensor_line(raw)[0] in ('rover', 'reading')
+                    failures = 0
+                    if link.label != label:
+                        label = link.label
+                        self.link_signal.emit(gen, 'target', label)
+                    self.console.log(raw.strip()[:240], 'data')
+                    if got:
+                        self.link_signal.emit(gen, 'live', '')
+                        self.update_data_signal.emit(self.sensor_state)
+                    time.sleep(link.interval)
+                except Exception as e:      # RoverLinkError, or a reply that isn't JSON
+                    if gen != self._gen:
+                        return
+                    failures += 1
+                    self.link_signal.emit(gen, 'error', str(e))
+                    time.sleep(min(5.0, 0.5 * (2 ** min(failures, 4))))
+        finally:
+            link.close()
 
     def _serial_worker(self, gen, port, baud):
+        """Read the rover's serial port. A board that answers PING as the rover
+        (src/rover.cpp) is asked for readings; anything else is only listened to."""
         try:
             import serial
         except ImportError:
@@ -2744,19 +2734,19 @@ class ESP32SensorNodeWidget(QWidget):
             return
         while gen == self._gen:
             try:
-                with serial.Serial(port, baud, timeout=0.5) as ser:
+                with serial.Serial(port, baud, timeout=0.05) as ser:
                     self.link_signal.emit(gen, 'opened', f"{port} @ {baud}")
+                    reader = rover_link.SerialRover(ser)
                     while gen == self._gen:
-                        raw_bytes = ser.readline()
-                        if not raw_bytes:
-                            continue
-                        line = raw_bytes.decode('utf-8', errors='ignore').strip()
-                        if not line:
-                            continue
-                        self.parse_sensor_line(line)
-                        self.console.log(line, 'data')
-                        self.link_signal.emit(gen, 'live', '')
-                        self.update_data_signal.emit(self.sensor_state)
+                        for line in reader.read_lines():
+                            kind, name = self.parse_sensor_line(line)
+                            note = reader.saw(kind, name)
+                            self.console.log(line, 'data')
+                            if note:
+                                self.link_signal.emit(gen, 'note', note)
+                            if kind in ('rover', 'reading'):
+                                self.link_signal.emit(gen, 'live', '')
+                                self.update_data_signal.emit(self.sensor_state)
             except Exception as e:
                 if gen != self._gen:
                     return
@@ -2780,6 +2770,14 @@ class ESP32SensorNodeWidget(QWidget):
             self.console.log(f"Opened {detail}; waiting for data…", 'info')
             self.link_phase, self.link_error = 'waiting', ''
             self.phase_since = time.time()
+        elif state == 'target':         # Wi-Fi: the rover protocol or /data page answered
+            self.active_url = detail
+            self.console.log(f"Found {detail}", 'ok')
+            self._refresh_link()
+        elif state == 'note':           # serial: what the board turned out to be
+            self.link_note = detail
+            self.console.log(detail, 'warn' if 'not the rover' in detail else 'info')
+            self._refresh_link()
         elif state in ('error', 'fatal'):
             if detail != self.link_error:
                 self.console.log(f"{self.source_label()}: {detail}", 'error')
@@ -2800,11 +2798,13 @@ class ESP32SensorNodeWidget(QWidget):
         else:
             target = self.source_label()
             phase = self.link_phase
+            device = self.sensor_state.get('device') if src == 'serial' else None
+            if device:
+                target += f" · {device}"
             if phase == 'live' and now - self.last_rx < 5.0:
                 rate = sum(1 for t in self.rx_times if now - t < 5.0) / 5.0
-                unit = "updates/s" if src == 'wifi' else "lines/s"
                 kind, label = 'ok', "Live"
-                detail = f"{target} · {rate:.1f} {unit} · last {now - self.last_rx:.1f} s ago"
+                detail = f"{target} · {rate:.1f} updates/s · last {now - self.last_rx:.1f} s ago"
             elif phase == 'live':
                 kind, label = 'warn', "No data"
                 detail = f"{target} · nothing for {now - self.last_rx:.0f} s"
@@ -2814,8 +2814,11 @@ class ESP32SensorNodeWidget(QWidget):
             elif phase == 'waiting':
                 kind, label = 'busy', "Waiting for data"
                 detail = target
-                if now - self.phase_since > 5.0:
-                    detail += " · port open but silent: wrong baud rate, or the board isn't sending?"
+                if self.link_note:
+                    detail += f" · {self.link_note}"
+                elif now - self.phase_since > 5.0:
+                    detail += (" · no readings yet: still starting (the rover tries Wi-Fi for up to 20 s),"
+                               " wrong baud rate, or the board isn't sending?")
             elif phase == 'error':
                 kind, label = 'error', "Error"
                 detail = f"{target} · {self.link_error} · retrying"
@@ -2835,153 +2838,11 @@ class ESP32SensorNodeWidget(QWidget):
     def parse_sensor_json(self, raw_str):
         """Apply a /data JSON reply. Only fields present in the reply change;
         nothing is filled in. Returns False if it isn't a JSON object."""
-        try:
-            d = json.loads(raw_str)
-        except Exception:
-            return False
-        if not isinstance(d, dict):
-            return False
-        st = self.sensor_state
-        st["raw_log"].append(f"[JSON] {raw_str[:90]}...")
-        if len(st["raw_log"]) > 100:
-            st["raw_log"].pop(0)
-
-        for key, keys, cast in (("temp_dht", ("temp_dht", "temperature"), float),
-                                ("humidity", ("humidity",), float),
-                                ("temp_bmp", ("temp_bmp",), float),
-                                ("pressure", ("pressure",), float),
-                                ("gas", ("air", "gas"), int),
-                                ("water", ("water",), int),
-                                ("flame", ("flame",), int),
-                                ("lat", ("lat",), float),
-                                ("lng", ("lng",), float),
-                                ("gps_sats", ("gps_sats",), int),
-                                ("uptime_ms", ("uptime_ms",), int)):
-            v = _reading(d, keys, cast)
-            if v is not None:
-                st[key] = v
-        if st["temp_dht"] is not None:
-            st["temperature"] = st["temp_dht"]
-        if st["gas"] is not None:
-            st["air_quality"] = "Clean" if st["gas"] < 600 else ("Moderate" if st["gas"] < 1500 else "Danger")
-        for key in ("gps_valid", "sd_ok", "dht_error"):
-            if key in d and d[key] is not None:
-                st[key] = bool(d[key])
-        if d.get("alert") is not None:
-            st["alert"] = str(d["alert"]).upper()
-
-        accel = [_reading(d, (k,)) for k in ("ax", "ay", "az")]
-        if None not in accel:
-            ax, ay, az = accel
-            if abs(az) > 50 or abs(ax) > 50 or abs(ay) > 50:   # raw MPU6050 LSB (16384/g)
-                ax, ay, az = ((v / 16384.0) * 9.80665 for v in (ax, ay, az))
-            st["accel"] = {"x": round(ax, 2), "y": round(ay, 2), "z": round(az, 2)}
-            if ax or ay or az:
-                raw_p = round(math.degrees(math.atan2(ay, math.sqrt(ax ** 2 + az ** 2))), 1)
-                raw_r = round(math.degrees(math.atan2(-ax, az)), 1)
-                st["raw_pitch"], st["raw_roll"] = raw_p, raw_r
-                st["pitch"] = round(raw_p - float(self.imu_offsets.get("pitch", 0.0)), 1)
-                st["roll"] = round(raw_r - float(self.imu_offsets.get("roll", 0.0)), 1)
-        gyro = [_reading(d, (k,)) for k in ("gx", "gy", "gz")]
-        if None not in gyro:
-            if any(abs(v) > 50 for v in gyro):                   # raw LSB (131 per deg/s)
-                gyro = [math.radians(v / 131.0) for v in gyro]
-            st["gyro"] = {"x": round(gyro[0], 3), "y": round(gyro[1], 3), "z": round(gyro[2], 3)}
-        return True
+        return rover_link.parse_json_text(self.sensor_state, raw_str, self.imu_offsets)
 
     def parse_sensor_line(self, line):
-        line = line.strip()
-        if not line:
-            return
-
-        self.sensor_state["raw_log"].append(line)
-        if len(self.sensor_state["raw_log"]) > 100:
-            self.sensor_state["raw_log"].pop(0)
-
-        # 1. DHT11
-        if "DHT11: ERROR" in line:
-            self.sensor_state["dht_error"] = True
-        else:
-            m_dht = re.search(r"DHT11\s+temp:\s*([-\d\.]+)\s*C\s+hum:\s*([-\d\.]+)", line, re.I)
-            if m_dht:
-                self.sensor_state["temp_dht"] = float(m_dht.group(1))
-                self.sensor_state["temperature"] = float(m_dht.group(1))
-                self.sensor_state["humidity"] = float(m_dht.group(2))
-                self.sensor_state["dht_error"] = False
-
-        # 2. BMP280
-        m_bmp = re.search(r"BMP280\s+temp:\s*([-\d\.]+)\s*C\s+pres:\s*([-\d\.]+)", line, re.I)
-        if m_bmp:
-            self.sensor_state["temp_bmp"] = float(m_bmp.group(1))
-            self.sensor_state["pressure"] = float(m_bmp.group(2))
-
-        # 3. Gas & Water
-        m_gw = re.search(r"Gas:\s*(\d+)\s+Water:\s*(\d+)", line, re.I)
-        if m_gw:
-            self.sensor_state["gas"] = int(m_gw.group(1))
-            self.sensor_state["water"] = int(m_gw.group(2))
-
-        # 4. Flame
-        if "Flame:" in line:
-            if "*** FIRE ***" in line or "FIRE" in line:
-                self.sensor_state["flame"] = 0
-                self.sensor_state["alert"] = "FIRE"
-            else:
-                self.sensor_state["flame"] = 1
-
-        # 5. IMU Accel & Gyro
-        m_acc = re.search(r"Accel:\s*X=([-\d\.]+)\s+Y=([-\d\.]+)\s+Z=([-\d\.]+)", line, re.I)
-        if m_acc:
-            ax = float(m_acc.group(1))
-            ay = float(m_acc.group(2))
-            az = float(m_acc.group(3))
-            if abs(az) > 50 or abs(ax) > 50 or abs(ay) > 50:
-                ax_m = (ax / 16384.0) * 9.80665
-                ay_m = (ay / 16384.0) * 9.80665
-                az_m = (az / 16384.0) * 9.80665
-            else:
-                ax_m, ay_m, az_m = ax, ay, az
-            self.sensor_state["accel"] = {"x": round(ax_m, 2), "y": round(ay_m, 2), "z": round(az_m, 2)}
-
-            if az_m != 0 or ay_m != 0 or ax_m != 0:
-                pitch_rad = math.atan2(ay_m, math.sqrt(ax_m**2 + az_m**2))
-                roll_rad = math.atan2(-ax_m, az_m)
-                raw_p = round(pitch_rad * (180.0 / math.pi), 1)
-                raw_r = round(roll_rad * (180.0 / math.pi), 1)
-                self.sensor_state["raw_pitch"] = raw_p
-                self.sensor_state["raw_roll"] = raw_r
-                p_off = float(self.imu_offsets.get("pitch", 0.0))
-                r_off = float(self.imu_offsets.get("roll", 0.0))
-                self.sensor_state["pitch"] = round(raw_p - p_off, 1)
-                self.sensor_state["roll"] = round(raw_r - r_off, 1)
-
-        m_gyr = re.search(r"Gyro:\s*X=([-\d\.]+)\s+Y=([-\d\.]+)\s+Z=([-\d\.]+)", line, re.I)
-        if m_gyr:
-            gx = float(m_gyr.group(1))
-            gy = float(m_gyr.group(2))
-            gz = float(m_gyr.group(3))
-            if abs(gx) > 20 or abs(gy) > 20 or abs(gz) > 20:
-                gx_r = (gx / 131.0) * (math.pi / 180.0)
-                gy_r = (gy / 131.0) * (math.pi / 180.0)
-                gz_r = (gz / 131.0) * (math.pi / 180.0)
-            else:
-                gx_r, gy_r, gz_r = gx, gy, gz
-            self.sensor_state["gyro"] = {"x": round(gx_r, 3), "y": round(gy_r, 3), "z": round(gz_r, 3)}
-
-        # 6. GPS
-        m_gps = re.search(r"GPS:\s*([-\d\.]+),\s*([-\d\.]+)\s+sats:\s*(\d+)", line, re.I)
-        if m_gps:
-            self.sensor_state["lat"] = float(m_gps.group(1))
-            self.sensor_state["lng"] = float(m_gps.group(2))
-            self.sensor_state["gps_sats"] = int(m_gps.group(3))
-            self.sensor_state["gps_valid"] = True
-        elif "GPS:    no fix" in line or "GPS: no fix" in line:
-            self.sensor_state["gps_valid"] = False
-
-        # 7. Alert
-        m_al = re.search(r"Alert:\s*(\w+)", line, re.I)
-        if m_al:
-            self.sensor_state["alert"] = m_al.group(1).upper()
+        """Apply one rover line (serial line or UDP reply); see rover_link.parse_line."""
+        return rover_link.parse_line(self.sensor_state, line, self.imu_offsets)
 
     @staticmethod
     def _badge(label, text, kind):
@@ -2994,6 +2855,15 @@ class ESP32SensorNodeWidget(QWidget):
             v = data.get(key)
             return v if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
 
+        # Sensors the board doesn't have (src/rover.cpp: no BMP280, water, flame, GPS or SD card)
+        fitted = data.get("sensors_fitted")
+
+        def missing(sensor):
+            return isinstance(fitted, list) and sensor not in fitted
+
+        def no_data(sensor):
+            return "Not on this rover" if missing(sensor) else "No data"
+
         # 1. Fire banner & flame: only on a real LOW pin or FIRE alert
         flame = num("flame")
         alert = data.get("alert")
@@ -3003,7 +2873,7 @@ class ESP32SensorNodeWidget(QWidget):
         if flame is None:
             self.lbl_flame_val.setText("--")
             self.lbl_flame_val.setStyleSheet("color: #9aa1ad; " + _VALUE_QSS)
-            self._badge(self.lbl_flame_badge, "No data", 'none')
+            self._badge(self.lbl_flame_badge, no_data('flame'), 'none')
         elif flame == 0:
             self.lbl_flame_val.setText("LOW (🔥 FIRE!)")
             self.lbl_flame_val.setStyleSheet("color: #f87171; background-color: #450a0a; padding: 4px 8px; border-radius: 4px;")
@@ -3018,15 +2888,17 @@ class ESP32SensorNodeWidget(QWidget):
         hum, temp_bmp, press = num("humidity"), num("temp_bmp"), num("pressure")
         self.lbl_temp_val.setText("--" if temp_c is None else f"{temp_c:.1f} °C ({temp_c * 9 / 5 + 32:.1f} °F)")
         self.lbl_hum_val.setText("--" if hum is None else f"{hum:.1f} %")
-        self.lbl_bmp_temp_val.setText("--" if temp_bmp is None else f"{temp_bmp:.1f} °C")
-        self.lbl_pressure_val.setText("--" if press is None else f"{press:.1f} hPa")
+        bmp_none = "Not on this rover" if missing('bmp280') else "--"
+        self.lbl_bmp_temp_val.setText(bmp_none if temp_bmp is None else f"{temp_bmp:.1f} °C")
+        self.lbl_pressure_val.setText(bmp_none if press is None else f"{press:.1f} hPa")
+        bmp_txt = "" if missing('bmp280') else f" | BMP280: {'OK' if temp_bmp is not None else '--'}"
         if data.get("dht_error"):
-            self._badge(self.lbl_dht_status, "DHT11: ERROR", 'bad')
+            self._badge(self.lbl_dht_status, "DHT11: no reading (check its wiring, GPIO 4)" if missing('bmp280')
+                        else "DHT11: ERROR", 'bad')
         elif temp_c is None and temp_bmp is None:
             self._badge(self.lbl_dht_status, "No climate data", 'none')
         else:
-            self._badge(self.lbl_dht_status, f"DHT11: {'OK' if temp_c is not None else '--'} | "
-                                             f"BMP280: {'OK' if temp_bmp is not None else '--'}", 'ok')
+            self._badge(self.lbl_dht_status, f"DHT11: {'OK' if temp_c is not None else '--'}{bmp_txt}", 'ok')
 
         # 3. Hazards (MQ gas, water)
         gas = num("gas")
@@ -3042,7 +2914,7 @@ class ESP32SensorNodeWidget(QWidget):
         water = num("water")
         self.lbl_water_val.setText("--" if water is None else f"{water} / 4095")
         if water is None:
-            self._badge(self.lbl_water_badge, "No data", 'none')
+            self._badge(self.lbl_water_badge, no_data('water'), 'none')
         elif water > 2000:
             self._badge(self.lbl_water_badge, "🌊 Submerged", 'info')
         elif water > 600:
@@ -3053,7 +2925,9 @@ class ESP32SensorNodeWidget(QWidget):
         # 4. IMU
         acc, gyr = data.get("accel"), data.get("gyro")
         pitch, roll = num("pitch"), num("roll")
-        self.lbl_accel_val.setText("--" if not isinstance(acc, dict) else
+        no_imu = data.get("imu_ok") is False and not isinstance(acc, dict)
+        self.lbl_accel_val.setText(("MPU6050 not found (check SDA 21 / SCL 22)" if no_imu else "--")
+                                   if not isinstance(acc, dict) else
                                    f"X: {acc['x']:.2f}  |  Y: {acc['y']:.2f}  |  Z: {acc['z']:.2f}")
         self.lbl_gyro_val.setText("--" if not isinstance(gyr, dict) else
                                   f"X: {gyr['x']:.3f}  |  Y: {gyr['y']:.3f}  |  Z: {gyr['z']:.3f}")
@@ -3070,7 +2944,7 @@ class ESP32SensorNodeWidget(QWidget):
             self._badge(self.lbl_gps_status, "🔴 Searching / No Fix", 'bad')
             self.lbl_gps_coords.setText("--")
         else:
-            self._badge(self.lbl_gps_status, "No data", 'none')
+            self._badge(self.lbl_gps_status, no_data('gps'), 'none')
             self.lbl_gps_coords.setText("--")
         self.lbl_gps_sats.setText("--" if sats is None else f"{sats} sats")
 
@@ -3081,7 +2955,7 @@ class ESP32SensorNodeWidget(QWidget):
         elif sd_ok is False:
             self._badge(self.lbl_sd_status, "❌ No SD Card", 'bad')
         else:
-            self._badge(self.lbl_sd_status, "No data", 'none')
+            self._badge(self.lbl_sd_status, no_data('sd'), 'none')
         uptime = num("uptime_ms")
         up_txt = "--" if uptime is None else f"{int(uptime / 1000) // 60:02d}m {int(uptime / 1000) % 60:02d}s"
         self.lbl_system_status.setText(f"Alert: {alert_up or '--'} | Up: {up_txt}")

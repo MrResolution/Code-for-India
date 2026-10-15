@@ -284,7 +284,7 @@
               🚨 EMERGENCY: FIRE DETECTED ON ROVER! 🚨
             </div>
 
-            <!-- Connection Card: Wi-Fi (/data JSON) or serial -->
+            <!-- Connection Card: Wi-Fi (UDP rover protocol, or /data JSON) or serial -->
             <div class="card sensor-conn-card">
               <div class="card-title flex-between">
                 <span>🔌 Connection</span>
@@ -294,7 +294,8 @@
 
               <div class="wifi-row">
                 <label class="field-label" for="sensor-wifi-ip">Wi-Fi host</label>
-                <input type="text" id="sensor-wifi-ip" class="form-input" value="192.168.1.100" placeholder="192.168.1.x" spellcheck="false">
+                <input type="text" id="sensor-wifi-ip" class="form-input" value="192.168.1.100" placeholder="192.168.1.x or rover-sensors.local" spellcheck="false"
+                       title="The rover (src/rover.cpp) answers on UDP port 8888 (host:port to change it). An http://… address reads an older sensor node's /data page instead.">
                 <button id="btn-sensor-wifi-connect" class="btn btn-primary btn-sm" type="button">🌐 Connect</button>
                 <button id="btn-sensor-wifi-disconnect" class="btn btn-danger btn-sm" type="button" hidden>⏹ Disconnect</button>
               </div>

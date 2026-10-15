@@ -46,6 +46,12 @@ try:
 except ImportError:
     ROS2_AVAILABLE = False
 
+try:
+    from .. import rover_link        # installed package (ros2 run servo_joint_publisher web_dashboard)
+except ImportError:                  # run as a script from the checkout
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import rover_link
+
 
 def find_project_dir():
     """Locate the repository root (holds servo_calibration.json and urdf/).
@@ -208,33 +214,9 @@ _LINK_CMD_RE = re.compile(r'^(RECONNECT|STATUS|VERBOSE=[01]|PORT=(/dev/[A-Za-z0-
 
 
 # Rover readings before (or between) real data: None means "no reading", and
-# the dashboards show "--" instead of a made-up value.
-EMPTY_SENSOR_READINGS = {
-    "temperature": None, "temp_dht": None, "humidity": None, "temp_bmp": None, "pressure": None,
-    "dht_error": None, "accel": None, "gyro": None, "pitch": None, "roll": None,
-    "raw_pitch": None, "raw_roll": None, "gas": None, "water": None, "flame": None,
-    "air_quality": None, "lat": None, "lng": None, "gps_valid": None, "gps_sats": None,
-    "alert": None, "sd_ok": None, "uptime_ms": None,
-}
-
-
-def _reading(d, keys, cast=float):
-    """First present, finite value among keys in a rover JSON reply, else None."""
-    for k in keys:
-        if d.get(k) is None:
-            continue
-        try:
-            v = float(d[k])
-        except (TypeError, ValueError):
-            return None
-        if not math.isfinite(v):
-            return None
-        return int(v) if cast is int else v
-    return None
-
-
-def air_quality(gas):
-    return "Clean" if gas < 600 else ("Moderate" if gas < 1500 else "Danger")
+# the dashboards show "--" instead of a made-up value. Parsing lives in
+# rover_link.py, shared with the desktop app.
+EMPTY_SENSOR_READINGS = rover_link.EMPTY_READINGS
 
 
 # Shared state between HTTP Server and ROS 2 Node
@@ -273,7 +255,7 @@ class RobotState:
         self.dogu_cmd_lock = threading.Lock()   # one /start or /stop at a time, in order
         # Rover data source: 'wifi' | 'serial' | 'off'
         self.sensor_link = {'source': 'off', 'phase': 'off', 'error': '', 'last_rx': 0.0,
-                            'since': time.time(), 'gen': 0, 'target': ''}
+                            'since': time.time(), 'gen': 0, 'target': '', 'note': ''}
         self.sensor_rx_times = collections.deque(maxlen=200)
         # Text commands for servo_serial_commander (CALIB:/SYNC:/MODE:),
         # drained by the ROS 2 bridge node onto /servo_calibration.
@@ -308,174 +290,23 @@ class RobotState:
     def parse_sensor_json(self, raw_str):
         """Apply a rover /data reply. Only fields present in the reply change;
         nothing is filled in. Returns False if it isn't a JSON object."""
-        try:
-            d = json.loads(raw_str)
-        except Exception:
-            return False
-        if not isinstance(d, dict):
-            return False
-        console_log.add('sensors', 'data', raw_str.strip()[:240])
         with self.lock:
-            st = self.sensor_state
-            st["raw_log"].append(f"[JSON] {raw_str[:90]}...")
-            if len(st["raw_log"]) > 100:
-                st["raw_log"].pop(0)
-            st["last_seen"] = time.time()
-
-            for key, keys, cast in (("temp_dht", ("temp_dht", "temperature"), float),
-                                    ("humidity", ("humidity",), float),
-                                    ("temp_bmp", ("temp_bmp",), float),
-                                    ("pressure", ("pressure",), float),
-                                    ("gas", ("air", "gas"), int),
-                                    ("water", ("water",), int),
-                                    ("flame", ("flame",), int),
-                                    ("lat", ("lat",), float),
-                                    ("lng", ("lng",), float),
-                                    ("gps_sats", ("gps_sats",), int),
-                                    ("uptime_ms", ("uptime_ms",), int)):
-                v = _reading(d, keys, cast)
-                if v is not None:
-                    st[key] = v
-            if st["temp_dht"] is not None:
-                st["temperature"] = st["temp_dht"]
-            if st["gas"] is not None:
-                st["air_quality"] = air_quality(st["gas"])
-            for key in ("gps_valid", "sd_ok", "dht_error"):
-                if key in d and d[key] is not None:
-                    st[key] = bool(d[key])
-            if d.get("alert") is not None:
-                st["alert"] = str(d["alert"]).upper()
-
-            accel = [_reading(d, (k,)) for k in ("ax", "ay", "az")]
-            if None not in accel:
-                ax, ay, az = accel
-                if abs(az) > 50 or abs(ax) > 50 or abs(ay) > 50:   # raw MPU6050 LSB (16384/g)
-                    ax, ay, az = ((v / 16384.0) * 9.80665 for v in (ax, ay, az))
-                st["accel"] = {"x": round(ax, 2), "y": round(ay, 2), "z": round(az, 2)}
-                if ax or ay or az:
-                    raw_p = round(math.degrees(math.atan2(ay, math.sqrt(ax ** 2 + az ** 2))), 1)
-                    raw_r = round(math.degrees(math.atan2(-ax, az)), 1)
-                    imu_t = self.calibration.get("imu_offsets", {})
-                    st["raw_pitch"], st["raw_roll"] = raw_p, raw_r
-                    st["pitch"] = round(raw_p - float(imu_t.get("pitch", 0.0)), 1)
-                    st["roll"] = round(raw_r - float(imu_t.get("roll", 0.0)), 1)
-            gyro = [_reading(d, (k,)) for k in ("gx", "gy", "gz")]
-            if None not in gyro:
-                if any(abs(v) > 50 for v in gyro):                   # raw LSB (131 per deg/s)
-                    gyro = [math.radians(v / 131.0) for v in gyro]
-                st["gyro"] = {"x": round(gyro[0], 3), "y": round(gyro[1], 3), "z": round(gyro[2], 3)}
-        return True
+            ok = rover_link.parse_json_text(self.sensor_state, raw_str, self.calibration.get("imu_offsets", {}))
+            if ok:
+                self.sensor_state["last_seen"] = time.time()
+        if ok:
+            console_log.add('sensors', 'data', raw_str.strip()[:240])
+        return ok
 
     def parse_sensor_line(self, line):
+        """Apply one rover line (serial line or UDP reply); see rover_link.parse_line."""
         line = line.strip()
         if not line:
-            return
+            return None, None
         console_log.add('sensors', 'data', line)
-
         with self.lock:
-            # Append line to raw_log (limit 100)
-            self.sensor_state["raw_log"].append(line)
-            if len(self.sensor_state["raw_log"]) > 100:
-                self.sensor_state["raw_log"].pop(0)
-
             self.sensor_state["last_seen"] = time.time()
-
-            # 1. DHT11 parsing
-            if "DHT11: ERROR" in line:
-                self.sensor_state["dht_error"] = True
-            else:
-                m_temp = re.search(r"(?:Temperature:|DHT11\s+temp:)\s*([-\d\.]+)", line, re.I)
-                if m_temp:
-                    self.sensor_state["temperature"] = float(m_temp.group(1))
-                    self.sensor_state["temp_dht"] = float(m_temp.group(1))
-                    self.sensor_state["dht_error"] = False
-
-                m_hum = re.search(r"(?:Humidity:|hum:)\s*([-\d\.]+)", line, re.I)
-                if m_hum:
-                    self.sensor_state["humidity"] = float(m_hum.group(1))
-                    self.sensor_state["dht_error"] = False
-
-            # 2. BMP280
-            m_bmp = re.search(r"BMP280\s+temp:\s*([-\d\.]+)\s*C\s+pres:\s*([-\d\.]+)", line, re.I)
-            if m_bmp:
-                self.sensor_state["temp_bmp"] = float(m_bmp.group(1))
-                self.sensor_state["pressure"] = float(m_bmp.group(2))
-
-            # 3. Gas & Water
-            m_gas = re.search(r"(?:MQ-5 Analog:|Gas:)\s*(\d+)", line, re.I)
-            if m_gas:
-                gas_val = int(m_gas.group(1))
-                self.sensor_state["gas"] = gas_val
-                if gas_val < 600:
-                    self.sensor_state["air_quality"] = "Clean"
-                elif gas_val < 1500:
-                    self.sensor_state["air_quality"] = "Moderate"
-                else:
-                    self.sensor_state["air_quality"] = "Danger"
-
-            m_water = re.search(r"Water:\s*(\d+)", line, re.I)
-            if m_water:
-                self.sensor_state["water"] = int(m_water.group(1))
-
-            # 4. Flame
-            if "Flame:" in line:
-                if "*** FIRE ***" in line or "FIRE" in line:
-                    self.sensor_state["flame"] = 0
-                    self.sensor_state["alert"] = "FIRE"
-                else:
-                    self.sensor_state["flame"] = 1
-
-            # 5. MPU6050 parsing
-            m_accel = re.search(r"(?:Accel X:|Accel:\s*X=)\s*([-\d\.]+)(?:\s*\|\s*Y:|\s+Y=)\s*([-\d\.]+)(?:\s*\|\s*Z:|\s+Z=)\s*([-\d\.]+)", line, re.I)
-            if m_accel:
-                ax = float(m_accel.group(1))
-                ay = float(m_accel.group(2))
-                az = float(m_accel.group(3))
-                if abs(az) > 50 or abs(ax) > 50 or abs(ay) > 50:
-                    ax = (ax / 16384.0) * 9.80665
-                    ay = (ay / 16384.0) * 9.80665
-                    az = (az / 16384.0) * 9.80665
-                self.sensor_state["accel"] = {"x": round(ax, 2), "y": round(ay, 2), "z": round(az, 2)}
-
-                # Compute estimated Pitch & Roll
-                if az != 0 or ay != 0 or ax != 0:
-                    pitch_rad = math.atan2(ay, math.sqrt(ax**2 + az**2))
-                    roll_rad = math.atan2(-ax, az)
-                    raw_p = round(pitch_rad * (180.0 / math.pi), 1)
-                    raw_r = round(roll_rad * (180.0 / math.pi), 1)
-                    self.sensor_state["raw_pitch"] = raw_p
-                    self.sensor_state["raw_roll"] = raw_r
-                    imu_t = self.calibration.get("imu_offsets", {})
-                    p_off = float(imu_t.get("pitch", 0.0))
-                    r_off = float(imu_t.get("roll", 0.0))
-                    self.sensor_state["pitch"] = round(raw_p - p_off, 1)
-                    self.sensor_state["roll"] = round(raw_r - r_off, 1)
-
-            m_gyro = re.search(r"(?:Gyro X:|Gyro:\s*X=)\s*([-\d\.]+)(?:\s*\|\s*Y:|\s+Y=)\s*([-\d\.]+)(?:\s*\|\s*Z:|\s+Z=)\s*([-\d\.]+)", line, re.I)
-            if m_gyro:
-                gx = float(m_gyro.group(1))
-                gy = float(m_gyro.group(2))
-                gz = float(m_gyro.group(3))
-                if abs(gx) > 20 or abs(gy) > 20 or abs(gz) > 20:
-                    gx = (gx / 131.0) * (math.pi / 180.0)
-                    gy = (gy / 131.0) * (math.pi / 180.0)
-                    gz = (gz / 131.0) * (math.pi / 180.0)
-                self.sensor_state["gyro"] = {"x": round(gx, 3), "y": round(gy, 3), "z": round(gz, 3)}
-
-            # 6. GPS
-            m_gps = re.search(r"GPS:\s*([-\d\.]+),\s*([-\d\.]+)\s+sats:\s*(\d+)", line, re.I)
-            if m_gps:
-                self.sensor_state["lat"] = float(m_gps.group(1))
-                self.sensor_state["lng"] = float(m_gps.group(2))
-                self.sensor_state["gps_sats"] = int(m_gps.group(3))
-                self.sensor_state["gps_valid"] = True
-            elif "GPS:    no fix" in line or "GPS: no fix" in line:
-                self.sensor_state["gps_valid"] = False
-
-            # 7. Alert
-            m_al = re.search(r"Alert:\s*(\w+)", line, re.I)
-            if m_al:
-                self.sensor_state["alert"] = m_al.group(1).upper()
+            return rover_link.parse_line(self.sensor_state, line, self.calibration.get("imu_offsets", {}))
 
     def _deep_update(self, target, source):
         for k, v in source.items():
@@ -591,7 +422,7 @@ class RobotState:
         """Switch the rover data source; bumps gen so the old reader stops."""
         lk = self.sensor_link
         lk.update(source=src, phase='connecting' if src in ('wifi', 'serial') else src, error='',
-                  last_rx=0.0, since=time.time(), gen=lk['gen'] + 1, target=target)
+                  last_rx=0.0, since=time.time(), gen=lk['gen'] + 1, target=target, note='')
         self.sensor_rx_times.clear()
         st = self.sensor_state
         st.update(EMPTY_SENSOR_READINGS)    # old readings are not from the new source
@@ -610,6 +441,19 @@ class RobotState:
             console_log.add('sensors', 'ok', f"Receiving data from {lk['target']}")
         lk['phase'], lk['error'], lk['last_rx'] = 'live', '', now
         self.sensor_rx_times.append(now)
+
+    def sensor_note(self, gen, note='', target=''):
+        """What the link learnt about the board: its name (target, over Wi-Fi)
+        or a note such as "this port answers as Robot_Arm, not the rover"."""
+        lk = self.sensor_link
+        if gen != lk['gen']:
+            return
+        if target:
+            lk['target'] = target
+            console_log.add('sensors', 'ok', f"Found {target}")
+        if note:
+            lk['note'] = note
+            console_log.add('sensors', 'warn' if 'not the rover' in note else 'info', note)
 
     def sensor_event(self, gen, phase, detail=''):
         lk = self.sensor_link
@@ -681,7 +525,8 @@ class RobotState:
         q['host'] = self.quardbot_host
         q['last_seen_age'] = round(now - q['last_seen'], 1) if q['last_seen'] else None
         lk = self.sensor_link
-        sensors = {k: lk[k] for k in ('source', 'phase', 'error', 'target')}
+        sensors = {k: lk[k] for k in ('source', 'phase', 'error', 'target', 'note')}
+        sensors['device'] = self.sensor_state.get('device')
         sensors['last_rx_age'] = round(now - lk['last_rx'], 1) if lk['last_rx'] else None
         sensors['rate'] = round(sum(1 for t in self.sensor_rx_times if now - t < 5.0) / 5.0, 1)
         sensors['phase_age'] = round(now - lk['since'], 1)
@@ -1034,12 +879,12 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
                     robot_state.set_sensor_source('serial', f"{port} @ {baud}")
                 self.send_json({"status": "ok", "port": port, "baudrate": baud})
             elif path == "/api/sensors/wifi_connect":
-                ip = str(data.get("ip", "192.168.1.100")).strip()
-                url = sensor_wifi_url(ip)
+                ip = str(data.get("ip", rover_link.DEFAULT_HOST)).strip()
+                link = rover_link.WifiRover(ip)     # only for its label; the sensor loop makes its own
                 with robot_state.lock:
                     robot_state.sensor_state["wifi_ip"] = ip
-                    robot_state.set_sensor_source('wifi', url)
-                self.send_json({"status": "ok", "ip": ip, "url": url})
+                    robot_state.set_sensor_source('wifi', link.label)
+                self.send_json({"status": "ok", "ip": ip, "target": link.label})
             elif path in ("/api/sensors/wifi_disconnect", "/api/sensors/disconnect"):
                 with robot_state.lock:
                     if path == "/api/sensors/disconnect" or robot_state.sensor_link['source'] == 'wifi':
@@ -1431,64 +1276,71 @@ def simulation_loop():
             print(f"[Server] Simulation step error: {e}")
         time.sleep(0.02)
 
-def sensor_wifi_url(ip):
-    cur = (ip or "").strip() or "192.168.1.100"
-    if not cur.startswith(("http://", "https://")):
-        cur = "http://" + cur
-    cur = cur.rstrip('/')
-    return cur if cur.endswith('/data') else cur + "/data"
-
-
 def read_sensor_serial(gen, port, baud):
-    """Read the rover over serial until the source changes. Raises on errors."""
+    """Read the rover over serial until the source changes. Raises on errors.
+    A board that answers PING as the rover (src/rover.cpp) is asked for
+    readings; anything else is only listened to."""
     import serial
-    with serial.Serial(port, baud, timeout=0.5) as ser:
+    with serial.Serial(port, baud, timeout=0.05) as ser:
         with robot_state.lock:
             robot_state.sensor_event(gen, 'waiting')
+        reader = rover_link.SerialRover(ser)
         while True:
             with robot_state.lock:
                 if robot_state.sensor_link['gen'] != gen:
                     return
-            raw_bytes = ser.readline()
-            if raw_bytes:
-                line = raw_bytes.decode('utf-8', errors='ignore').strip()
-                if line:
-                    robot_state.parse_sensor_line(line)
-                    with robot_state.lock:
+            for line in reader.read_lines():
+                kind, name = robot_state.parse_sensor_line(line)
+                note = reader.saw(kind, name)
+                with robot_state.lock:
+                    if note:
+                        robot_state.sensor_note(gen, note)
+                    if kind in ('rover', 'reading'):
                         robot_state.sensor_rx(gen)
 
 
 def sensor_background_loop():
-    """Feed rover telemetry from the selected source: Wi-Fi (/data JSON) or serial."""
+    """Feed rover telemetry from the selected source: Wi-Fi (UDP rover protocol
+    or /data JSON) or serial."""
     wifi_failures = 0
+    link, link_gen = None, None
     while True:
         with robot_state.lock:
             lk = robot_state.sensor_link
-            src, gen, target = lk['source'], lk['gen'], lk['target']
+            src, gen = lk['source'], lk['gen']
             port = robot_state.sensor_state.get("port", "/dev/ttyUSB0")
             baud = robot_state.sensor_state.get("baudrate", 115200)
+            wifi_text = robot_state.sensor_state.get("wifi_ip", "")
+        if link is not None and (src != 'wifi' or link_gen != gen):
+            link.close()
+            link = None
         try:
             if src == 'wifi':
+                if link is None:
+                    link, link_gen, wifi_failures = rover_link.WifiRover(wifi_text), gen, 0
                 try:
-                    req = urllib.request.Request(target, headers={"User-Agent": "RobotArm-Server/1.0"})
-                    with urllib.request.urlopen(req, timeout=2.0) as resp:
-                        raw = resp.read().decode('utf-8', errors='ignore')
-                    if not robot_state.parse_sensor_json(raw):
-                        raise ValueError(f"reply from {target} is not JSON: {raw.strip()[:60]!r}")
+                    label = link.label
+                    kind, raw = link.poll()
+                    with robot_state.lock:
+                        if robot_state.sensor_link['gen'] != gen:
+                            continue        # source changed while waiting for the reply
+                    if kind == 'json':
+                        if not robot_state.parse_sensor_json(raw):
+                            raise ValueError(f"reply from {link.url} is not JSON: {raw.strip()[:60]!r}")
+                        got = True
+                    else:
+                        got = robot_state.parse_sensor_line(raw)[0] in ('rover', 'reading')
                     wifi_failures = 0
                     with robot_state.lock:
-                        robot_state.sensor_rx(gen)
-                    time.sleep(0.5)
-                except Exception as err:
+                        if link.label != label:
+                            robot_state.sensor_note(gen, target=link.label)
+                        if got:
+                            robot_state.sensor_rx(gen)
+                    time.sleep(link.interval)
+                except Exception as err:    # rover_link.RoverLinkError, or a reply that isn't JSON
                     wifi_failures += 1
-                    if isinstance(err, urllib.error.HTTPError) and err.code == 404:
-                        detail = f"HTTP 404: no /data page at {target}"
-                    elif isinstance(err, ValueError):
-                        detail = str(err)
-                    else:
-                        detail = describe_net_error(err)
                     with robot_state.lock:
-                        robot_state.sensor_event(gen, 'error', detail)
+                        robot_state.sensor_event(gen, 'error', str(err))
                     time.sleep(min(5.0, 0.5 * (2 ** min(wifi_failures, 4))))
             elif src == 'serial':
                 try:

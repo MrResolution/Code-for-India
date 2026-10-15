@@ -89,8 +89,14 @@ RViz is never restarted. When the tab changes, the app sets the `robot_descripti
 - **More keys (desktop app):** C = crouch, H = high stance, 1–5 = OLED faces.
 
 ### 🚀 Rover (ESP32 Sensor Node)
-- **Connection:** one source at a time: Wi-Fi host (`/data` JSON endpoint) or USB serial port/baud, with its live state.
+- **Connection:** one source at a time, with its live state:
+  - **Wi-Fi host:** the rover's IP or `rover-sensors.local`. The dashboards ask the rover firmware (`src/rover.cpp`) for readings over UDP port 8888, about 5 times a second. Write `host:port` for another port. If nothing answers on UDP, they try an older sensor node's `http://<host>/data` page; an `http://…` address goes straight to that page.
+  - **USB serial:** port and baud (115200 for the rover).
+  - Both work with the firmware as it is: no reflashing.
+- **How the rover is found:** the dashboard sends `PING` first and asks for readings (`CMD:read`) only once the reply names the rover (`ACK:PONG:Sensor_Rover`). Pointing it at another robot (the arm, the Quard Bot) says "answers as …, not the rover" and sends it nothing else. A board that prints readings by itself (`src/esp32_sensor_node.cpp`) is only listened to.
 - **Readings are only ever real:** every value shows `--` and every badge `No data` until the rover sends it. Fields a reply leaves out stay empty, and changing or disconnecting the source clears the readings. **Tare Horizon** needs a live IMU reading.
+  - The rover firmware reports 0 for a sensor that has never answered. The tab shows that as **DHT11: no reading** or **MPU6050 not found**, never as 0 °C or a level IMU.
+  - The rover board has only a DHT11, an MQ-5 and an MPU6050. Once it is identified, the BMP280, water, flame, GPS and SD cards say **Not on this rover** (or `n/a`).
 - **Climate:** DHT11 temperature/humidity, BMP280 temperature/pressure.
 - **Hazards:** MQ gas, water level, flame sensor, with a fire alert banner.
 - **IMU (MPU6050):** accelerometer, gyroscope, pitch/roll, **Tare Horizon**.
@@ -154,12 +160,13 @@ The commander owns the arm's serial port / UDP socket and reports on `/esp32_lin
 - The web dashboard's server makes the requests, so the computer running `server.py` must be on Dogu's network.
 
 ### Rover
-- One source at a time: **Wi-Fi** (`http://<ip>/data` JSON) or **Serial**, or **Not connected**. There is no simulated data.
+- One source at a time: **Wi-Fi** (the rover protocol on UDP 8888, or an `http://<ip>/data` page) or **Serial**, or **Not connected**. There is no simulated data.
+- Once the board answers, the detail line names it, for example `Sensor_Rover at 192.168.1.42:8888 (UDP)`.
 - States:
-  - **Live**: shows the rate and the age of the last data.
+  - **Live**: shows the rate (readings per second) and the age of the last one.
   - **No data**: nothing for 5 s.
-  - **Waiting for data**: the port is open but silent; usually the wrong baud rate.
-  - **Error**: shows the reason. Serial retries every 2 s; Wi-Fi backs off up to 5 s.
+  - **Waiting for data**: the port is open but no readings yet. The detail says what the board turned out to be. The rover firmware can take up to 20 s to start while it tries its Wi-Fi networks; otherwise it is usually the wrong baud rate.
+  - **Error**: shows the reason, for example "no reply on UDP 8888" or "answers as Sesame_Quadruped, not the rover". Serial retries every 2 s; Wi-Fi backs off up to 5 s.
 - Opening the arm commander's serial port for the rover would reset that ESP32. The desktop app asks first; the web dashboard needs a second click within 10 s.
 
 ### Consoles
@@ -274,7 +281,7 @@ ROS 2 wasn't sourced, so sliders move the twin but nothing is published. Use the
 - **Arm:** `servo_serial_commander` owns the serial port (default `/dev/ttyUSB0` @ 115200). Select Serial or Wi-Fi with the **Comm** toggle; change the port or IP with **⚙ Link**.
 - **Quard Bot:** enter the ESP32 IP or `http://sesame-robot.local` and press **Ping**.
 - **Dogu:** join its Wi-Fi access point, keep `http://192.168.4.1`, and press **Ping**.
-- **Rover:** enter its Wi-Fi IP and press **Connect**, or pick the serial port and press **Connect Serial**.
+- **Rover:** enter its Wi-Fi IP (or `rover-sensors.local`) and press **Connect**, or pick the serial port and press **Connect Serial**. Over serial, the board prints its Wi-Fi IP as it starts, and each reading carries it (`"ip"` in the console).
 
 ### Q: The arm card says "No reply", "Mode mismatch" or "Port error".
 See the table in [section 4](#-4-connections--consoles). The detail line names the port or IP and the reason; for a port error it includes the fix (for example the `dialout` group). Type `PING` in the arm console to test the link by hand.
@@ -283,7 +290,15 @@ See the table in [section 4](#-4-connections--consoles). The detail line names t
 `sesame-robot.local` needs mDNS (Avahi on Linux). Use the robot's IP instead: it is shown in the telemetry row whenever it was reachable, and on the router.
 
 ### Q: The rover says "Waiting for data".
-The serial port opened but nothing arrives: usually the wrong baud rate, or a different board on that port.
+The serial port opened but no readings arrive yet. Read the detail line and the console:
+- **Nothing at all for 20 s:** usually the wrong baud rate (the rover uses 115200). The rover firmware is also silent while it tries its Wi-Fi networks at start-up, which can take 20 s.
+- **"answers as …, not the rover":** another robot is on that port.
+- **Readings show `--` but the link is Live:** the rover answers, but that sensor never has. Check its wiring (DHT11 on GPIO 4, MPU6050 on SDA 21 / SCL 22).
+
+### Q: The rover's Wi-Fi says "no reply on UDP 8888".
+- The rover joins the Wi-Fi networks set in its firmware. If neither is in range, it starts its own access point `Rover_AP` at `192.168.4.1`.
+- This computer has to be on the same network.
+- A firewall that blocks incoming UDP replies gives the same error.
 
 ### Q: A joint card is outlined in amber (web).
 The joint's current angle is outside the Min/Max saved for it. Move it back into the green band, or adjust and save the limits.

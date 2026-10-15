@@ -186,5 +186,14 @@ python3 scripts/convert_3mf_to_stl.py path/to/input.3mf cad/arm/extracted_stls
 - [ ] Dogu was only tested against a stand-in HTTP server (desktop offscreen and web); the firmware compiles (`pio run -e dogu`) but hasn't been run with the dashboards on the real robot.
 - [ ] Upstream commit `7944d8d` raised every arm joint's `servo_max_deg` to 180 in `servo_calibration.json`. Check this against the physical end stops.
 - [ ] `docs/QUARD_BOT.md` publishes the Quard Bot's Wi-Fi AP password.
+- [x] Rover tab reads the rover firmware as it is (no reflash). `rover_link.py` is shared by both dashboards:
+  - **Protocol:** it speaks `src/rover.cpp`'s `robot_protocol.h` lines over UDP :8888 and serial. `PING` comes first; `CMD:read` follows only after `ACK:PONG:Sensor_Rover`, about 5 times a second.
+  - **Older boards:** it still reads an HTTP `/data` page and `src/esp32_sensor_node.cpp`'s text.
+  - **Honest read-outs:** the firmware's "never answered" zeros show as no reading, and sensors the rover lacks say "Not on this rover".
+  - **Tests:** `ros2_ws/src/servo_joint_publisher/test/test_rover_link.py`.
+- [ ] The rover link was tested on Windows only: unit tests, a stand-in UDP rover with both dashboards (web at desktop and 375 px, desktop app offscreen), and a fake serial port. Run it with the real rover, over USB serial and over Wi-Fi, on the robot machine.
+- [ ] Needs a rover firmware change, so left alone:
+  - `src/rover.cpp` (and the defaults in `robot_protocol.h`) keep Wi-Fi credentials in the source instead of `include/secrets.h`.
+  - The firmware keeps the last good DHT11 value after a failed read, so a sensor that dies mid-run looks frozen rather than missing.
 
 See [`DASHBOARD_AND_RVIZ_GUIDE.md`](DASHBOARD_AND_RVIZ_GUIDE.md) for the user-facing description of both dashboards.

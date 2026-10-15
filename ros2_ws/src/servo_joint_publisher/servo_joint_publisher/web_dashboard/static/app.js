@@ -2261,17 +2261,22 @@ function renderQuardLink(q) {
 function renderSensorLink(sl) {
   let kind, label, detail;
   const src = sl.source;
-  const target = sl.target || '';
+  // Over serial, name the board once it says what it is (Wi-Fi targets already do)
+  const target = (sl.target || '') + (src === 'serial' && sl.device ? ` · ${sl.device}` : '');
   if (src === 'off') {
     kind = null; label = 'Not connected'; detail = 'No data source. Connect the rover over Wi-Fi or Serial.';
   } else if (sl.phase === 'live' && sl.last_rx_age !== null && sl.last_rx_age < 5) {
     kind = 'online'; label = 'Live';
-    detail = `${target} · ${sl.rate} ${src === 'wifi' ? 'updates' : 'lines'}/s · last ${ageText(sl.last_rx_age)}`;
+    detail = `${target} · ${sl.rate} updates/s · last ${ageText(sl.last_rx_age)}`;
   } else if (sl.phase === 'live') {
     kind = 'warn'; label = 'No data'; detail = `${target} · nothing for ${Math.round(sl.last_rx_age || 0)} s`;
   } else if (sl.phase === 'waiting') {
     kind = 'info'; label = 'Waiting for data';
-    detail = target + (sl.phase_age > 5 ? " · port open but silent: wrong baud rate, or the board isn't sending?" : '');
+    if (sl.note) detail = `${target} · ${sl.note}`;
+    else if (sl.phase_age > 5) {
+      detail = `${target} · no readings yet: still starting (the rover tries Wi-Fi for up to 20 s), ` +
+               "wrong baud rate, or the board isn't sending?";
+    } else detail = target;
   } else if (sl.phase === 'error') {
     kind = 'offline'; label = 'Error'; detail = `${target} · ${sl.error} · retrying`;
   } else {
@@ -3152,6 +3157,11 @@ function startSensorPolling() {
         if (!data) return;
         sensorState = data;
 
+        // Sensors the board doesn't have (src/rover.cpp: no BMP280, water, flame, GPS or SD card)
+        const fitted = Array.isArray(data.sensors_fitted) ? data.sensors_fitted : null;
+        const missing = (sensor) => fitted !== null && !fitted.includes(sensor);
+        const noReading = (el, sensor) => setPill(el, null, missing(sensor) ? 'Not on this rover' : 'No data');
+
         // 1. Emergency fire alert: only on a real LOW flame pin or FIRE alert
         const flame = num(data.flame);
         const alertStr = data.alert === null || data.alert === undefined ? null : String(data.alert).toUpperCase();
@@ -3167,14 +3177,15 @@ function startSensorPolling() {
         show('val-temp', tempC === null ? '-- °C' : `${tempC.toFixed(1)} °C`);
         show('val-temp-f', tempC === null ? ' ' : `(${(tempC * 9 / 5 + 32).toFixed(1)} °F)`);
         show('val-humidity', hum === null ? '-- %' : `${hum.toFixed(1)} %`);
-        show('val-bmp-temp', tempBMP === null ? '-- °C' : `${tempBMP.toFixed(1)} °C`);
-        show('val-pressure', pressure === null ? '-- hPa' : `${pressure.toFixed(1)} hPa`);
+        show('val-bmp-temp', tempBMP !== null ? `${tempBMP.toFixed(1)} °C` : missing('bmp280') ? 'n/a' : '-- °C');
+        show('val-pressure', pressure !== null ? `${pressure.toFixed(1)} hPa` : missing('bmp280') ? 'n/a' : '-- hPa');
+        show('val-pressure-sub', missing('bmp280') ? 'No BMP-280 on this rover' : '950 – 1050 hPa scale');
         meter('meter-temp', tempC === null ? null : (tempC / 50) * 100);
         meter('meter-humidity', hum);
         meter('meter-bmp-temp', tempBMP === null ? null : (tempBMP / 50) * 100);
         meter('meter-pressure', pressure === null ? null : pressure - 950);   // 950–1050 hPa scale
         const badgeDht = document.getElementById('badge-dht-status');
-        if (data.dht_error) setPill(badgeDht, 'offline', 'DHT ERROR');
+        if (data.dht_error) setPill(badgeDht, 'offline', missing('bmp280') ? 'DHT11: no reading' : 'DHT ERROR');
         else if (tempC === null && tempBMP === null) noData(badgeDht);
         else setPill(badgeDht, 'online', 'OK');
 
@@ -3195,9 +3206,9 @@ function startSensorPolling() {
         else if (gas > 1500) setPill(badgeGas, 'warn', 'Moderate');
         else setPill(badgeGas, 'online', 'Clean Air');
 
-        show('val-water', water === null ? '-- / 4095' : `${water} / 4095`);
+        show('val-water', water !== null ? `${water} / 4095` : missing('water') ? 'n/a' : '-- / 4095');
         meter('meter-water', water === null ? null : (water / 4095) * 100);
-        if (water === null) noData(badgeWater);
+        if (water === null) noReading(badgeWater, 'water');
         else if (water > 2000) setPill(badgeWater, 'warn', 'Submerged');
         else if (water > 600) setPill(badgeWater, 'info', 'Moisture');
         else setPill(badgeWater, 'online', 'Dry');
@@ -3208,7 +3219,7 @@ function startSensorPolling() {
           elFlame.innerText = flame === null ? 'Pin DO: --' : flame === 0 ? 'Pin DO: LOW (🔥 Fire detected)' : 'Pin DO: HIGH (Clear)';
           elFlame.className = 'readout-pill ' + (flame === null ? '' : flame === 0 ? 'bad' : 'ok');
         }
-        if (flame === null) noData(badgeFlame);
+        if (flame === null) noReading(badgeFlame, 'flame');
         else setPill(badgeFlame, flame === 0 ? 'offline' : 'online', flame === 0 ? '🚨 FIRE' : '✅ Clear');
         const valAlert = document.getElementById('val-alert-state');
         if (alertStr === null) setPill(valAlert, null, 'Alert: --');
@@ -3236,7 +3247,9 @@ function startSensorPolling() {
         show('val-pitch', pitch === null ? '--' : `${pitch.toFixed(1)}°`);
         show('val-roll', roll === null ? '--' : `${roll.toFixed(1)}°`);
         const badgeImu = document.getElementById('badge-imu-status');
-        if (accel || gyro) setPill(badgeImu, 'online', 'Live'); else noData(badgeImu);
+        if (accel || gyro) setPill(badgeImu, 'online', 'Live');
+        else if (data.imu_ok === false) setPill(badgeImu, 'offline', 'Not found');
+        else noData(badgeImu);
 
         // 5. GPS & SD status
         const gpsValid = data.gps_valid;
@@ -3252,7 +3265,7 @@ function startSensorPolling() {
           setPill(badgeGps, 'offline', 'No Fix');
         } else {
           show('val-gps-coords', '--');
-          noData(badgeGps);
+          noReading(badgeGps, 'gps');
         }
         show('val-gps-sats', sats === null ? '🛰️ -- satellites' : `🛰️ ${sats} satellite${sats === 1 ? '' : 's'}`);
 
@@ -3260,7 +3273,7 @@ function startSensorPolling() {
         if (elSdStatus) {
           if (data.sd_ok === true) { elSdStatus.innerText = '💾 Ready (/log.csv)'; elSdStatus.className = 'metric-val sm ok'; }
           else if (data.sd_ok === false) { elSdStatus.innerText = '❌ No SD card'; elSdStatus.className = 'metric-val sm bad'; }
-          else { elSdStatus.innerText = '--'; elSdStatus.className = 'metric-val sm'; }
+          else { elSdStatus.innerText = missing('sd') ? 'Not on this rover' : '--'; elSdStatus.className = 'metric-val sm'; }
         }
         const uptimeMs = num(data.uptime_ms);
         if (uptimeMs === null) {
