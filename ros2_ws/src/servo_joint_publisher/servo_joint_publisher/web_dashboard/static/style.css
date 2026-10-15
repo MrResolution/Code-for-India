@@ -392,6 +392,12 @@ body.estop-engaged .estop-banner { display: flex; }
 }
 body.server-offline .conn-banner { display: block; }
 
+/* Dogu robot link */
+.dogu-robot-row { align-items: baseline; }
+.dogu-robot-status { font-size: 13px; color: var(--text-primary); overflow-wrap: anywhere; }
+.dogu-walk-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.dogu-walk-buttons .btn { flex: 1 1 140px; }
+
 /* While E-STOP is engaged, motion controls are visibly locked */
 body.estop-engaged [data-motion] {
   opacity: 0.45;

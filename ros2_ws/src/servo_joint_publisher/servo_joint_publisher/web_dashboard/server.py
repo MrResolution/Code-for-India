@@ -75,6 +75,8 @@ QUARD_MESH_DIR = os.path.join(PROJECT_DIR, "urdf", "quard_bot", "meshes")
 UNNAMED_MESH_DIR = os.path.join(PROJECT_DIR, "urdf", "unnamed", "meshes", "stl")
 DOGU_DIR = os.path.join(PROJECT_DIR, "urdf", "dogu")          # built by scripts/dogu/
 DOGU_MESH_DIR = os.path.join(DOGU_DIR, "meshes")
+DOGU_DEFAULT_HOST = "http://192.168.4.1"    # src/dogu.cpp starts its own access point
+DOGU_STALE_S = 2.0                          # a /start that waited longer is dropped
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 # Arm joints driven by the dashboard. Slider degrees (0..180) map linearly onto
@@ -126,7 +128,7 @@ class ConsoleLog:
     a client asking for seq > N also gets entries updated in place: repeats of
     the last line (count) or a new value for the same key (slider drags).
     """
-    CHANNELS = ('arm', 'quard', 'sensors')
+    CHANNELS = ('arm', 'quard', 'sensors', 'dogu')
 
     def __init__(self, per_channel=500):
         self.lock = threading.Lock()
@@ -262,6 +264,13 @@ class RobotState:
                            'last_error': '', 'rssi': None}
         self.quard_resolved = {}        # hostname -> IP from the last good ping
         self.quard_cmd_failures = 0
+        # Dogu robot dog (src/dogu.cpp): GET /start, /stop, /status over HTTP
+        self.dogu_host = DOGU_DEFAULT_HOST
+        self.dogu_link = {'online': None, 'rtt_ms': None, 'last_seen': 0.0, 'sent': 0, 'failed': 0,
+                          'last_error': ''}
+        self.dogu_status = None         # last /status reply: {walking, leg, phase}
+        self.dogu_status_t = 0.0
+        self.dogu_cmd_lock = threading.Lock()   # one /start or /stop at a time, in order
         # Rover data source: 'wifi' | 'serial' | 'off'
         self.sensor_link = {'source': 'off', 'phase': 'off', 'error': '', 'last_rx': 0.0,
                             'since': time.time(), 'gen': 0, 'target': ''}
@@ -636,6 +645,23 @@ class RobotState:
             else:
                 console_log.add('quard', 'error', f"Quard Bot unreachable: {lk['last_error']}")
 
+    def dogu_record(self, ok, rtt_ms=None, error=''):
+        """Update the Dogu link after a ping or command (caller holds the lock)."""
+        lk = self.dogu_link
+        was = lk['online']
+        if ok:
+            lk.update(online=True, rtt_ms=rtt_ms, last_seen=time.time(), last_error='')
+        else:
+            lk.update(online=False, last_error=error or 'no reply')
+        if lk['online'] != was:
+            if lk['online']:
+                rtt = f" (ping {rtt_ms:.0f} ms)" if rtt_ms is not None else ""
+                console_log.add('dogu', 'ok', f"Dogu online at {self.dogu_host}{rtt}")
+            elif was:
+                walking = (" It was walking at last report."
+                           if self.dogu_status and self.dogu_status['walking'] else "")
+                console_log.add('dogu', 'error', f"Dogu unreachable: {lk['last_error']}.{walking}")
+
     def links_snapshot(self):
         now = time.time()
         if not ROS2_AVAILABLE:
@@ -659,7 +685,12 @@ class RobotState:
         sensors['last_rx_age'] = round(now - lk['last_rx'], 1) if lk['last_rx'] else None
         sensors['rate'] = round(sum(1 for t in self.sensor_rx_times if now - t < 5.0) / 5.0, 1)
         sensors['phase_age'] = round(now - lk['since'], 1)
-        return {'arm': arm, 'quard': q, 'sensors': sensors}
+        d = dict(self.dogu_link)
+        d['host'] = self.dogu_host
+        d['last_seen_age'] = round(now - d['last_seen'], 1) if d['last_seen'] else None
+        d['status'] = dict(self.dogu_status) if self.dogu_status else None
+        d['status_age'] = round(now - self.dogu_status_t, 1) if self.dogu_status else None
+        return {'arm': arm, 'quard': q, 'sensors': sensors, 'dogu': d}
 
     def snapshot(self, obj):
         """Deep copy of shared state taken under the lock, safe to serialise later."""
@@ -1109,6 +1140,93 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
                     if manual:
                         console_log.add('quard', 'error', f"No answer from {base}: {reason}")
                     self.send_json({"status": "ok", "online": False, "error": reason})
+            elif path == "/api/dogu/ping":
+                base = self.dogu_host(data)
+                manual = bool(data.get("manual"))
+                if manual:
+                    console_log.add('dogu', 'tx', f"GET {base}/status")
+                t0 = time.monotonic()
+                status, note = None, ""
+                try:
+                    try:
+                        with urllib.request.urlopen(f"{base}/status", timeout=2.0) as resp:
+                            raw = resp.read().decode('utf-8', errors='ignore')
+                        try:
+                            reply = json.loads(raw)
+                        except ValueError:
+                            reply = None
+                        if isinstance(reply, dict) and isinstance(reply.get('walking'), bool):
+                            status = {'walking': reply['walking'], 'leg': str(reply.get('leg', ''))[:40],
+                                      'phase': str(reply.get('phase', ''))[:40]}
+                        else:
+                            note = f"answered, but not with Dogu's /status JSON: {raw.strip()[:80]!r}"
+                    except urllib.error.HTTPError as e:
+                        note = f"answered HTTP {e.code} on /status: is this the Dogu firmware?"
+                    rtt = (time.monotonic() - t0) * 1000.0
+                    with robot_state.lock:
+                        if base == robot_state.dogu_host:
+                            was = robot_state.dogu_link['online']
+                            prev = robot_state.dogu_status
+                            if status and prev and status['walking'] != prev['walking']:
+                                console_log.add('dogu', 'info' if status['walking'] else 'ok',
+                                                "Robot reports: walking" if status['walking'] else "Robot reports: stopped")
+                            robot_state.dogu_status = status
+                            if status:
+                                robot_state.dogu_status_t = time.time()
+                            robot_state.dogu_record(True, rtt)
+                            if note and not manual and was is not True:
+                                console_log.add('dogu', 'warn', note)
+                    if manual:
+                        console_log.add('dogu', 'rx', json.dumps(status) if status else (note or "online"))
+                    self.send_json({"status": "ok", "online": True, "robot": status, "rtt_ms": rtt})
+                except Exception as e:
+                    reason = describe_net_error(e)
+                    with robot_state.lock:
+                        if base == robot_state.dogu_host:
+                            robot_state.dogu_record(False, error=reason)
+                    if manual:
+                        console_log.add('dogu', 'error', f"No answer from {base}: {reason}")
+                    self.send_json({"status": "ok", "online": False, "error": reason})
+            elif path == "/api/dogu/cmd":
+                base = self.dogu_host(data)
+                cmd = str(data.get("cmd", ""))
+                if cmd not in ("start", "stop"):
+                    raise ValueError("cmd must be 'start' or 'stop'")
+                queued = time.monotonic()
+                with robot_state.dogu_cmd_lock:
+                    waited = time.monotonic() - queued
+                    if cmd == "start" and waited > DOGU_STALE_S:
+                        # Walking now would surprise whoever is watching.
+                        console_log.add('dogu', 'warn', f"/start not sent: waited {waited:.1f} s behind a slow "
+                                                        "request (motion is never sent late)")
+                        self.send_json({"status": "dropped", "message": "waited too long"})
+                        return
+                    t0 = time.monotonic()
+                    try:
+                        with urllib.request.urlopen(f"{base}/{cmd}", timeout=2.0) as resp:
+                            reply = resp.read().decode('utf-8', errors='ignore').strip()[:200]
+                        rtt = (time.monotonic() - t0) * 1000.0
+                        with robot_state.lock:
+                            robot_state.dogu_link['sent'] += 1
+                            robot_state.dogu_record(True, rtt)
+                        console_log.add('dogu', 'rx', f"{reply or 'OK'}  (/{cmd}, {rtt:.0f} ms)")
+                        self.send_json({"status": "ok", "reply": reply, "rtt_ms": rtt})
+                    except Exception as e:
+                        reason = describe_net_error(e)
+                        answered = isinstance(e, urllib.error.HTTPError)
+                        with robot_state.lock:
+                            robot_state.dogu_link['sent'] += 1
+                            robot_state.dogu_link['failed'] += 1
+                            if answered:
+                                robot_state.dogu_record(True, (time.monotonic() - t0) * 1000.0)
+                            else:
+                                robot_state.dogu_record(False, error=reason)
+                        if cmd == "stop":
+                            console_log.add('dogu', 'error', f"/stop failed: {reason}. The dog may still be "
+                                                             "walking: stop it from its own page or cut its power.")
+                        else:
+                            console_log.add('dogu', 'error', f"/{cmd}  ✗  {reason}")
+                        self.send_json({"status": "error", "message": reason})
             elif path == "/api/arm/console":
                 line = str(data.get("line", "")).strip()
                 if not line or len(line) > 200 or "\n" in line:
@@ -1158,6 +1276,22 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
             return base.rstrip('/')
         netloc = ip + (f":{parts.port}" if parts.port else "")
         return urllib.parse.urlunsplit((parts.scheme, netloc, parts.path, "", "")).rstrip('/')
+
+    @staticmethod
+    def dogu_host(data):
+        """Dogu base URL from the request (remembered), restricted to http(s)."""
+        host = str(data.get("host") or robot_state.dogu_host).strip().rstrip('/')
+        if not host.startswith(("http://", "https://")):
+            host = "http://" + host
+        parsed = urllib.parse.urlsplit(host)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            raise ValueError(f"invalid Dogu host: {host!r}")
+        with robot_state.lock:
+            if robot_state.dogu_host != host:
+                robot_state.dogu_link.update(online=None, rtt_ms=None, last_error='')
+                robot_state.dogu_status = None
+            robot_state.dogu_host = host
+        return host
 
     @staticmethod
     def quard_host(data):

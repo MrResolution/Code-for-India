@@ -45,6 +45,10 @@
           <span class="dot" id="dot-sensornode"></span>
           <span>Sensors<span class="node-label-long"> · ESP32 #3</span>: <strong id="status-sensornode-text">Connecting…</strong></span>
         </div>
+        <div class="node-badge status-pending" id="badge-dogu" title="Dogu ESP32 HTTP heartbeat (src/dogu.cpp)">
+          <span class="dot" id="dot-dogu"></span>
+          <span>Dogu<span class="node-label-long"> · ESP32 #4</span>: <strong id="status-dogu-text">Connecting…</strong></span>
+        </div>
       </div>
 
       <div class="header-actions">
@@ -433,22 +437,47 @@
             </div>
           </div>
         </div>
-        <!-- PANEL 4: Dogu (12-joint quadruped) - model preview only -->
+        <!-- PANEL 4: Dogu (robot dog): link to src/dogu.cpp + 3D model preview -->
         <div id="panel-dogu-control" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-dogu">
           <div class="tile-header">
-            <h2>Dogu · 12-joint quadruped</h2>
+            <h2>Dogu · Robot dog</h2>
             <div class="tile-header-actions">
               <button id="btn-load-dogu-view" class="btn btn-outline btn-sm" title="Show Dogu in the 3D viewport">👁️ 3D</button>
+              <button id="btn-dogu-ping" class="btn btn-outline btn-sm">🔄 Ping</button>
             </div>
           </div>
 
           <div class="scroll-container">
+            <!-- Robot link: src/dogu.cpp answers GET /start, /stop and /status -->
+            <div class="card dogu-conn-card">
+              <label class="card-title" for="input-dogu-host" style="display:block">🌐 Robot link</label>
+              <div class="input-row">
+                <input type="text" id="input-dogu-host" class="form-input mono" value="http://192.168.4.1" placeholder="http://192.168.4.1" spellcheck="false"
+                       title="Dogu starts its own Wi-Fi access point: join it, then use http://192.168.4.1">
+                <label class="console-check" title="Keep checking: every 3 s while online (1 s while walking), backing off to 10 s while unreachable"><input type="checkbox" id="chk-dogu-auto" checked> Auto</label>
+              </div>
+              <div class="link-row">
+                <span id="pill-dogu-link" class="status-pill status-pending">Checking…</span>
+                <span id="dogu-link-detail" class="link-detail link-detail-wrap"></span>
+              </div>
+              <div class="link-row dogu-robot-row">
+                <span class="card-title link-title">Robot</span>
+                <strong id="dogu-robot-status" class="dogu-robot-status">--</strong>
+              </div>
+              <div class="dogu-walk-buttons">
+                <button id="btn-dogu-walk-start" class="btn btn-success btn-sm" type="button" data-motion title="GET /start: walks one leg at a time until stopped">▶ Start walking</button>
+                <button id="btn-dogu-walk-stop" class="btn btn-danger btn-sm" type="button" title="GET /stop: legs back to home, body servos held (E-STOP sends this too)">⏹ Stop walking</button>
+              </div>
+              <p class="card-hint">The firmware has no link watchdog: if Wi-Fi drops while it walks, the dog keeps walking.
+                Stop it from its own page at the same address, or cut its power.</p>
+            </div>
+
             <div class="card">
               <div class="link-row">
                 <span class="card-title link-title">🐕 Model preview</span>
                 <span id="pill-dogu-status" class="status-pill">Standing</span>
               </div>
-              <p class="card-hint">Dogu has no firmware or link yet, so these controls move the 3D model only: nothing is sent to a robot.
+              <p class="card-hint">These controls move the 3D model only: nothing is sent to the robot (it reports walking, leg and phase, not joint angles).
                 Model: <code>urdf/dogu/</code> (built from <code>cad/dogu/Dogu.blend</code> by <code>scripts/dogu/</code>).</p>
             </div>
 
@@ -466,7 +495,7 @@
                 <button class="btn btn-outline btn-sm btn-dogu" data-kind="clip" data-name="turn_right">↻ Turn right</button>
                 <button class="btn btn-outline btn-sm btn-dogu" data-kind="clip" data-name="wave">👋 Wave</button>
                 <button class="btn btn-outline btn-sm btn-dogu" data-kind="clip" data-name="idle">😌 Idle</button>
-                <button id="btn-dogu-stop" class="btn btn-danger btn-sm" type="button">⏹ Stop</button>
+                <button id="btn-dogu-stop" class="btn btn-danger btn-sm" type="button" title="Freeze the 3D model where it is">⏹ Stop model</button>
               </div>
               <div class="speed-row">
                 <label for="slider-dogu-speed">Speed</label>
@@ -476,7 +505,7 @@
             </div>
 
             <div class="card">
-              <div class="card-title">Joint angles (degrees from standing)</div>
+              <div class="card-title">Model joint angles (degrees from standing)</div>
               <table class="dogu-joints">
                 <thead><tr><th></th><th>Hip</th><th>Femur</th><th>Tibia</th></tr></thead>
                 <tbody>

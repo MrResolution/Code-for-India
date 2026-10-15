@@ -93,13 +93,22 @@ RViz is never restarted. When the tab changes, the app sets the `robot_descripti
 - **GPS & storage:** NEO-6M fix, coordinates, satellites, microSD status, uptime.
 - **Console:** the raw stream from the node plus connection events.
 
-### 🐕 Dogu (12-joint quadruped, model preview)
-Dogu has no firmware or link yet, so this tab only moves the 3D model: nothing is sent to a robot. In the desktop app the angles go out on `/joint_states`, and the embedded RViz switches to Dogu while this tab is open, from any launcher. `./launch_dogu_dashboard.sh` (or `./launch_dashboard.sh --dogu`) starts on this tab.
+### 🐕 Dogu (robot dog)
+The tab has two parts: **Robot link**, which drives the real robot (firmware `src/dogu.cpp`, see [`DOGU.md`](DOGU.md)), and **Model preview**, which only moves the 3D model.
+
+**Robot link**
+- Join Dogu's own Wi-Fi network, then use the default address `http://192.168.4.1`. Link details are in [section 4](#-4-connections--consoles).
+- **Robot** shows what the dog reports: `Walking · Front Left · Lift` or `Stopped`. It reads `--` until the robot answers.
+- **Start walking** / **Stop walking**: the firmware's single gait, one leg at a time, until stopped. E-STOP sends Stop and locks Start walking.
+- ⚠️ The firmware has no link watchdog: if Wi-Fi drops while it walks, it keeps walking. Stop it from its own page at the same address, or cut its power.
+
+**Model preview**
+The robot reports no joint angles, so the model never mirrors it. In the desktop app the model's angles go out on `/joint_states`, and the embedded RViz switches to Dogu while this tab is open, from any launcher. `./launch_dogu_dashboard.sh` (or `./launch_dashboard.sh --dogu`) starts on this tab.
 - **Poses:** Stand, Crouch, Sit. The model eases into each pose in about 0.6 s and holds it.
-- **Moves:** Walk (trot), Turn left, Turn right, Wave (front-right paw), Idle (breathing). These loop until you press **Stop** or pick something else.
+- **Moves:** Walk (trot), Turn left, Turn right, Wave (front-right paw), Idle (breathing). These loop until you press **Stop model** or pick something else.
 - **Speed:** 0.25× to 2×.
 - **Joint angles:** a live table of all 12 joints (hip, femur, tibia per leg), in degrees from standing.
-- **Console:** what was played, and load errors (for example a missing `urdf/dogu/animations.json`).
+- **Console:** robot link events and replies, what was played, and load errors (for example a missing `urdf/dogu/animations.json`).
 - **E-STOP** stops the animation and blocks new ones until released.
 - In the web twin the body is levelled and lowered so the lowest feet touch the ground.
 
@@ -132,6 +141,13 @@ The commander owns the arm's serial port / UDP socket and reports on `/esp32_lin
 - **Auto** checks every 3 s while online and backs off 2 → 4 → 8 → 10 s while unreachable ("retry in N s"). **Ping** checks at once and replaces a check that is stuck on a slow name lookup.
 - Recent addresses are remembered (drop-down). After a good ping, commands go to the resolved IP, which avoids repeated slow `.local` lookups.
 - A motion command that waited more than 2 s behind a slow request is **dropped, not sent late** (Stand is always sent). It is logged as such. Changing the address drops commands still queued for the old one.
+
+### Dogu (HTTP)
+- **Online · N ms** is the round trip of `GET /status`. **Unreachable** gives the reason, the time it was last seen, and when it retries. The Robot line then shows the last report and its age.
+- **Auto** checks every 3 s while online, every 1 s while it walks, and backs off 2 → 4 → 8 → 10 s while unreachable. **Ping** checks at once.
+- Commands go one at a time and in order. A newer press replaces one not yet sent, and a Start that waited more than 2 s behind a slow request is **dropped, not sent late**.
+- A failed Stop says the dog may still be walking.
+- The web dashboard's server makes the requests, so the computer running `server.py` must be on Dogu's network.
 
 ### Rover
 - One source at a time: **Wi-Fi** (`http://<ip>/data` JSON) or **Serial**, or **Not connected**. There is no simulated data.
@@ -176,7 +192,7 @@ ros2 topic pub --once /servo_calibration std_msgs/msg/String "{data: 'LINK:PORT=
 Press the **E-STOP** button in the header or press **Esc**. It:
 1. stops the arm simulation, homing and gesture mode (the arm holds its current pose);
 2. cancels Quard Bot gaits and animations and sends `stand` immediately;
-3. stops the Dogu model animation;
+3. sends `/stop` to Dogu (and locks its Start walking) and stops the Dogu model animation;
 4. locks the motion controls and shows a red banner until you press **Release**.
 
 > ⚠️ This is a **software stop**. It does not cut servo power, and it can't help if the dashboard has lost contact with a robot. Keep a hardware power switch within reach.
@@ -253,6 +269,7 @@ ROS 2 wasn't sourced, so sliders move the twin but nothing is published. Use the
 ### Q: How do I connect to physical hardware?
 - **Arm:** `servo_serial_commander` owns the serial port (default `/dev/ttyUSB0` @ 115200). Select Serial or Wi-Fi with the **Comm** toggle; change the port or IP with **⚙ Link**.
 - **Quard Bot:** enter the ESP32 IP or `http://sesame-robot.local` and press **Ping**.
+- **Dogu:** join its Wi-Fi access point, keep `http://192.168.4.1`, and press **Ping**.
 - **Rover:** enter its Wi-Fi IP and press **Connect**, or pick the serial port and press **Connect Serial**.
 
 ### Q: The arm card says "No reply", "Mode mismatch" or "Port error".

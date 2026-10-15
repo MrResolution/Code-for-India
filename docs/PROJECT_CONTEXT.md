@@ -163,11 +163,16 @@ python3 scripts/convert_3mf_to_stl.py path/to/input.3mf cad/arm/extracted_stls
 - [x] No fake rover data: the simulated sensor source and every placeholder reading were removed from both dashboards and the web server. Unknown readings are `None` / "--", JSON replies only update the fields they contain, and changing source clears readings.
 - [x] Desktop RViz follows the robot tab (Arm, Quard, Dogu) by setting `robot_state_publisher`'s `robot_description`; every model hangs off `world`. The launchers rebuild a stale `ros2_ws/install` (`scripts/ensure_ros_build.sh`).
 - [ ] Check the desktop RViz model switch on the robot machine (ROS 2 Jazzy): Arm → Dogu → Quard → Arm, from `./launch_dashboard.sh`, `--quard`, `--dual` and `--dogu`. It is only tested offscreen with a stub node so far.
-- [ ] The Dogu commits (`4a0cd8a`, `289b837` and later) sit on `fix/remove-slam-local-dashboard`; MrResolution/Code-for-India `main` has no Dogu tab until that branch is merged.
+- [ ] The Dogu commits (`4a0cd8a`, `289b837` and later) are on sharveshgsarva-debug/Multifunctional-Bot `main`; MrResolution/Code-for-India `main` has no Dogu tab until `fix/remove-slam-local-dashboard` is merged there.
 - [ ] Quard firmware has no `face` command; the OLED face buttons get `400 Bad Args`.
 - [ ] Desktop app: arm **Start Sim** also starts the Quard Bot walking. Decide whether to decouple them.
 - [ ] `launch_gesture_teleop.sh` and `launch_quard_rviz.sh` still hardcode `/home/sabo/Documents/learn_/Hardware`.
-- [ ] Dogu has no firmware, servo map or real joint limits yet; its ±90° limits and animations are provisional. Hardware questions for the owner: which controller and servo driver, the channel for each joint, the servo neutral and travel, and how it should connect (Wi-Fi HTTP like Quard, or UDP like the arm).
+- [x] Dogu firmware added (`src/dogu.cpp`, env `dogu`): ESP32 + PCA9685, 8 walking servos + 4 held body servos, its own Wi-Fi AP, `GET /start`, `/stop`, `/status`. Both dashboards have a Robot link card (status, Start / Stop walking); E-STOP sends `/stop`. AP credentials moved to `include/secrets.h`. See `docs/DOGU.md`.
+- [x] Web viewport **Twin Sync** on the Dogu tab used to fall through to the arm and re-zero its `sync_offset_deg` values, which `servo_serial_commander` applies to servo commands. It now does nothing there and says why.
+- [ ] Dogu firmware has no link watchdog: if Wi-Fi drops while it walks, it keeps walking. Consider stopping after a few seconds without any request (the dashboards poll `/status` every 1 s while it walks, and the firmware's own page every 0.5 s).
+- [ ] Dogu calibration is the firmware's starting values (hip 305, knee 320, body 305 ticks); the firmware warns the body values are not guaranteed safe. Measure them on the robot.
+- [ ] Confirm Dogu's servo-to-model mapping: which body servo (CH8–CH11) sits on which leg, and whether firmware hip / knee are the model's femur / tibia. The model's ±90° limits are still placeholders.
+- [ ] Dogu was only tested against a stand-in HTTP server (desktop offscreen and web); the firmware compiles (`pio run -e dogu`) but hasn't been run with the dashboards on the real robot.
 - [ ] Upstream commit `7944d8d` raised every arm joint's `servo_max_deg` to 180 in `servo_calibration.json`. Check this against the physical end stops.
 - [ ] `docs/QUARD_BOT.md` publishes the Quard Bot's Wi-Fi AP password.
 

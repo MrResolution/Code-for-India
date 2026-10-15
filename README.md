@@ -5,7 +5,7 @@
 [![3D Viewport](https://img.shields.io/badge/3D_Viewport-Embedded_RViz2_%2B_Three.js-blue)](docs/DASHBOARD_AND_RVIZ_GUIDE.md)
 [![Microcontroller](https://img.shields.io/badge/Firmware-ESP32_%2F_Arduino-e7352f?logo=espressif&logoColor=white)](src/)
 
-A unified robotics engineering platform featuring a **Multi-DOF Robotic Arm with a parallel geared gripper**, an **8-servo Sesame Quadruped Robot ("Quard Bot")**, an **ESP32 Rover Telemetry Node**, **Dogu** (a 12-joint quadruped, model preview only for now), and an **interactive PyQt5 Dashboard** with side-by-side **embedded native RViz2 3D visualization** and **Three.js WebGL digital twins**.
+A unified robotics engineering platform featuring a **Multi-DOF Robotic Arm with a parallel geared gripper**, an **8-servo Sesame Quadruped Robot ("Quard Bot")**, an **ESP32 Rover Telemetry Node**, **Dogu** (a 12-servo robot dog you can start and stop over Wi-Fi, with a 3D model preview), and an **interactive PyQt5 Dashboard** with side-by-side **embedded native RViz2 3D visualization** and **Three.js WebGL digital twins**.
 
 ---
 
@@ -60,9 +60,11 @@ From the project root directory:
   - "📍 Set Low" and "📍 Set High" safety boundary calibration (the web UI shows the saved range on each slider).
   - Smooth homing (`🏠 Go Home`), `📌 Set Home`, and automated sinusoidal motion simulation.
   - Save calibration with `💾 Save Config` or Ctrl+S (desktop).
-- **Dogu (12-joint quadruped, preview)**:
+- **Dogu (robot dog)**:
+  - Firmware `src/dogu.cpp` (ESP32 + PCA9685): walks with 8 servos, holds 4 body servos, starts its own Wi-Fi access point. See [docs/DOGU.md](docs/DOGU.md).
+  - Its tab in both UIs connects to `http://192.168.4.1`: live status (walking, leg, phase) with **Start walking** / **Stop walking**; E-STOP sends Stop.
   - Its own tab in both UIs: Stand / Crouch / Sit poses and Walk, Turn, Wave and Idle animations, with a speed slider and live joint angles.
-  - The model is built from `cad/dogu/Dogu.blend` by `scripts/dogu/`. There is no Dogu firmware yet, so nothing is sent to a robot.
+  - The model is built from `cad/dogu/Dogu.blend` by `scripts/dogu/`. Its poses and animations move the 3D model only.
 - **Rover Telemetry & Sensors**:
   - Climate: DHT11 & BMP280 temperature, humidity, and barometric pressure.
   - Hazards: MQ Gas, water level, and optical flame detector with emergency fire alerts.
@@ -128,7 +130,7 @@ The full map, with "where do I find X" tables, data flow, topics, ports and pitf
 | `{fl,fr,bl,br}_femur_joint` | | Upper leg pitch | Standing |
 | `{fl,fr,bl,br}_tibia_joint` | | Knee | Standing |
 
-Every joint turns about its own z axis and reads 0 in the standing pose. The ±90° limits are provisional until Dogu has servos and firmware.
+Every joint turns about its own z axis and reads 0 in the standing pose. The ±90° limits are provisional until the servo mapping is confirmed. The firmware's own servo channels are in [docs/DOGU.md](docs/DOGU.md).
 
 ---
 
@@ -140,6 +142,7 @@ Every joint turns about its own z axis and reads 0 in the standing pose. The ±9
 - **[Dashboard & RViz Docking Guide](docs/DASHBOARD_AND_RVIZ_GUIDE.md)**: Both UIs, control panels, connections & consoles, E-STOP and safety, keyboard shortcuts, web dashboard options, troubleshooting.
 - **[Project Context & Handoff](docs/PROJECT_CONTEXT.md)**: Phobos patch details, gripper mimic joint math, and developer notes.
 - **[Quard Bot Firmware & Hardware](docs/QUARD_BOT.md)**: Pinouts, OLED animations, Web AP instructions and the HTTP API.
+- **[Dogu robot](docs/DOGU.md)**: hardware, servo channels, Wi-Fi access point, HTTP API and safety.
 - **[Dogu model](urdf/dogu/README.md)**: how the Dogu URDF and animations are built from the Blender scene.
 - **[Robotic Arm Carrier PCB](hardware/robotic_arm_motherboard/README.md)**: Custom KiCad carrier board and Gerbers.
 - **[CAD sources](cad/README.md)**: Blender scenes and printable STLs for every robot.

@@ -3,7 +3,7 @@
 One page to find your way around this repository: what is where, how the pieces talk to each other, and what to watch out for. If you move or add something, update this file in the same change (see [AGENTS.md](AGENTS.md)).
 
 **At a glance**
-- **Robots:** 🦾 Arm (5 servos + geared gripper), 🤖 Quard Bot (8-servo quadruped), 🚀 Rover (sensor node), 🐕 Dogu (12-joint quadruped, model only).
+- **Robots:** 🦾 Arm (5 servos + geared gripper), 🤖 Quard Bot (8-servo quadruped), 🚀 Rover (sensor node), 🐕 Dogu (12-servo robot dog: start/stop walking over Wi-Fi, plus a 12-joint model).
 - **Two dashboards:**
   - A desktop PyQt5 app with RViz2 embedded.
   - A browser dashboard with a Three.js twin.
@@ -65,6 +65,7 @@ One page to find your way around this repository: what is where, how the pieces 
     ├── QUICK_INSTALL_GUIDE.md     ROS 2 + dependencies
     ├── DASHBOARD_AND_RVIZ_GUIDE.md   user guide for both dashboards
     ├── QUARD_BOT.md               Quard pinout, servo map, Wi-Fi, HTTP API
+    ├── DOGU.md                    Dogu hardware, servo channels, Wi-Fi AP, HTTP API, safety
     ├── PROJECT_CONTEXT.md         Phobos patches, gripper mimic maths, handoff checklist (open items!)
     ├── PROJECT_PRESENTATION.md    long-form write-up
     └── diagrams/                  motherboard workflow diagram (.json source → .html)
@@ -88,6 +89,7 @@ Not tracked: `.venv/`, `ros2_ws/{build,install,log}/`, `.pio/`, `include/secrets
 | Change the web REST API | `server.py` `do_GET` / `do_POST` (§5) |
 | Find the arm wire protocol | `servo_serial_commander.py` + `src/main_servo.cpp` |
 | Find the Quard HTTP API | `docs/QUARD_BOT.md` + `src/quadruped_sesame.cpp` (`/cmd`, `/status`) |
+| Find the Dogu HTTP API | `docs/DOGU.md` + `src/dogu.cpp` (`/start`, `/stop`, `/status`) |
 | Find rover data fields | `EMPTY_SENSOR_READINGS` (GUI and server), `src/rover.cpp` |
 | Find arm joint names and limits | `urdf/arm/urdf/arm.urdf`, `servo_calibration.json`, `JOINT_LABELS` |
 | Change Dogu poses or animations | `scripts/dogu/build_dogu.py`, then re-run it. Never edit `urdf/dogu/*.json` |
@@ -106,7 +108,7 @@ Not tracked: `.venv/`, `ros2_ws/{build,install,log}/`, `.pio/`, `include/secrets
 | 🦾 Arm | `nodemcu-32s` → `src/main_servo.cpp`<br>(ESP8266: `nodemcuv2_servo` → `src/main_servo_esp8266.cpp`) | Through `servo_serial_commander`: USB serial `/dev/ttyUSB0` @ 115200, or Wi-Fi UDP :8888 | `urdf/arm/` | Arm tab |
 | 🤖 Quard Bot | `quard_bot` → `src/quadruped_sesame.cpp` | HTTP :80 at `http://sesame-robot.local` (`/status`, `/cmd?...`). AP fallback `192.168.4.1` | `urdf/quard_bot/` | `QuardBotWidget` / Quard tab |
 | 🚀 Rover | `rover` → `src/rover.cpp` | Dashboards read Wi-Fi `http://<ip>/data` (JSON) or USB serial (see pitfall 10) | none (IMU cube in the twin) | `ESP32SensorNodeWidget` / Sensor tab |
-| 🐕 Dogu | none yet | none: the model only | `urdf/dogu/` (generated) | `DoguWidget` / Dogu tab |
+| 🐕 Dogu | `dogu` → `src/dogu.cpp` | HTTP :80 on its own access point, `http://192.168.4.1` (`/start`, `/stop`, `/status`). Credentials in `include/secrets.h` | `urdf/dogu/` (generated) | `DoguWidget` / Dogu tab |
 | BTS rover base | `bts_motor_control` → `src/bts7960_motor_bt.cpp` | Bluetooth serial | none | none |
 | ESP32-CAM | `esp32cam_slam` → `src/esp32cam_grayscale_udp.cpp` | UDP grayscale frames + ToF | none | none |
 
@@ -132,6 +134,7 @@ Joint names are global: every robot shares one `/joint_states`, so names must st
 
  Browser ◄── HTTP :8000 ──► web_dashboard/server.py ──(rclpy if available)──► same topics as the desktop app
  Desktop app / server.py ── HTTP ──► Quard Bot ESP32      Desktop app / server.py ── HTTP /data or serial ──► Rover
+ Desktop app / server.py ── HTTP /start /stop /status ──► Dogu ESP32 (its own Wi-Fi AP)
 ```
 
 | Topic | Type | Published by | Read by |
@@ -157,6 +160,7 @@ ROS entry points (`ros2 run servo_joint_publisher <name>`) are `calibrated_joint
 | GET (models) | `/meshes/<file>` (searches `urdf/arm/meshes/stl`, `urdf/quard_bot/meshes`, `urdf/unnamed/meshes/stl`, `urdf/dogu/meshes`), `/models/dogu/model.json`, `/models/dogu/animations.json`, `/urdf/arm.urdf`, `/urdf/quard_bot.urdf` |
 | POST (arm) | `/api/update_joints`, `/api/save_calibration`, `/api/sync_offset`, `/api/toggle_sim`, `/api/comm_mode`, `/api/arm/console`, `/api/arm/link` |
 | POST (Quard) | `/api/quardbot/joints`, `/api/quardbot/cmd`, `/api/quardbot/ping` |
+| POST (Dogu) | `/api/dogu/ping`, `/api/dogu/cmd` (`{"cmd": "start"|"stop"}`) |
 | POST (rover) | `/api/sensors/connect`, `/api/sensors/wifi_connect`, `/api/sensors/disconnect`, `/api/sensors/wifi_disconnect`, `/api/sensors/push_raw`, `/api/tare_pose` |
 
 Anything else is served from `static/`. With `--host 0.0.0.0` there is **no authentication**.
@@ -171,6 +175,7 @@ Anything else is served from `static/`. With `--host 0.0.0.0` there is **no auth
 | Arm serial | `/dev/ttyUSB0` @ 115200 |
 | Arm / fleet UDP | 8888 |
 | Quard Bot | `http://sesame-robot.local` |
+| Dogu | `http://192.168.4.1` (its own access point) |
 | Desktop app settings | `~/.config/CodeForIndia/RobotDashboard.conf` (delete to reset the layout) |
 | Arm calibration | `servo_calibration.json` at the repo root |
 | Repo root override | `$ROBOT_PROJECT_DIR`, which the launch scripts set |
@@ -210,7 +215,10 @@ Anything else is served from `static/`. With `--host 0.0.0.0` there is **no auth
 8. **Line endings.** The repo stores LF.
    - On Windows, `core.autocrlf=true` would give shell scripts CRLF, and bash fails on `\r`.
    - `.gitattributes` forces `*.sh` to LF.
-9. **Dogu is provisional.** It has no firmware, servo map or real limits, and its ±90° limits are placeholders. Its zero pose is *standing*, not the Blender layout.
+9. **Dogu's model and robot are separate.**
+   - The firmware (`src/dogu.cpp`) only starts and stops one built-in gait, and `/status` has no joint angles. So the 3D model is never driven by the robot: its poses and clips are a preview.
+   - Which servo drives which model joint is unconfirmed (see `docs/DOGU.md`). The model's ±90° limits are placeholders, and its zero pose is *standing*, not the Blender layout.
+   - The firmware has no link watchdog: it keeps walking if Wi-Fi drops.
 10. **Rover transport mismatch.** The dashboards read HTTP `/data` or serial JSON, but `src/rover.cpp` has no HTTP handler: it reports over `robot_protocol.h` (UDP 8888). Check which firmware a rover actually runs before debugging the tab.
 11. **Duplicate header.** `include/robot_protocol.h` and `lib/robot_protocol/robot_protocol.h` are identical. Change both, or consolidate after a test build.
 12. **The web twin needs internet.** Three.js r128 and its loaders come from cdnjs and jsdelivr, as globals (`THREE.STLLoader`). Don't mix in ES-module builds.

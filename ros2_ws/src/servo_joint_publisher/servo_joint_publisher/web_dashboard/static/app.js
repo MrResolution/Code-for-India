@@ -212,8 +212,8 @@ function initTheme() {
 
 // ── E-STOP (software stop) ───────────────────────────────────────────────
 // Halts the arm simulation, cancels smooth moves and Quard gaits, tells the
-// Quard Bot to stand, and locks motion controls until released. It does not
-// cut servo power; that needs a hardware switch.
+// Quard Bot to stand and Dogu to stop walking, and locks motion controls
+// until released. It does not cut servo power; that needs a hardware switch.
 let estopEngaged = false;
 
 function engageEstop() {
@@ -241,6 +241,7 @@ function engageEstop() {
   setGaitLabel('stand');
   document.querySelectorAll('.btn-dpad').forEach(b => b.classList.toggle('active', b.dataset.cmd === 'stand'));
   doguStop();
+  sendDoguCmd('stop');            // the robot dog, whether or not it looks online
 }
 
 function releaseEstop() {
@@ -1400,6 +1401,12 @@ function setupEventListeners() {
   if (btnQuickSync) {
     btnQuickSync.addEventListener('click', () => {
       const mode = getEffectiveModelMode();
+      if (mode === 'dogu') {
+        // Dogu reports no joint angles. Falling through to 'arm' here would
+        // re-zero the arm's sync offsets, which servo_serial_commander applies.
+        toast('Dogu reports no joint angles, so there is nothing to sync. Twin Sync works for the arm, Quard and IMU.', 'info');
+        return;
+      }
       const target = (mode === 'sensors') ? 'imu' : ((mode === 'quard') ? 'quard' : 'arm');
       requestTare(target, btnQuickSync)
         .then(() => toast(`🎯 ${target.toUpperCase()} twin synchronized.`, 'success'))
@@ -1490,7 +1497,7 @@ function setupEventListeners() {
   });
 }
 
-// ── Dogu (12-joint quadruped): model preview with simple animations ──────
+// ── Dogu (robot dog): model preview with simple animations ───────────────
 // Kinematics, meshes and keyframes come from urdf/dogu/ (built by
 // scripts/dogu/), served as /models/dogu/*.json and /meshes/dogu_*.stl.
 // Dogu has no firmware yet, so these angles only move the 3D model.
@@ -1688,6 +1695,127 @@ function initDoguControls() {
     document.getElementById('tab-btn-dogu').click();
     setModelMode('dogu');
   });
+
+  const host = document.getElementById('input-dogu-host');
+  const saved = storageGet('dogu-host');
+  if (saved) host.value = saved;
+  host.addEventListener('change', () => {
+    storageSet('dogu-host', host.value.trim());
+    doguLink.online = null;
+    pingDogu(false);
+  });
+  document.getElementById('chk-dogu-auto').addEventListener('change', (e) => {
+    if (e.target.checked) pingDogu(false); else { clearTimeout(doguLink.timer); doguLink.nextAt = null; }
+  });
+  document.getElementById('btn-dogu-ping').addEventListener('click', () => pingDogu(true));
+  document.getElementById('btn-dogu-walk-start').addEventListener('click', () => sendDoguCmd('start'));
+  document.getElementById('btn-dogu-walk-stop').addEventListener('click', () => sendDoguCmd('stop'));
+  setTimeout(() => pingDogu(false), 900);
+}
+
+// ── Dogu robot link (src/dogu.cpp: GET /start, /stop, /status) ───────────
+// The server makes the requests. The dog reports walking / leg / phase, not
+// joint angles, so the 3D model above is never driven by it.
+const DOGU_STALE_MS = 2000;   // a Start that waited longer is dropped, never sent late
+const doguLink = { gen: 0, inFlight: false, failures: 0, timer: null, nextAt: null, online: null,
+                   walking: false, cmdInFlight: false, next: null };
+
+function doguHost() {
+  const el = document.getElementById('input-dogu-host');
+  return (el && el.value.trim()) || 'http://192.168.4.1';
+}
+
+// Heartbeat: every 3 s while online (1 s while walking), backing off 2 → 10 s while offline.
+function scheduleDoguPing() {
+  clearTimeout(doguLink.timer);
+  const auto = document.getElementById('chk-dogu-auto');
+  if (auto && !auto.checked) { doguLink.nextAt = null; return; }
+  const delay = doguLink.online ? (doguLink.walking ? 1000 : 3000)
+                                : Math.min(10000, 2000 * 2 ** Math.max(0, doguLink.failures - 1));
+  doguLink.nextAt = Date.now() + delay;
+  doguLink.timer = setTimeout(() => pingDogu(false), delay);
+}
+
+function pingDogu(manual = false) {
+  if (doguLink.inFlight && !manual) return;   // a manual ping replaces a stuck one
+  clearTimeout(doguLink.timer);
+  const gen = ++doguLink.gen;
+  doguLink.inFlight = true;
+  postJSON('/api/dogu/ping', { host: doguHost(), manual })
+    .then(data => {
+      if (gen !== doguLink.gen) return;
+      doguLink.online = data.online === true;
+      doguLink.walking = !!(doguLink.online && data.robot && data.robot.walking);
+      doguLink.failures = doguLink.online ? 0 : doguLink.failures + 1;
+    })
+    .catch(() => { if (gen === doguLink.gen) { doguLink.online = false; doguLink.failures++; } })
+    .finally(() => {
+      if (gen !== doguLink.gen) return;
+      doguLink.inFlight = false;
+      scheduleDoguPing();
+    });
+}
+
+// One request at a time, so /start and /stop reach the robot in order; a newer
+// command replaces one that hasn't been sent yet.
+function sendDoguCmd(cmd) {
+  if (cmd === 'start' && estopEngaged) { doguLog('Start walking blocked by E-STOP', 'warn'); return; }
+  if (doguLink.next) doguLog(`/${doguLink.next.cmd} not sent: replaced by /${cmd}`, 'warn');
+  doguLink.next = { cmd, host: doguHost(), t: Date.now() };
+  doguLog(`GET ${doguLink.next.host}/${cmd}`, 'tx');
+  flushDoguCmd();
+}
+
+function flushDoguCmd() {
+  if (doguLink.cmdInFlight || !doguLink.next) return;
+  const entry = doguLink.next;
+  doguLink.next = null;
+  const waited = Date.now() - entry.t;
+  if (entry.cmd === 'start' && waited > DOGU_STALE_MS) {
+    doguLog(`/start not sent: waited ${(waited / 1000).toFixed(1)} s behind a slow request (motion is never sent late)`, 'warn');
+    return;
+  }
+  doguLink.cmdInFlight = true;
+  postJSON('/api/dogu/cmd', { host: entry.host, cmd: entry.cmd })
+    .catch(() => doguLog(`/${entry.cmd} not sent: dashboard server unreachable`, 'error'))
+    .finally(() => {
+      doguLink.cmdInFlight = false;
+      flushDoguCmd();
+      pingDogu(false);            // fresh /status (skipped if one is running)
+    });
+}
+
+function renderDoguLink(d) {
+  let kind, label;
+  const parts = [];
+  if (d.online === null || d.online === undefined) {
+    kind = 'info'; label = 'Checking…';
+    parts.push(d.host || '');
+  } else if (d.online) {
+    kind = 'online';
+    label = 'Online' + (d.rtt_ms !== null && d.rtt_ms !== undefined ? ` · ${Math.round(d.rtt_ms)} ms` : '');
+    parts.push(`seen ${ageText(d.last_seen_age)}`);
+  } else {
+    kind = 'offline'; label = 'Unreachable';
+    parts.push(d.last_error || 'no reply');
+    if (d.last_seen_age !== null && d.last_seen_age !== undefined) parts.push(`last seen ${ageText(d.last_seen_age)}`);
+    if (doguLink.nextAt && !doguLink.inFlight) parts.push(`retry in ${Math.max(0, Math.round((doguLink.nextAt - Date.now()) / 1000))} s`);
+  }
+  if (d.sent) parts.push(`sent ${d.sent}` + (d.failed ? `, failed ${d.failed}` : ''));
+  setPill(document.getElementById('pill-dogu-link'), kind, label);
+  setText('dogu-link-detail', parts.filter(Boolean).join(' · '));
+
+  const st = d.status;
+  let text = '--';                // nothing until the robot answers
+  if (st) {
+    text = st.walking ? `Walking · ${st.leg} · ${st.phase}` : 'Stopped';
+    if (!d.online) text = `Last report (${ageText(d.status_age)}): ${text}`;
+  }
+  setText('dogu-robot-status', text);
+  setNodeBadge('badge-dogu', kind === 'info' ? 'pending' : kind,
+               d.online && st && st.walking ? 'Walking' : label);
+  doguLink.online = d.online;
+  doguLink.walking = !!(d.online && st && st.walking);
 }
 
 // ── Console panels (one per robot) ───────────────────────────────────────
@@ -1986,7 +2114,7 @@ function startConsolePolling() {
   poll();
 }
 
-// ── Link cards (arm, Quard Bot, rover) ────────────────────────────────────
+// ── Link cards (arm, Quard Bot, rover; Dogu's is in the Dogu section) ─────
 let lastLinks = null;
 let lastLinksRender = 0;
 let armLinkPrevState = null;
@@ -2010,6 +2138,7 @@ function renderLinks(links, force = false) {
   renderArmLink(links.arm || {});
   renderQuardLink(links.quard || {});
   renderSensorLink(links.sensors || {});
+  renderDoguLink(links.dogu || {});
 }
 
 function renderArmLink(a) {
@@ -2292,7 +2421,7 @@ function setServerOnline(online) {
   serverOnline = online;
   document.body.classList.toggle('server-offline', !online);
   if (!online) {
-    ['badge-arm', 'badge-quardbot', 'badge-sensornode'].forEach(id => setNodeBadge(id, 'offline', 'Server offline'));
+    ['badge-arm', 'badge-quardbot', 'badge-sensornode', 'badge-dogu'].forEach(id => setNodeBadge(id, 'offline', 'Server offline'));
     setPill(document.getElementById('pill-arm-link'), 'offline', 'Server offline');
     lastLinks = null;
   }
