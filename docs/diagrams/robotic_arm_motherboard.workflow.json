@@ -26,7 +26,7 @@
         "note": "Real-time distance ranging and environmental telemetry feedback loop."
       }
     ],
-    "output": "diagrams/robotic_arm_motherboard.workflow.html"
+    "output": "docs/diagrams/robotic_arm_motherboard.workflow.html"
   },
   "lanes": [
     { "id": "control_plane", "label": "Control & Visualization" },

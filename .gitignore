@@ -47,7 +47,7 @@ venv/
 # Archives (already extracted)
 # ============================================
 *.zip
-!robotic_arm_motherboard/*.zip
+!hardware/robotic_arm_motherboard/*.zip
 
 # ============================================
 # KiCad EDA Cache & Backups

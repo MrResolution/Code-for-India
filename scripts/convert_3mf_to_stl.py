@@ -85,5 +85,5 @@ if __name__ == '__main__':
         sys.exit(1)
     
     input_file = sys.argv[1]
-    output_dir = sys.argv[2] if len(sys.argv) > 2 else "extracted_stls"
+    output_dir = sys.argv[2] if len(sys.argv) > 2 else "cad/arm/extracted_stls"
     convert_3mf(input_file, output_dir)
