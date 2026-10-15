@@ -51,8 +51,9 @@ One page to find your way around this repository: what is where, how the pieces 
 ├── include/  lib/                 robot_protocol.h (two identical copies), secrets.h.example
 ├── test/                          PlatformIO test placeholder
 │
-├── scripts/                       model build tools. See scripts/README.md
-│   └── dogu/                      export_dogu_from_blender.py → build_dogu.py → urdf/dogu/
+├── scripts/                       build tools. See scripts/README.md
+│   ├── dogu/                      export_dogu_from_blender.py → build_dogu.py → urdf/dogu/
+│   └── ensure_ros_build.sh        sourced by the launchers: rebuilds ros2_ws/install when it is older than the checkout
 ├── cad/                           SOURCE CAD, never loaded at runtime. See cad/README.md
 │   ├── arm/                       Blender scenes, gripper STLs, 3MF, extracted_stls/, solidworks_meshes/
 │   ├── quard_bot/stl/             11 printable parts
@@ -122,6 +123,7 @@ Joint names are global: every robot shares one `/joint_states`, so names must st
 
 ```text
  Desktop app (calibrated_joint_gui.py) ──/joint_states (arm + Quard + Dogu)──► robot_state_publisher ──► RViz2 (docked)
+   │  sets /robot_state_publisher robot_description on tab change (RViz follows the tab)
    │  /servo_calibration  (CALIB:… , RAW:<line>, LINK:<cmd>)
    ▼
  servo_serial_commander ── USB serial or UDP :8888 ──► Arm ESP32
@@ -214,3 +216,10 @@ Anything else is served from `static/`. With `--host 0.0.0.0` there is **no auth
 12. **The web twin needs internet.** Three.js r128 and its loaders come from cdnjs and jsdelivr, as globals (`THREE.STLLoader`). Don't mix in ES-module builds.
 13. **The arm calibration is live data.** `servo_calibration.json` drives real servo limits, so tests must work on a copy. Upstream raised every `servo_max_deg` to 180; check it against the hardware.
 14. **Large binaries.** `cad/` holds about 140 MB, mostly `.blend` files. Avoid tools that read every file in the tree.
+15. **The ROS launchers run the installed copy.**
+    - `ros2 launch` and `ros2 run` start `servo_joint_publisher` from `ros2_ws/install`. After a plain `colcon build`, that is a copy that a `git pull` doesn't update.
+    - `launch_dashboard.sh` and `launch_web_dashboard.sh` source `scripts/ensure_ros_build.sh`, which rebuilds the package when the copy differs from the checkout.
+    - The web server and the no-ROS desktop path run straight from the checkout.
+16. **One RViz, many models.** The desktop app swaps the model in `robot_state_publisher` as tabs change (`load_robot_description()`).
+    - Every model must hang off `world`. `attach_to_world()` adds the link when a URDF starts elsewhere; it lives in both `calibrated_joint_gui.py` and `display_ros2.launch.py`, so change both.
+    - Link names must stay unique across robots, like joint names: TF frames are global.

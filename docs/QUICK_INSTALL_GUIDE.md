@@ -67,6 +67,8 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
+The dashboard launchers also rebuild this package when `ros2_ws/install` is missing or older than the checkout (for example after a `git pull` on a workspace built without `--symlink-install`).
+
 ---
 
 ## 🚀 3. Launching the Systems

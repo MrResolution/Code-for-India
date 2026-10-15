@@ -42,9 +42,9 @@ pkill -9 -f calibrated_joint_gui 2>/dev/null || true
 # If ROS 2 Jazzy is present, launch full ROS 2 stack + RViz2
 if [ -f /opt/ros/jazzy/setup.bash ]; then
   source /opt/ros/jazzy/setup.bash
-  if [ -f "$SCRIPT_DIR/ros2_ws/install/setup.bash" ]; then
-    source "$SCRIPT_DIR/ros2_ws/install/setup.bash"
-  fi
+  # Sources ros2_ws/install, rebuilding it first if it is older than the checkout.
+  source "$SCRIPT_DIR/scripts/ensure_ros_build.sh"
+  ensure_ros_build "$SCRIPT_DIR"
   pkill -9 -f robot_state_publisher 2>/dev/null || true
   pkill -9 -f rviz2 2>/dev/null || true
   pkill -9 -f servo_serial_commander 2>/dev/null || true

@@ -4,7 +4,7 @@ This guide covers the two control UIs, how the 3D viewport is docked, the safety
 
 | UI | Launch | Best for |
 |---|---|---|
-| **Desktop app** (`calibrated_joint_gui.py`, PyQt5) | `./launch_dashboard.sh` (`--quard`, `--dual`) | Day-to-day control with the native RViz2 viewport |
+| **Desktop app** (`calibrated_joint_gui.py`, PyQt5) | `./launch_dashboard.sh` (`--quard`, `--dual`, `--dogu`) | Day-to-day control with the native RViz2 viewport |
 | **Web dashboard** (`web_dashboard/`, Three.js) | `./launch_web_dashboard.sh` → http://localhost:8000 | Machines without a desktop session, a second screen, quick checks |
 
 Both drive the same robots and read/write the same `servo_calibration.json`.
@@ -37,6 +37,7 @@ Both drive the same robots and read/write the same `servo_calibration.json`.
 - **Dividers:** both the left/right split and the joints/console split can be dragged.
 - **Connections and consoles:** every tab has a link card and a console; see [section 4](#-4-connections--consoles).
 - **Remembered layout:** window size and both divider positions are saved on exit to `~/.config/CodeForIndia/RobotDashboard.conf`. Delete that file to reset. The starting tab follows the launcher (`--quard` opens the Quard Bot tab, `--dogu` the Dogu tab).
+- **RViz follows the tab:** the Arm, Quard Bot and Dogu tabs each load their own robot into the embedded RViz, whatever the launcher picked. The badge over the viewport (`RViz: 🐕 Dogu`) names the model it shows, and the arm console logs each switch. The Rover tab has no model, so it keeps the last one. After `--dual`, the Arm and Quard tabs show both bots.
 - **Feedback:** saving shows a status-bar message instead of a popup. Errors still open a dialog.
 
 ---
@@ -46,11 +47,14 @@ Both drive the same robots and read/write the same `servo_calibration.json`.
 The dashboard embeds the native **RViz2** 3D viewport side-by-side using an X11 reparenting pipeline:
 
 ### Process Lifecycle & Safety Isolation:
-1. **Direct Child Process**: `calibrated_joint_gui` launches RViz2 directly using `QProcess` with the target robot's RViz config (`arm.rviz`, `quard_bot.rviz`, or `dual_robots.rviz`).
+1. **Direct Child Process**: `calibrated_joint_gui` launches RViz2 directly using `QProcess` with the target robot's RViz config (`arm.rviz`, `quard_bot.rviz`, `dual_robots.rviz` or `dogu.rviz`).
 2. **PID-Locked Window Discovery**: The dashboard identifies the window strictly using the child's exact **Process ID (`_NET_WM_PID`)** and verifies `WM_CLASS == "rviz2"`.
 3. **Host Window Isolation**: The search actively verifies window properties and **strictly excludes** host applications (`antigravity`, VS Code, browsers, or terminal emulators) from being touched or unmapped.
 4. **Reparenting into Qt**: The X11 window is reparented into the PyQt frame (`self.rviz_frame`) using `xdotool windowreparent`.
 5. **Qt Container Integration**: The native X11 window is wrapped in a `QWindow.fromWinId()` and embedded inside a `QWidget.createWindowContainer()`, allowing dynamic resizing alongside the control panel splitter.
+
+### Switching robots
+RViz is never restarted. When the tab changes, the app sets the `robot_description` parameter of `/robot_state_publisher`. It republishes `/robot_description`, and RViz reloads the model from that topic. Every model hangs off a `world` link (the launch file and the app add one when a URDF starts elsewhere), so RViz keeps a valid Fixed Frame for every robot. The camera stays where the launcher's RViz config put it: zoom or pan if a robot looks small.
 
 ---
 
@@ -90,7 +94,7 @@ The dashboard embeds the native **RViz2** 3D viewport side-by-side using an X11 
 - **Console:** the raw stream from the node plus connection events.
 
 ### 🐕 Dogu (12-joint quadruped, model preview)
-Dogu has no firmware or link yet, so this tab only moves the 3D model: nothing is sent to a robot. In the desktop app the angles go out on `/joint_states`, so RViz shows them when started with `./launch_dogu_dashboard.sh` (or `./launch_dashboard.sh --dogu`).
+Dogu has no firmware or link yet, so this tab only moves the 3D model: nothing is sent to a robot. In the desktop app the angles go out on `/joint_states`, and the embedded RViz switches to Dogu while this tab is open, from any launcher. `./launch_dogu_dashboard.sh` (or `./launch_dashboard.sh --dogu`) starts on this tab.
 - **Poses:** Stand, Crouch, Sit. The model eases into each pose in about 0.6 s and holds it.
 - **Moves:** Walk (trot), Turn left, Turn right, Wave (front-right paw), Idle (breathing). These loop until you press **Stop** or pick something else.
 - **Speed:** 0.25× to 2×.
@@ -237,6 +241,11 @@ The server is plain Python (`web_dashboard/server.py`) and also runs without ROS
 
 ### Q: The header says "ROS 2 not found" / "UI only (no ROS)".
 ROS 2 wasn't sourced, so sliders move the twin but nothing is published. Use the launch scripts (they source `/opt/ros/jazzy/setup.bash`), or source it yourself before starting.
+
+### Q: I pulled the latest code but a new tab (for example Dogu) is missing.
+- **Desktop app:** with ROS 2, `./launch_dashboard.sh` starts the copy of the app in `ros2_ws/install`. The launcher rebuilds it (`colcon build --packages-select servo_joint_publisher`) when it no longer matches the checkout, so start it through the launcher. If you run `ros2 run` or `ros2 launch` yourself, run `cd ros2_ws && colcon build` first.
+- **Check the branch:** `grep -c "class DoguWidget" ros2_ws/src/servo_joint_publisher/servo_joint_publisher/calibrated_joint_gui.py` must print `1`. If it prints `0`, the branch you pulled doesn't have the Dogu tab yet.
+- **Web dashboard:** it runs from the checkout, so a reload is enough. Restart `./launch_web_dashboard.sh` if the old server is still running.
 
 ### Q: Can I run both the Robotic Arm and Quard Bot together?
 - **Yes**: Run `./launch_dual_dashboard.sh`. The dashboard loads both robots simultaneously into RViz2.

@@ -1,4 +1,5 @@
 import os
+import xml.etree.ElementTree as ET
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
@@ -12,6 +13,27 @@ URDF_DIR = os.path.join(PROJECT_DIR, 'urdf')
 # The URDFs point their meshes at this checkout path; swap in the real one so
 # RViz finds them wherever the repository lives.
 URDF_MESH_PREFIX = 'file:///home/sabo/Documents/learn_/Hardware'
+
+
+def attach_to_world(urdf):
+    """Hang a model off a `world` link when its tree starts elsewhere.
+
+    Every robot then shares one root frame, so the desktop app can swap the
+    model in robot_state_publisher (its RViz follows the robot tab) without
+    RViz losing its Fixed Frame. calibrated_joint_gui.py has the same helper.
+    """
+    root = ET.fromstring(urdf)
+    links = {link.get('name') for link in root.findall('link')}
+    children = {j.find('child').get('link') for j in root.findall('joint') if j.find('child') is not None}
+    roots = sorted(links - children)
+    if 'world' in links or len(roots) != 1:
+        return urdf
+    joint = (f'  <link name="world"/>\n'
+             f'  <joint name="world_to_{root.get("name", "robot")}" type="fixed">\n'
+             f'    <parent link="world"/>\n    <child link="{roots[0]}"/>\n  </joint>\n')
+    end = urdf.rindex('</robot>')
+    return urdf[:end] + joint + urdf[end:]
+
 
 def launch_setup(context, *args, **kwargs):
     robot = LaunchConfiguration('robot').perform(context).lower()
@@ -31,7 +53,7 @@ def launch_setup(context, *args, **kwargs):
         rviz_config = os.path.join(URDF_DIR, 'arm', 'rviz', 'arm.rviz')
 
     with open(urdf_file, 'r') as f:
-        robot_desc = f.read().replace(URDF_MESH_PREFIX, 'file://' + PROJECT_DIR)
+        robot_desc = attach_to_world(f.read().replace(URDF_MESH_PREFIX, 'file://' + PROJECT_DIR))
 
     nodes = []
 

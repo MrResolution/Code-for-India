@@ -26,7 +26,12 @@ else
   echo "⚠️  $ROS_SETUP not found: dashboard will run UI-only (no ROS publishing)."
   START_COMMANDER=false
 fi
-if [ -f "$PROJECT_DIR/ros2_ws/install/setup.bash" ]; then
+if [ "$START_COMMANDER" = true ]; then
+  # The commander runs from ros2_ws/install: rebuild it if it is older than the checkout.
+  # shellcheck disable=SC1091
+  source "$PROJECT_DIR/scripts/ensure_ros_build.sh"
+  ensure_ros_build "$PROJECT_DIR"
+elif [ -f "$PROJECT_DIR/ros2_ws/install/setup.bash" ]; then
   # shellcheck disable=SC1091
   source "$PROJECT_DIR/ros2_ws/install/setup.bash"
 fi

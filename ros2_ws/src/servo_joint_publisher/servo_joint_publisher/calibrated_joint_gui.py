@@ -76,6 +76,8 @@ try:
     from sensor_msgs.msg import JointState
     from std_msgs.msg import String as StringMsg
     from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
+    from rclpy.parameter import Parameter
+    from rcl_interfaces.srv import SetParameters
     # Must match servo_serial_commander: latched link state, volatile console.
     LINK_STATE_QOS = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                 durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -122,6 +124,49 @@ def find_project_dir():
 PROJECT_DIR = find_project_dir()
 CALIB_FILE_PATH = os.path.join(PROJECT_DIR, "servo_calibration.json")
 URDF_PATH = os.path.join(PROJECT_DIR, "urdf", "arm", "urdf", "arm.urdf")
+
+# Models robot_state_publisher can hold, keyed like ROBOT_TARGET (same files as
+# urdf/unnamed/display_ros2.launch.py). RViz follows the robot tab by swapping them.
+RVIZ_URDFS = {
+    "arm": os.path.join(PROJECT_DIR, "urdf", "arm", "urdf", "arm.urdf"),
+    "quard": os.path.join(PROJECT_DIR, "urdf", "quard_bot", "urdf", "quard_bot.urdf"),
+    "dual": os.path.join(PROJECT_DIR, "urdf", "dual_robots.urdf"),
+    "dogu": os.path.join(PROJECT_DIR, "urdf", "dogu", "urdf", "dogu.urdf"),
+}
+RVIZ_BADGES = {
+    "arm": ("🦾 Arm", "#0284c7"),
+    "quard": ("🤖 Quard", "#10b981"),
+    "rover": ("🚀 Rover", "#f59e0b"),
+    "dual": ("⚡ Dual Bots", "#8b5cf6"),
+    "dogu": ("🐕 Dogu", "#0ea5e9"),
+}
+URDF_MESH_PREFIX = "file:///home/sabo/Documents/learn_/Hardware"
+
+
+def attach_to_world(urdf):
+    """Hang a model off a `world` link when its tree starts elsewhere.
+
+    Every robot then shares one root frame, so RViz keeps a valid Fixed Frame
+    when robot_state_publisher swaps models. display_ros2.launch.py does the same.
+    """
+    root = ET.fromstring(urdf)
+    links = {link.get("name") for link in root.findall("link")}
+    children = {j.find("child").get("link") for j in root.findall("joint") if j.find("child") is not None}
+    roots = sorted(links - children)
+    if "world" in links or len(roots) != 1:
+        return urdf
+    joint = (f'  <link name="world"/>\n'
+             f'  <joint name="world_to_{root.get("name", "robot")}" type="fixed">\n'
+             f'    <parent link="world"/>\n    <child link="{roots[0]}"/>\n  </joint>\n')
+    end = urdf.rindex("</robot>")
+    return urdf[:end] + joint + urdf[end:]
+
+
+def load_robot_description(robot):
+    """URDF text for robot_state_publisher, built as display_ros2.launch.py builds it."""
+    with open(RVIZ_URDFS[robot]) as f:
+        urdf = f.read().replace(URDF_MESH_PREFIX, "file://" + PROJECT_DIR)
+    return attach_to_world(urdf)
 
 # Default Homing Pose requested by user for the 5 URDF arm joints:
 DEFAULT_HOME_DEGS = {
@@ -3177,8 +3222,8 @@ class DoguWidget(QWidget):
         left.addLayout(speed_row)
         left.addStretch(1)
 
-        hint = muted_label("RViz shows Dogu when started with ./launch_dashboard.sh --dogu "
-                           "(or ./launch_dogu_dashboard.sh). Source model: cad/dogu/Dogu.blend.")
+        hint = muted_label("The embedded RViz switches to Dogu while this tab is open "
+                           "(./launch_dogu_dashboard.sh starts on it). Source model: cad/dogu/Dogu.blend.")
         left.addWidget(hint)
 
         left_w = QWidget()
@@ -3599,6 +3644,19 @@ class CalibratedJointPublisherGUI(QMainWindow):
         self.tabs.addTab(self.sensor_node_widget, "🚀 Rover")
         self.tabs.addTab(self.dogu_widget, "🐕 Dogu")
 
+        # RViz follows the robot tab: robot_state_publisher starts with the
+        # launch target's model and is swapped as tabs change (see _sync_rviz_to_tab).
+        self.rviz_target = os.environ.get("ROBOT_TARGET", "arm").lower()
+        if self.rviz_target not in RVIZ_URDFS:
+            self.rviz_target = "arm"
+        self.rviz_robot = self.rviz_target      # model robot_state_publisher holds
+        self.rviz_follows_tab = False           # set once RViz is started (ROS only)
+        self._rviz_wanted = None
+        self._rviz_seq = 0                      # last swap request id
+        self._rviz_pending = 0                  # id of the swap in flight, 0 = none
+        self._rviz_tries = 0
+        self._rviz_warned = False
+
         self.tabs.currentChanged.connect(self.on_tab_changed)
 
         main_splitter.addWidget(self.tabs)
@@ -3691,18 +3749,10 @@ class CalibratedJointPublisherGUI(QMainWindow):
         esc = QShortcut(QKeySequence(Qt.Key_Escape), self, activated=self.engage_estop)
         esc.setContext(Qt.ApplicationShortcut)
 
-        target_robot = os.environ.get("ROBOT_TARGET", "arm").lower()
-        if target_robot == "quard":
+        if self.rviz_target == "quard":
             self.tabs.setCurrentWidget(self.quard_bot_widget)
-            self.lbl_rviz_target.setText("Target: 🤖 Quard")
-            self.lbl_rviz_target.setStyleSheet("background-color: #10b981; color: #ffffff; padding: 2px 8px; border-radius: 10px;")
-        elif target_robot == "dual":
-            self.lbl_rviz_target.setText("Target: ⚡ Dual Bots")
-            self.lbl_rviz_target.setStyleSheet("background-color: #8b5cf6; color: #ffffff; padding: 2px 8px; border-radius: 10px;")
-        elif target_robot == "dogu":
+        elif self.rviz_target == "dogu":
             self.tabs.setCurrentWidget(self.dogu_widget)
-            self.lbl_rviz_target.setText("Target: 🐕 Dogu")
-            self.lbl_rviz_target.setStyleSheet("background-color: #0ea5e9; color: #ffffff; padding: 2px 8px; border-radius: 10px;")
 
         # RViz embedding process state
         self.rviz_process = None
@@ -3739,6 +3789,7 @@ class CalibratedJointPublisherGUI(QMainWindow):
         ]
 
         self.restore_ui_state()
+        self._sync_rviz_to_tab()
         self.refresh_arm_port_list()
         self.arm_link_timer = QTimer(self)
         self.arm_link_timer.timeout.connect(self.refresh_arm_link)
@@ -3972,35 +4023,102 @@ class CalibratedJointPublisherGUI(QMainWindow):
             self.arm_console.log("Joint commands typed here are clamped to the joint limits; the next slider move overrides them.", 'info')
 
     def on_tab_changed(self, index):
-        """Handle tab transitions and update status badges."""
-        target_robot = os.environ.get("ROBOT_TARGET", "arm").lower()
-        if target_robot == "dual":
-            # In dual mode, RViz always displays both bots
-            prefix = "Tab: "
-        else:
-            prefix = "Active: "
+        """Handle tab transitions: RViz follows the tab, and the badge says what it shows."""
+        if index == 1 and hasattr(self, 'quard_bot_widget'):
+            if hasattr(self.quard_bot_widget, 'ping_quard_bot'):
+                self.quard_bot_widget.ping_quard_bot()
+            elif hasattr(self.quard_bot_widget, 'ping_robot'):
+                self.quard_bot_widget.ping_robot()
 
-        if index == 0:
-            self.lbl_rviz_target.setText(f"{prefix}🦾 Arm")
-            self.lbl_rviz_target.setStyleSheet("background-color: #0284c7; color: #ffffff; padding: 2px 8px; border-radius: 10px;")
-        elif index == 1:
-            self.lbl_rviz_target.setText(f"{prefix}🤖 Quard")
-            self.lbl_rviz_target.setStyleSheet("background-color: #10b981; color: #ffffff; padding: 2px 8px; border-radius: 10px;")
-            if hasattr(self, 'quard_bot_widget'):
-                if hasattr(self.quard_bot_widget, 'ping_quard_bot'):
-                    self.quard_bot_widget.ping_quard_bot()
-                elif hasattr(self.quard_bot_widget, 'ping_robot'):
-                    self.quard_bot_widget.ping_robot()
-        elif index == 2:
-            self.lbl_rviz_target.setText(f"{prefix}🚀 Rover")
-            self.lbl_rviz_target.setStyleSheet("background-color: #f59e0b; color: #ffffff; padding: 2px 8px; border-radius: 10px;")
-        elif index == 3:
-            self.lbl_rviz_target.setText(f"{prefix}🐕 Dogu")
-            self.lbl_rviz_target.setStyleSheet("background-color: #0ea5e9; color: #ffffff; padding: 2px 8px; border-radius: 10px;")
+        self._sync_rviz_to_tab()
 
         # Ensure embedded RViz window is properly resized
         QTimer.singleShot(50, self._resize_embedded_rviz)
         QTimer.singleShot(250, self._resize_embedded_rviz)
+
+    def _tab_robot(self):
+        """Robot of the current tab: arm, quard, rover or dogu."""
+        widget = self.tabs.currentWidget()
+        if widget is getattr(self, 'quard_bot_widget', None):
+            return "quard"
+        if widget is getattr(self, 'sensor_node_widget', None):
+            return "rover"
+        if widget is getattr(self, 'dogu_widget', None):
+            return "dogu"
+        return "arm"
+
+    def _update_rviz_label(self):
+        """Badge over the 3D view: the model RViz shows, or the tab when there is no RViz."""
+        if self.rviz_follows_tab:
+            robot = self.rviz_robot
+            text = f"RViz: {RVIZ_BADGES[robot][0]}"
+            if self._rviz_pending and self._rviz_wanted in RVIZ_BADGES:
+                text = f"RViz: loading {RVIZ_BADGES[self._rviz_wanted][0]}…"
+        else:
+            robot = self._tab_robot()
+            text = f"Active: {RVIZ_BADGES[robot][0]}"
+        self.lbl_rviz_target.setText(text)
+        self.lbl_rviz_target.setStyleSheet(
+            f"background-color: {RVIZ_BADGES[robot][1]}; color: #ffffff; padding: 2px 8px; border-radius: 10px;")
+
+    def _sync_rviz_to_tab(self):
+        """Ask robot_state_publisher for the current tab's model; RViz reloads it.
+
+        The rover has no model, so its tab keeps the last one. A dual launch
+        shows both bots on the Arm and Quard tabs.
+        """
+        robot = self._tab_robot()
+        if self.rviz_target == "dual" and robot in ("arm", "quard"):
+            robot = "dual"
+        if self.rviz_follows_tab and robot != "rover":
+            self._rviz_wanted = robot
+            self._rviz_tries = 0
+            self._push_rviz_robot()
+        self._update_rviz_label()
+
+    def _push_rviz_robot(self):
+        wanted = self._rviz_wanted
+        if self._rviz_pending or wanted is None or wanted == self.rviz_robot:
+            return
+        name = RVIZ_BADGES[wanted][0]
+        if not self.ros_node.robot_description_ready():
+            # robot_state_publisher may still be starting (or not running at all).
+            self._rviz_tries += 1
+            if self._rviz_tries <= 20:
+                QTimer.singleShot(500, self._push_rviz_robot)
+            elif not self._rviz_warned:
+                self._rviz_warned = True
+                self.log_to_console("⚠️ robot_state_publisher isn't answering, so RViz can't switch models. "
+                                    "Start the dashboard with ./launch_dashboard.sh.")
+            return
+        try:
+            urdf = load_robot_description(wanted)
+        except (OSError, ET.ParseError) as e:
+            self.log_to_console(f"❌ Can't load the {name} model for RViz: {e}")
+            self._rviz_wanted = None
+            return
+        self._rviz_seq += 1
+        request = self._rviz_pending = self._rviz_seq
+        self.ros_node.set_robot_description(
+            urdf, lambda ok, reason: self._on_rviz_robot_set(request, wanted, ok, reason))
+        # A request robot_state_publisher never answers must not block later tabs.
+        QTimer.singleShot(5000, lambda: self._on_rviz_robot_set(request, wanted, False, "no reply"))
+        self._update_rviz_label()
+
+    def _on_rviz_robot_set(self, request, robot, ok, reason):
+        if request != self._rviz_pending:
+            return          # already answered, or timed out
+        self._rviz_pending = 0
+        name = RVIZ_BADGES[robot][0]
+        if ok:
+            self.rviz_robot = robot
+            self.log_to_console(f"🧊 RViz now shows {name}.")
+        else:
+            self.log_to_console(f"❌ RViz couldn't switch to {name}: {reason or 'refused'}")
+            if self._rviz_wanted == robot:
+                self._rviz_wanted = None
+        self._update_rviz_label()
+        self._push_rviz_robot()     # the tab may have changed meanwhile
 
     def init_rviz_embed(self):
         """Spawn RViz2 as child process or embed WebGL twin if ROS 2 is not present."""
@@ -4038,6 +4156,7 @@ class CalibratedJointPublisherGUI(QMainWindow):
         self.rviz_process.setProcessEnvironment(env)
 
         self.rviz_process.start(rviz_bin, ["-d", rviz_config])
+        self.rviz_follows_tab = ROS2_AVAILABLE
 
         self.already_docked = False
         self._embed_attempt = 0
@@ -4715,7 +4834,29 @@ if ROS2_AVAILABLE:
                 self.joint_states_callback,
                 10
             )
+            # Swaps the model robot_state_publisher holds, so RViz follows the robot tab.
+            self.rsp_params = self.create_client(SetParameters, '/robot_state_publisher/set_parameters')
             self.get_logger().info("Calibrated Joint Publisher GUI Node initialized.")
+
+        def robot_description_ready(self):
+            return self.rsp_params.service_is_ready()
+
+        def set_robot_description(self, urdf, done):
+            """Give robot_state_publisher a new model; done(ok, reason) runs on reply.
+
+            It republishes /robot_description and RViz reloads the robot from it.
+            """
+            req = SetParameters.Request()
+            req.parameters = [Parameter('robot_description', Parameter.Type.STRING, urdf).to_parameter_msg()]
+
+            def _finished(future):
+                try:
+                    result = future.result().results[0]
+                    done(result.successful, result.reason)
+                except Exception as e:
+                    done(False, str(e))
+
+            self.rsp_params.call_async(req).add_done_callback(_finished)
 
         def joint_states_callback(self, msg: JointState):
             if self.gui_ref and self.gui_ref.is_gesture_mode:
@@ -4775,6 +4916,10 @@ else:
             return self._logger
         def publish_calibration(self, calib_str):
             pass
+        def robot_description_ready(self):
+            return False
+        def set_robot_description(self, urdf, done):
+            done(False, "ROS 2 is not available")
         def destroy_node(self):
             pass
 
