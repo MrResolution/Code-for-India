@@ -125,6 +125,12 @@ PROJECT_DIR = find_project_dir()
 CALIB_FILE_PATH = os.path.join(PROJECT_DIR, "servo_calibration.json")
 URDF_PATH = os.path.join(PROJECT_DIR, "urdf", "arm", "urdf", "arm.urdf")
 
+# Gesture Mode runs the sibling gesture_teleop_node.py as a direct child (not
+# through `ros2 run`, whose child would outlive a kill). It publishes targets
+# here; the sliders apply them, so limits and E-STOP stay in this app.
+GESTURE_NODE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gesture_teleop_node.py")
+GESTURE_TOPIC = "/gesture_teleop/joint_targets"
+
 # Models robot_state_publisher can hold, keyed like ROBOT_TARGET (same files as
 # urdf/unnamed/display_ros2.launch.py). RViz follows the robot tab by swapping them.
 RVIZ_URDFS = {
@@ -4803,50 +4809,156 @@ class CalibratedJointPublisherGUI(QMainWindow):
         if not self.commander_alive():
             self.log_to_console(f"{cmd} published, but servo_serial_commander isn't running", 'warn')
 
-    def update_sliders_from_ros(self, msg: JointState):
-        """Update GUI joint sliders visually when gesture teleop is active."""
-        if not self.is_gesture_mode:
+    def apply_gesture_targets(self, msg: JointState):
+        """Move the arm sliders to gesture_teleop_node's targets.
+
+        publish_joint_states() then sends them like any slider move, so the
+        slider limits apply and E-STOP (which ends Gesture Mode) stops them.
+        """
+        if not self.is_gesture_mode or self.estop_engaged:
             return
-        for j_name, w in self.joint_widgets.items():
-            if j_name in msg.name:
-                idx = msg.name.index(j_name)
-                if idx < len(msg.position):
-                    rad_val = msg.position[idx]
-                    if not math.isfinite(rad_val):
-                        continue
-                    r_min, r_max = w.rad_min, w.rad_max
-                    ratio = (rad_val - r_min) / (r_max - r_min) if r_max != r_min else 0.5
-                    # Published angles are twin poses (slider + sync), the inverse of
-                    # get_current_rad(); drop the offset and respect the slider limits
-                    # so leaving gesture mode does not make the arm jump.
-                    deg = ratio * 180.0 - w.sync_offset_deg
-                    deg = max(w.spin_min.value(), min(w.spin_max.value(), deg))
-                    w.slider.blockSignals(True)
-                    w.slider.setValue(int(deg * 10))
-                    w.label_val.setText(f"{deg:.1f}° ({rad_val:.3f} rad)")
-                    w.slider.blockSignals(False)
+        for j_name, rad_val in zip(msg.name, msg.position):
+            w = self.joint_widgets.get(j_name)
+            if w is None or not math.isfinite(rad_val):
+                continue
+            r_min, r_max = w.rad_min, w.rad_max
+            ratio = (rad_val - r_min) / (r_max - r_min) if r_max != r_min else 0.5
+            # Targets are twin poses (slider + sync), the inverse of get_current_rad().
+            w.set_deg_programmatically(ratio * 180.0 - w.sync_offset_deg)
 
     def toggle_gesture_mode(self, checked):
         """Toggle between Manual Joint Sliders and Computer Vision Body Gesture Mode."""
-        self.is_gesture_mode = checked
         if checked:
+            reason = None
+            if self.estop_engaged:
+                reason = "E-STOP is engaged"
+            elif not ROS2_AVAILABLE:
+                reason = "it needs ROS 2, and this app is running without it"
+            elif not os.path.isfile(GESTURE_NODE_FILE):
+                reason = f"{GESTURE_NODE_FILE} is missing"
+            if reason:
+                self.btn_gesture.setChecked(False)
+                self.log_to_console(f"Gesture Mode not started: {reason}.", 'warn')
+                return
+
             if self.is_simulating:
                 self.btn_sim.setChecked(False)
                 self.toggle_simulation(False)
-
+            self.is_homing = False
+            self.is_gesture_mode = True
+            self.btn_gesture.setChecked(True)
             self.btn_gesture.setText("✋ Gesture ACTIVE")
-            self.log_to_console("🖐️ [MODE SWITCH] Activated Body Gesture Teleoperation Mode (Webcam /dev/video0).")
-
-            if self.gesture_process is None:
-                self.gesture_process = QProcess(self)
-            self.gesture_process.start("ros2", ["run", "servo_joint_publisher", "gesture_teleop_node"])
+            for w in self.joint_widgets.values():
+                w.slider.setEnabled(False)
+            self.log_to_console("🖐️ [MODE SWITCH] Gesture Mode: starting gesture_teleop_node (webcam /dev/video0) ...")
+            self._start_gesture_process()
         else:
+            was_on = self.is_gesture_mode
+            self.is_gesture_mode = False          # first: no target is applied after this
+            self.btn_gesture.setChecked(False)
             self.btn_gesture.setText("✋ Gesture Mode")
-            self.log_to_console("🕹️ [MODE SWITCH] Returned to Manual Slider Control Mode.")
+            for w in self.joint_widgets.values():
+                w.slider.setEnabled(True)
+            self._stop_gesture_process()
+            if was_on:
+                self.log_to_console("🕹️ [MODE SWITCH] Returned to Manual Slider Control Mode.")
 
-            if self.gesture_process and self.gesture_process.state() != QProcess.NotRunning:
-                self.gesture_process.kill()
-                self.gesture_process.waitForFinished(1000)
+    def _start_gesture_process(self):
+        old = self.gesture_process
+        if old is not None and old.state() != QProcess.NotRunning:
+            # Still closing after a quick off/on: it holds the camera until it exits.
+            if not old.waitForFinished(2000):
+                old.kill()
+                old.waitForFinished(1000)
+        proc = QProcess(self)
+        proc.stopping = False
+        proc.partial = ''
+        proc.setProcessChannelMode(QProcess.MergedChannels)
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert("PYTHONUNBUFFERED", "1")
+        env.insert("PYTHONIOENCODING", "utf-8")       # read back as UTF-8 below
+        env.insert("RCUTILS_COLORIZED_OUTPUT", "0")
+        proc.setProcessEnvironment(env)
+        proc.readyReadStandardOutput.connect(lambda p=proc: self._on_gesture_output(p))
+        proc.finished.connect(lambda *args, p=proc: self._on_gesture_finished(p, *args))
+        proc.errorOccurred.connect(lambda err, p=proc: self._on_gesture_error(p, err))
+        self.gesture_process = proc
+        proc.start(sys.executable, [GESTURE_NODE_FILE, '--ros-args', '-p', f'output_topic:={GESTURE_TOPIC}'])
+
+    def _stop_gesture_process(self, wait=False):
+        """SIGTERM the node (it closes its camera and window); SIGKILL if it hangs."""
+        proc = self.gesture_process
+        if proc is None or proc.state() == QProcess.NotRunning:
+            return
+        proc.stopping = True
+        proc.terminate()
+        if wait:
+            if not proc.waitForFinished(1500):
+                proc.kill()
+                proc.waitForFinished(1000)
+        else:
+            QTimer.singleShot(1500, lambda p=proc: self._kill_if_running(p))
+
+    @staticmethod
+    def _kill_if_running(proc):
+        try:
+            if proc.state() != QProcess.NotRunning:
+                proc.kill()
+        except RuntimeError:      # already deleted
+            pass
+
+    _ROS_LOG_RE = re.compile(r'\[(DEBUG|INFO|WARN|ERROR|FATAL)\]\s*\[[\d.]+\]\s*\[[^\]]*\]:\s*(.*)')
+    _GLOG_RE = re.compile(r'([IWEF])\d{4} ')     # MediaPipe / absl log lines
+
+    def _on_gesture_output(self, proc):
+        text = proc.partial + bytes(proc.readAllStandardOutput()).decode('utf-8', 'replace')
+        *lines, proc.partial = text.split('\n')
+        for line in lines:
+            self._log_gesture_line(line)
+
+    def _log_gesture_line(self, line):
+        line = line.strip()
+        if not line:
+            return
+        g = self._GLOG_RE.match(line)
+        if (g and g.group(1) in 'IW') or line.startswith(('INFO: Created TensorFlow', 'WARNING: All log messages')):
+            return
+        kind = 'error' if g else 'info'
+        m = self._ROS_LOG_RE.match(line)
+        if m:
+            kind = {'WARN': 'warn', 'ERROR': 'error', 'FATAL': 'error'}.get(m.group(1), 'info')
+            line = m.group(2)
+        elif line.startswith('Traceback') or re.match(r'\w*(Error|Exception)\b', line):
+            kind = 'error'
+        self.log_to_console(f"gesture: {line}", kind)
+
+    def _on_gesture_finished(self, proc, exit_code=0, exit_status=None):
+        self._on_gesture_output(proc)
+        self._log_gesture_line(proc.partial)
+        proc.partial = ''
+        if proc is not self.gesture_process:
+            return
+        self.gesture_process = None
+        proc.deleteLater()
+        if proc.stopping or not self.is_gesture_mode:
+            return
+        # It ended on its own: hand the sliders back.
+        if exit_code == 0 and exit_status != QProcess.CrashExit:
+            self.log_to_console("Gesture Mode ended: the gesture window was closed (q / Esc).", 'info')
+        else:
+            how = "crashed" if exit_status == QProcess.CrashExit else f"exited with status {exit_code}"
+            self.log_to_console(f"❌ Gesture Mode stopped: gesture_teleop_node {how}. The lines above say why.")
+            self.statusBar().showMessage("⚠ Gesture Mode stopped: see the arm console", 8000)
+        self.toggle_gesture_mode(False)
+
+    def _on_gesture_error(self, proc, err):
+        if err != QProcess.FailedToStart or proc is not self.gesture_process:
+            return                          # crashes also emit finished
+        self.gesture_process = None
+        self.log_to_console(f"❌ Gesture Mode: could not run {sys.executable} {GESTURE_NODE_FILE}: "
+                            f"{proc.errorString()}")
+        if self.is_gesture_mode:
+            self.toggle_gesture_mode(False)
 
     def engage_estop(self):
         """Software E-STOP: stop every motion source and lock the motion controls.
@@ -4946,13 +5058,14 @@ class CalibratedJointPublisherGUI(QMainWindow):
                 self.rviz_process.waitForFinished(1000)
             except Exception:
                 pass
-        if self.gesture_process and self.gesture_process.state() != QProcess.NotRunning:
-            self.gesture_process.kill()
-            self.gesture_process.waitForFinished(1000)
+        self.is_gesture_mode = False
+        self._stop_gesture_process(wait=True)
         super().closeEvent(event)
 
     def go_to_home_pose_smooth(self):
         """Initiate smooth, slow homing transition from any joint position over 2.0 seconds."""
+        if self.is_gesture_mode:
+            self.toggle_gesture_mode(False)
         if self.is_simulating:
             self.btn_sim.setChecked(False)
             self.toggle_simulation(False)
@@ -4999,6 +5112,8 @@ class CalibratedJointPublisherGUI(QMainWindow):
         self.log_to_console("📌 Current Pose set as default Homing Position.")
 
     def toggle_simulation(self, checked):
+        if checked and self.is_gesture_mode:
+            self.toggle_gesture_mode(False)
         self.is_simulating = checked
         if checked:
             if self.is_homing:
@@ -5056,6 +5171,8 @@ class CalibratedJointPublisherGUI(QMainWindow):
                 w.set_deg_programmatically(target_deg)
 
     def center_all(self):
+        if self.is_gesture_mode:
+            self.toggle_gesture_mode(False)
         if self.is_simulating:
             self.btn_sim.setChecked(False)
             self.toggle_simulation(False)
@@ -5076,9 +5193,8 @@ class CalibratedJointPublisherGUI(QMainWindow):
         self.ros_node.publish_calibration(calib_str)
 
     def publish_joint_states(self):
-        if self.is_gesture_mode:
-            return  # Yield /joint_states control to gesture_teleop_node to prevent RViz glitching
-
+        # In Gesture Mode the sliders follow apply_gesture_targets(); every joint
+        # (wrist twist, Quard, Dogu) keeps publishing, so RViz stays whole.
         if self.is_homing:
             self.step_homing()
         elif self.is_simulating:
@@ -5140,11 +5256,11 @@ if ROS2_AVAILABLE:
                 StringMsg, '/esp32_link_state', self.link_state_callback, LINK_STATE_QOS)
             self.console_sub = self.create_subscription(
                 StringMsg, '/esp32_console', self.console_callback, CONSOLE_QOS)
-            # Subscribe to /joint_states to mirror active gesture pose on GUI sliders
-            self.joint_sub = self.create_subscription(
+            # Gesture Mode: targets from gesture_teleop_node, applied to the sliders
+            self.gesture_sub = self.create_subscription(
                 JointState,
-                '/joint_states',
-                self.joint_states_callback,
+                GESTURE_TOPIC,
+                self.gesture_targets_callback,
                 10
             )
             # Swaps the model robot_state_publisher holds, so RViz follows the robot tab.
@@ -5171,9 +5287,9 @@ if ROS2_AVAILABLE:
 
             self.rsp_params.call_async(req).add_done_callback(_finished)
 
-        def joint_states_callback(self, msg: JointState):
-            if self.gui_ref and self.gui_ref.is_gesture_mode:
-                self.gui_ref.update_sliders_from_ros(msg)
+        def gesture_targets_callback(self, msg: JointState):
+            if self.gui_ref:
+                self.gui_ref.apply_gesture_targets(msg)
 
         def status_callback(self, msg: StringMsg):
             if self.gui_ref:
@@ -5269,9 +5385,8 @@ def main(args=None):
 
     exit_code = app.exec_()
 
-    if gui.gesture_process and gui.gesture_process.state() != QProcess.NotRunning:
-        gui.gesture_process.kill()
-        gui.gesture_process.waitForFinished(1000)
+    gui.is_gesture_mode = False
+    gui._stop_gesture_process(wait=True)
 
     ros_node.destroy_node()
     if ROS2_AVAILABLE:

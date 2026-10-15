@@ -47,12 +47,21 @@ sudo apt install -y \
 # Step 6: Desktop dashboard (PyQt5), embedded WebGL twin, serial access
 sudo apt install -y python3-pyqt5 python3-pyqt5.qtwebengine python3-serial
 
+# Step 6b (gesture teleoperation only): MediaPipe + OpenCV for the Python ROS uses
+sudo apt install -y python3-pip
+/usr/bin/python3 -m pip install --user --break-system-packages mediapipe "numpy<2"
+
 # Step 7: Enable ROS 2 environment in shell
 echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
 source /opt/ros/jazzy/setup.bash
 ```
 
 > If a project virtualenv exists at `.venv/`, `launch_dashboard.sh` uses its Python instead of the system one; install `PyQt5` and `pyserial` there too.
+
+> **Gesture teleoperation (Step 6b).** `gesture_teleop_node` runs under the system Python (`/usr/bin/python3`), so install MediaPipe there, not in a virtualenv or conda. `numpy<2` keeps the numpy that ROS 2 Jazzy was built against; pip also pulls in `opencv-contrib-python`.
+> - MediaPipe 0.10.21 and older have the legacy pose API, which the node uses as is.
+> - Newer releases (1.x) dropped that API. The node then uses MediaPipe's PoseLandmarker, and on its first run downloads the model `pose_landmarker_full.task` (about 9 MB) into `~/.cache/code_for_india/`.
+> - Offline? Get the model from Google's [Pose Landmarker models list](https://developers.google.com/edge/mediapipe/solutions/vision/pose_landmarker#models) and pass `-p model_path:=<file>`.
 
 ---
 
@@ -82,9 +91,11 @@ From the repository root directory, run any of the dedicated launch scripts:
 | **⚡ Dual Robots (Both)** | `./launch_dual_dashboard.sh` | Desktop GUI + Embedded RViz2 |
 | **🐕 Dogu (model preview)** | `./launch_dogu_dashboard.sh` | Desktop GUI + Embedded RViz2 |
 | **🌐 WebGL Browser Twin** | `./launch_web_dashboard.sh` | Three.js Web (http://localhost:8000) |
-| **🎮 Gesture Teleoperation** | `./launch_gesture_teleop.sh` | MediaPipe Hand Tracking |
+| **🎮 Gesture Teleoperation** | `./launch_gesture_teleop.sh [--port /dev/ttyUSB0] [--camera 0]` | MediaPipe body pose → arm over USB serial + RViz2, no dashboard (no E-STOP: q / Esc / Ctrl+C) |
 
-The dashboard launchers (`launch_dashboard.sh`, `launch_quard_dashboard.sh`, `launch_dual_dashboard.sh`, `launch_dogu_dashboard.sh`, `launch_web_dashboard.sh`) find the project from their own location (`ROBOT_PROJECT_DIR`), so the repository can live anywhere. `launch_gesture_teleop.sh` and `launch_quard_rviz.sh` still expect it at `/home/sabo/Documents/learn_/Hardware`.
+The dashboard launchers (`launch_dashboard.sh`, `launch_quard_dashboard.sh`, `launch_dual_dashboard.sh`, `launch_dogu_dashboard.sh`, `launch_web_dashboard.sh`) and `launch_gesture_teleop.sh` find the project from their own location (`ROBOT_PROJECT_DIR`), so the repository can live anywhere. `launch_quard_rviz.sh` still expects it at `/home/sabo/Documents/learn_/Hardware`.
+
+In the desktop app, **✋ Gesture Mode** on the Arm tab runs the same tracking behind the dashboard's limits and E-STOP.
 
 Web dashboard options: `--no-commander` (don't start `servo_serial_commander`), `--host 0.0.0.0` (reachable from phones/tablets on your network; there is no authentication), `--port N`.
 

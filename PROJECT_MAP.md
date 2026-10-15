@@ -19,7 +19,7 @@ One page to find your way around this repository: what is where, how the pieces 
 ├── launch_dashboard.sh            desktop app + RViz2; flags --quard --dual --dogu --web
 ├── launch_{quard,dual,dogu}_dashboard.sh   one-line wrappers: launch_dashboard.sh --<robot>
 ├── launch_web_dashboard.sh        browser dashboard (+ servo_serial_commander); --no-commander --host --port
-├── launch_gesture_teleop.sh       MediaPipe gesture teleop (hardcodes /home/sabo/... paths)
+├── launch_gesture_teleop.sh       MediaPipe gesture teleop without a dashboard (no E-STOP); --port --camera
 ├── launch_quard_rviz.sh           Quard Bot in RViz only (hardcodes /home/sabo/... paths)
 ├── run_all.sh                     older sim/real menu launcher
 ├── servo_calibration.json         arm limits + home, read/written by both dashboards (repo-root marker!)
@@ -33,7 +33,7 @@ One page to find your way around this repository: what is where, how the pieces 
 │       ├── servo_serial_commander.py         /joint_states → arm ESP32 (serial or UDP); owns the serial port
 │       ├── servo_serial_publisher.py         arm ESP32 serial → /joint_states (read-back node)
 │       ├── servo_simulator.py                sine trajectories on /joint_states
-│       ├── gesture_teleop_node.py            MediaPipe hand tracking → /joint_states
+│       ├── gesture_teleop_node.py            webcam + MediaPipe body pose → /joint_states (desktop Gesture Mode: /gesture_teleop/joint_targets)
 │       ├── unified_robot_commander.py        /fleet/* multi-robot UDP bridge (port 8888 discovery)
 │       └── web_dashboard/
 │           ├── server.py                     http.server + optional rclpy bridge, REST API (§5)
@@ -139,7 +139,8 @@ Joint names are global: every robot shares one `/joint_states`, so names must st
 
 | Topic | Type | Published by | Read by |
 |---|---|---|---|
-| `/joint_states` | `sensor_msgs/JointState` | desktop app, web server, `servo_simulator`, `arm_simulator.py`, `servo_serial_publisher`, `gesture_teleop_node` | `robot_state_publisher`, `servo_serial_commander`, `unified_robot_commander`, desktop app (gesture mirroring) |
+| `/joint_states` | `sensor_msgs/JointState` | desktop app, web server, `servo_simulator`, `arm_simulator.py`, `servo_serial_publisher`, `gesture_teleop_node` (standalone) | `robot_state_publisher`, `servo_serial_commander`, `unified_robot_commander`, `gesture_teleop_node` (start pose in Gesture Mode) |
+| `/gesture_teleop/joint_targets` | `sensor_msgs/JointState` | `gesture_teleop_node` (started by the desktop Gesture Mode) | desktop app (moves the arm sliders) |
 | `/servo_calibration` | `std_msgs/String` | desktop app, web server | `servo_serial_commander`, `unified_robot_commander` |
 | `/esp32_link_state` | `String` (JSON, latched) | `servo_serial_commander` | desktop app, web server |
 | `/esp32_console` | `String` | `servo_serial_commander` | desktop app, web server |
@@ -199,7 +200,8 @@ Anything else is served from `static/`. With `--host 0.0.0.0` there is **no auth
 1. **Repo-root detection.** Both apps find the repo by walking up to a folder that holds `servo_calibration.json` **and** `urdf/` (or `$ROBOT_PROJECT_DIR`). Never move or rename either.
 2. **Absolute mesh paths.** URDFs contain `file:///home/sabo/Documents/learn_/Hardware/...`.
    - `display_ros2.launch.py` rewrites that prefix to the real repo path.
-   - The `/home/sabo` launchers do not: `launch_gesture_teleop.sh`, `launch_quard_rviz.sh` and `urdf/unnamed/*.sh`.
+   - So does `launch_gesture_teleop.sh` (with `sed`).
+   - The `/home/sabo` launchers do not: `launch_quard_rviz.sh` and `urdf/unnamed/*.sh`.
    - Keep the prefix when generating URDFs (`build_dogu.py --mesh-prefix`).
 3. **Mesh lookup is by file name.**
    - The web server searches four folders in a fixed order (§5): `arm`, `quard_bot`, `unnamed`, `dogu`. The first match wins.
@@ -226,8 +228,12 @@ Anything else is served from `static/`. With `--host 0.0.0.0` there is **no auth
 14. **Large binaries.** `cad/` holds about 140 MB, mostly `.blend` files. Avoid tools that read every file in the tree.
 15. **The ROS launchers run the installed copy.**
     - `ros2 launch` and `ros2 run` start `servo_joint_publisher` from `ros2_ws/install`. After a plain `colcon build`, that is a copy that a `git pull` doesn't update.
-    - `launch_dashboard.sh` and `launch_web_dashboard.sh` source `scripts/ensure_ros_build.sh`, which rebuilds the package when the copy differs from the checkout.
+    - `launch_dashboard.sh`, `launch_web_dashboard.sh` and `launch_gesture_teleop.sh` source `scripts/ensure_ros_build.sh`, which rebuilds the package when the copy differs from the checkout.
     - The web server and the no-ROS desktop path run straight from the checkout.
 16. **One RViz, many models.** The desktop app swaps the model in `robot_state_publisher` as tabs change (`load_robot_description()`).
     - Every model must hang off `world`. `attach_to_world()` adds the link when a URDF starts elsewhere; it lives in both `calibrated_joint_gui.py` and `display_ros2.launch.py`, so change both.
     - Link names must stay unique across robots, like joint names: TF frames are global.
+17. **`ros2 run` is a wrapper.** It starts the node as its own child process.
+    - It passes no signal on. Ctrl+C stops the node only because the terminal signals the whole process group; killing just the `ros2` process leaves the node running. Signal its child too: `pkill -TERM -P <pid>`.
+    - Desktop Gesture Mode used to start `ros2 run ... gesture_teleop_node` and kill it. The node then kept the camera and kept moving the arm after Gesture Mode, or E-STOP, had ended.
+    - It now runs `gesture_teleop_node.py` itself, as a direct child, and stops it with SIGTERM. Do the same for any child that moves a robot.

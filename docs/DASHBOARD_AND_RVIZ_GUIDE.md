@@ -69,7 +69,11 @@ RViz is never restarted. When the tab changes, the app sets the `robot_descripti
   - `▶️ Start Sim`: sweeps every joint through its limits.
   - `🏠 Go Home`: eased 2 s move to the saved home pose.
   - `⊕ Center All`: all joints to 90°.
-  - `✋ Gesture Mode`: webcam teleoperation.
+  - `✋ Gesture Mode`: webcam teleoperation (desktop app only, needs ROS 2 and MediaPipe: see the [install guide](QUICK_INSTALL_GUIDE.md), Step 6b).
+    - It starts `gesture_teleop_node` with a camera window. Raise the arm you want to use: base yaw follows the wrist's sideways sweep, shoulder and elbow follow yours, and an open or closed hand opens or closes the gripper.
+    - The node sends targets on `/gesture_teleop/joint_targets` and the sliders follow them (locked while it runs), so the Min / Max limits apply. It starts from the arm's current pose instead of jumping.
+    - Its messages, including any start-up error, appear in the arm console. If the node stops (camera missing, MediaPipe not installed, window closed with q / Esc), Gesture Mode switches off by itself.
+    - Start Sim, Go Home, Center All and E-STOP end it.
 - **Calibration row:**
   - `📌 Set Home`: current pose becomes home.
   - `🎯 Sync to Physical`: sets twin offsets so the model shows the home pose.
@@ -286,6 +290,14 @@ The joint's current angle is outside the Min/Max saved for it. Move it back into
 
 ### Q: The OLED face buttons say the command was rejected.
 The Quard firmware does not implement a `face` command yet (it answers `400 Bad Args`). The robot is online; only that command is unsupported.
+
+### Q: Gesture Mode switches itself off, or the arm doesn't follow me.
+Read the `gesture:` lines in the arm console. They say why:
+- **"MediaPipe is not available"**: install it with Step 6b of the [install guide](QUICK_INSTALL_GUIDE.md).
+- **"could not download the pose model"**: the first run needs internet, or a model file passed as `model_path`.
+- **"could not open camera"**: no webcam at `/dev/video0`, or another program holds it. `pkill -f gesture_teleop_node` clears an old one; `ros2 run servo_joint_publisher gesture_teleop_node --ros-args -p video_device:=1` tries another camera.
+
+A joint that sticks at one end of its slider is clamped by its Min / Max limits. Gestures give model angles, and the twin offset maps them onto the slider. With the base's current twin offset (−90°), the gesture's "base center" is already the 180° end, so the base only turns one way.
 
 ### Q: How do I reset the desktop window layout?
 Delete `~/.config/CodeForIndia/RobotDashboard.conf`.

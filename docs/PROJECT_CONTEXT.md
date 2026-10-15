@@ -166,7 +166,18 @@ python3 scripts/convert_3mf_to_stl.py path/to/input.3mf cad/arm/extracted_stls
 - [ ] The Dogu commits (`4a0cd8a`, `289b837` and later) are on sharveshgsarva-debug/Multifunctional-Bot `main`; MrResolution/Code-for-India `main` has no Dogu tab until `fix/remove-slam-local-dashboard` is merged there.
 - [ ] Quard firmware has no `face` command; the OLED face buttons get `400 Bad Args`.
 - [ ] Desktop app: arm **Start Sim** also starts the Quard Bot walking. Decide whether to decouple them.
-- [ ] `launch_gesture_teleop.sh` and `launch_quard_rviz.sh` still hardcode `/home/sabo/Documents/learn_/Hardware`.
+- [ ] `launch_quard_rviz.sh` still hardcodes `/home/sabo/Documents/learn_/Hardware`.
+- [x] Gesture teleop fixed:
+  - **Pose tracking:** MediaPipe 1.x has no `mp.solutions`, and the node used to keep running without ever tracking. It now uses the Tasks PoseLandmarker there (model downloaded once to `~/.cache/code_for_india/`) and the legacy API on 0.10.21 and older. With no OpenCV, MediaPipe, model or camera it exits with status 1 and says why.
+  - **Joints:** it drives `grip`, not the removed `turntable_link_joint_dup_4` / `left_parallel_link_joint`.
+  - **Desktop Gesture Mode:** it ran `ros2 run`, and killing that left the node running. That node held the camera and kept moving the arm after Gesture Mode or E-STOP. The app now runs `gesture_teleop_node.py` as its own child and shows its output in the arm console. The node sends targets on `/gesture_teleop/joint_targets` and the sliders apply them, so limits and E-STOP hold. The app keeps publishing every joint (RViz used to lose the wrist twist, Quard and Dogu), and Gesture Mode switches off when the node exits.
+  - **`launch_gesture_teleop.sh`:** finds the repo itself (`--port`, `--camera`).
+- [ ] Gesture teleop was tested offscreen on Windows only: the node with MediaPipe 1.1.1 on a photo, the desktop Gesture Mode with a stand-in node. Run it on the robot machine with a webcam. The legacy `mp.solutions` path (MediaPipe ≤ 0.10.21) wasn't run.
+- [ ] Gesture targets are absolute model angles, mapped through each joint's twin offset.
+  - With the base's offset of −90°, "base center" lands on the 180° limit, so the base only turns one way.
+  - Tune the gripper on the robot: `grip_open_rad` / `grip_closed_rad` (0.7 / 0.0 rad) and the open/close hand ratios (0.55 / 0.45, shown as GRIP on the camera window).
+- [ ] The web dashboard has no Gesture Mode; only the desktop app does.
+- [ ] `launch_dashboard.sh` and `launch_web_dashboard.sh` stop `servo_serial_commander` by killing its `ros2 run` wrapper, which leaves the node running after they exit (PROJECT_MAP pitfall 17). The next launch's `pkill` clears it.
 - [x] Dogu firmware added (`src/dogu.cpp`, env `dogu`): ESP32 + PCA9685, 8 walking servos + 4 held body servos, its own Wi-Fi AP, `GET /start`, `/stop`, `/status`. Both dashboards have a Robot link card (status, Start / Stop walking); E-STOP sends `/stop`. AP credentials moved to `include/secrets.h`. See `docs/DOGU.md`.
 - [x] Web viewport **Twin Sync** on the Dogu tab used to fall through to the arm and re-zero its `sync_offset_deg` values, which `servo_serial_commander` applies to servo commands. It now does nothing there and says why.
 - [ ] Dogu firmware has no link watchdog: if Wi-Fi drops while it walks, it keeps walking. Consider stopping after a few seconds without any request (the dashboards poll `/status` every 1 s while it walks, and the firmware's own page every 0.5 s).
