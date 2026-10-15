@@ -14,6 +14,7 @@ Blender scenes, printable parts and raw exports. Nothing in this folder is read 
 | `dogu/Dogu.blend` | Dogu scene, in decimetres, laid out flat. `scripts/dogu/export_dogu_from_blender.py` reads it |
 | `dogu/stl/` | Dogu parts as supplied (`FemurLeft/Right`, `TibiaL/R`, `HipFrontRight-BackLeft`, `jd 1`, `jd 2`) |
 | `dogu/phobos_export/` | Raw Phobos URDF/SMURF export of Dogu (10× scale, inconsistent names), kept for reference. The runtime model is `urdf/dogu/` |
+| `spider/spid.3mf` | Spider robot CAD model (.3mf) |
 
 To change a runtime model:
 - **Dogu:** re-run the scripts in `scripts/dogu/` (see `urdf/dogu/README.md`).

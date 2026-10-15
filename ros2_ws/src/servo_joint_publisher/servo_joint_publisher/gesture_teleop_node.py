@@ -53,7 +53,7 @@ except Exception as e:
     MEDIAPIPE_ERROR = str(e)
 
 INSTALL_HINT = (f'install it for the Python that runs this node: {sys.executable} -m pip install '
-                '--user --break-system-packages mediapipe "numpy<2" (docs/QUICK_INSTALL_GUIDE.md)')
+                '--user --break-system-packages attrs mediapipe "numpy<2" (docs/QUICK_INSTALL_GUIDE.md)')
 
 POSE_MODEL_URL = ('https://storage.googleapis.com/mediapipe-models/pose_landmarker/'
                   'pose_landmarker_full/float16/latest/pose_landmarker_full.task')
@@ -64,6 +64,7 @@ ARM_JOINTS = [
     'turntable_link_joint',        # Lower Shoulder Pitch
     'turntable_link_joint_dup_1',  # Upper Forearm Pitch
     'turntable_link_joint_dup_2',  # Wrist Pitch
+    'turntable_link_joint_dup_3',  # Wrist Twist / Spin (GPIO 27)
     'grip',                        # Gripper (GPIO 26)
 ]
 
@@ -245,6 +246,8 @@ class GestureTeleopNode(Node):
         self.last_frame_t = 0.0
         self.quit_requested = False
         self.exit_code = 0
+        self.window_name = "Code for India — Upper Body Cyberpunk Gesture Teleop"
+        self.window_initialized = False
 
     def start(self):
         """Open the camera and the pose tracker; StartupError says what's missing."""
@@ -394,17 +397,21 @@ class GestureTeleopNode(Node):
             l_wrist = landmarks[15]
 
             if r_wrist.y < l_wrist.y:
-                s_pt, e_pt, w_pt, hip_pt, index_pt = (12, 14, 16, 24, 20)
+                s_pt, e_pt, w_pt, hip_pt, index_pt, pinky_pt, thumb_pt = (12, 14, 16, 24, 20, 18, 22)
                 arm_label = "RIGHT ARM ACTIVE"
+                is_right_arm = True
             else:
-                s_pt, e_pt, w_pt, hip_pt, index_pt = (11, 13, 15, 23, 19)
+                s_pt, e_pt, w_pt, hip_pt, index_pt, pinky_pt, thumb_pt = (11, 13, 15, 23, 19, 17, 21)
                 arm_label = "LEFT ARM ACTIVE"
+                is_right_arm = False
 
             sp = (lm_points[s_pt][0], lm_points[s_pt][1])
             ep = (lm_points[e_pt][0], lm_points[e_pt][1])
             wp = (lm_points[w_pt][0], lm_points[w_pt][1])
             hp = (lm_points[hip_pt][0], lm_points[hip_pt][1])
             ip = (lm_points[index_pt][0], lm_points[index_pt][1])
+            pp = (lm_points[pinky_pt][0], lm_points[pinky_pt][1])
+            tp = (lm_points[thumb_pt][0], lm_points[thumb_pt][1])
 
             rel_x = (wp[0] - sp[0]) / 10.0
             rel_y = (wp[1] - sp[1]) / 10.0
@@ -453,7 +460,32 @@ class GestureTeleopNode(Node):
                 raw_wrist = (wr_deg - 90.0) * (math.pi / 180.0)
                 self.target_angles['turntable_link_joint_dup_2'] = max(-1.0, min(1.0, raw_wrist))
 
-                # 5. Gripper Open / Close: hand length relative to the forearm, so it
+                # 5. Wrist Twist / Spin (turntable_link_joint_dup_3)
+                # Measures the roll/tilt of the knuckle vector (Pinky to Thumb)
+                # relative to the hand pointing vector (Wrist to Index).
+                ux = ip[0] - wp[0]
+                uy = ip[1] - wp[1]
+                u_len = math.hypot(ux, uy)
+
+                wx = (tp[0] - pp[0]) if is_right_arm else (pp[0] - tp[0])
+                wy = (tp[1] - pp[1]) if is_right_arm else (pp[1] - tp[1])
+                w_len = math.hypot(wx, wy)
+
+                if u_len > 5.0 and w_len > 5.0:
+                    roll_dot = (wx * ux + wy * uy) / (w_len * u_len)
+                    # Deadband (-0.18 .. +0.18) for neutral flat hand
+                    if abs(roll_dot) < 0.18:
+                        raw_spin = 0.0
+                        spin_desc = "WRIST FLAT"
+                    else:
+                        raw_spin = math.copysign((abs(roll_dot) - 0.18) * 2.2, roll_dot)
+                        spin_desc = "WRIST SPIN CW" if raw_spin > 0 else "WRIST SPIN CCW"
+                    self.target_angles['turntable_link_joint_dup_3'] = max(-1.8, min(1.8, raw_spin))
+                else:
+                    spin_desc = "WRIST LEVEL"
+                    self.target_angles['turntable_link_joint_dup_3'] = 0.0
+
+                # 6. Gripper Open / Close: hand length relative to the forearm, so it
                 # doesn't depend on the distance to the camera. Hysteresis stops chatter.
                 forearm = math.hypot(wp[0] - ep[0], wp[1] - ep[1])
                 self.grip_ratio = math.hypot(ip[0] - wp[0], ip[1] - wp[1]) / forearm if forearm > 1.0 else 0.0
@@ -464,7 +496,7 @@ class GestureTeleopNode(Node):
                 grip_desc = "GRIPPER OPEN" if self.grip_open else "GRIPPER CLOSED"
                 self.target_angles['grip'] = self.grip_open_rad if self.grip_open else self.grip_closed_rad
 
-                self.posture_state = f"{sh_desc} | {yaw_desc} | {grip_desc}"
+                self.posture_state = f"{sh_desc} | {yaw_desc} | {spin_desc} | {grip_desc}"
 
         # ── Apply Heavy Low-Pass EMA Filter & Deadband Thresholding ──────────
         for j in self.joint_names:
@@ -478,7 +510,11 @@ class GestureTeleopNode(Node):
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.name = self.joint_names
         msg.position = [self.current_angles[j] for j in self.joint_names]
-        self.joint_pub.publish(msg)
+        if rclpy.ok():
+            try:
+                self.joint_pub.publish(msg)
+            except Exception:
+                return
 
         if not self.show_window:
             return
@@ -506,17 +542,30 @@ class GestureTeleopNode(Node):
         j1_deg = math.degrees(self.current_angles['turntable_link_joint_dup'])
         j2_deg = math.degrees(self.current_angles['turntable_link_joint'])
         j3_deg = math.degrees(self.current_angles['turntable_link_joint_dup_1'])
+        j4_deg = math.degrees(self.current_angles['turntable_link_joint_dup_2'])
+        j5_deg = math.degrees(self.current_angles['turntable_link_joint_dup_3'])
 
-        cv2.putText(hud_frame, f"BASE YAW: {j1_deg:.1f} deg", (30, h - 70), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
-        cv2.putText(hud_frame, f"SHOULDER: {j2_deg:.1f} deg", (30, h - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
-        cv2.putText(hud_frame, f"ELBOW: {j3_deg:.1f} deg", (30, h - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+        cv2.putText(hud_frame, f"BASE YAW:   {j1_deg:+.1f} deg", (30, h - 90), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 200, 200), 1)
+        cv2.putText(hud_frame, f"SHOULDER:   {j2_deg:+.1f} deg", (30, h - 72), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 200, 200), 1)
+        cv2.putText(hud_frame, f"ELBOW:      {j3_deg:+.1f} deg", (30, h - 54), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 200, 200), 1)
+        cv2.putText(hud_frame, f"WRIST PITCH:{j4_deg:+.1f} deg", (30, h - 36), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 200, 200), 1)
+        cv2.putText(hud_frame, f"WRIST SPIN: {j5_deg:+.1f} deg", (30, h - 18), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 255, 200), 1)
 
         # Display Stylized HUD Output (q or Esc in the window quits)
         try:
-            cv2.imshow("Code for India — Upper Body Cyberpunk Gesture Teleop", hud_frame)
+            if not self.window_initialized:
+                cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
+                cv2.resizeWindow(self.window_name, 640, 480)
+                try:
+                    cv2.setWindowProperty(self.window_name, cv2.WND_PROP_TOPMOST, 1)
+                except Exception:
+                    pass
+                self.window_initialized = True
+
+            cv2.imshow(self.window_name, hud_frame)
             key = cv2.waitKey(1) & 0xFF
         except cv2.error as e:
-            self.get_logger().warn(f"⚠️ No HUD window ({e.msg if hasattr(e, 'msg') else e}); tracking continues without it.")
+            self.get_logger().warn(f"⚠️ No HUD window ({getattr(e, 'msg', e)}); tracking continues without it.")
             self.show_window = False
             return
         if key == 27 or key == ord('q'):

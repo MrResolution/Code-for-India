@@ -49,7 +49,7 @@ sudo apt install -y python3-pyqt5 python3-pyqt5.qtwebengine python3-serial
 
 # Step 6b (gesture teleoperation only): MediaPipe + OpenCV for the Python ROS uses
 sudo apt install -y python3-pip
-/usr/bin/python3 -m pip install --user --break-system-packages mediapipe "numpy<2"
+/usr/bin/python3 -m pip install --user --break-system-packages attrs mediapipe "numpy<2"
 
 # Step 7: Enable ROS 2 environment in shell
 echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc

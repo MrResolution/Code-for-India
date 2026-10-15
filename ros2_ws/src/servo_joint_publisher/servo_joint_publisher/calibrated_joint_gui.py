@@ -4884,6 +4884,22 @@ class CalibratedJointPublisherGUI(QMainWindow):
         proc.errorOccurred.connect(lambda err, p=proc: self._on_gesture_error(p, err))
         self.gesture_process = proc
         proc.start(sys.executable, [GESTURE_NODE_FILE, '--ros-args', '-p', f'output_topic:={GESTURE_TOPIC}'])
+        QTimer.singleShot(800, self._raise_gesture_window)
+        QTimer.singleShot(2000, self._raise_gesture_window)
+
+    def _raise_gesture_window(self):
+        if not self.is_gesture_mode or not shutil.which("xdotool"):
+            return
+        try:
+            out = subprocess.check_output(
+                ["xdotool", "search", "--name", "Cyberpunk Gesture Teleop"],
+                stderr=subprocess.DEVNULL
+            ).decode()
+            for wid in out.strip().split():
+                subprocess.run(["xdotool", "windowactivate", wid], stderr=subprocess.DEVNULL)
+                subprocess.run(["xdotool", "windowraise", wid], stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
 
     def _stop_gesture_process(self, wait=False):
         """SIGTERM the node (it closes its camera and window); SIGKILL if it hangs."""

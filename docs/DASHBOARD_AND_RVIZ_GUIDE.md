@@ -70,7 +70,7 @@ RViz is never restarted. When the tab changes, the app sets the `robot_descripti
   - `🏠 Go Home`: eased 2 s move to the saved home pose.
   - `⊕ Center All`: all joints to 90°.
   - `✋ Gesture Mode`: webcam teleoperation (desktop app only, needs ROS 2 and MediaPipe: see the [install guide](QUICK_INSTALL_GUIDE.md), Step 6b).
-    - It starts `gesture_teleop_node` with a camera window. Raise the arm you want to use: base yaw follows the wrist's sideways sweep, shoulder and elbow follow yours, and an open or closed hand opens or closes the gripper.
+    - It starts `gesture_teleop_node` with a camera window. Raise the arm you want to use: base yaw follows the wrist's sideways sweep, shoulder and elbow follow yours, tilting/rolling your hand rolls the wrist spin servo (`wrist_twist_joint`), bending your wrist pitches it, and an open or closed hand opens or closes the gripper.
     - The node sends targets on `/gesture_teleop/joint_targets` and the sliders follow them (locked while it runs), so the Min / Max limits apply. It starts from the arm's current pose instead of jumping.
     - Its messages, including any start-up error, appear in the arm console. If the node stops (camera missing, MediaPipe not installed, window closed with q / Esc), Gesture Mode switches off by itself.
     - Start Sim, Go Home, Center All and E-STOP end it.
