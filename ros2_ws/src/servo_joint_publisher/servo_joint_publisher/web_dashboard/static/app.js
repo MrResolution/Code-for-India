@@ -47,7 +47,7 @@ let sensorState = {};
 
 // ── Model Load & Dual View Management System ──────────────────────────────
 const modelLoadSystem = {
-  mode: 'auto', // 'auto' | 'quard' | 'arm' | 'dual' | 'sensors'
+  mode: 'auto', // 'auto' | 'quard' | 'arm' | 'dual' | 'sensors' | 'dogu' (Dogu is loaded by loadDoguModel)
   loaded: {
     arm: false,
     quard: false,
@@ -240,6 +240,7 @@ function engageEstop() {
   sendQuardCmd({ mode: 'stand' }, true);
   setGaitLabel('stand');
   document.querySelectorAll('.btn-dpad').forEach(b => b.classList.toggle('active', b.dataset.cmd === 'stand'));
+  doguStop();
 }
 
 function releaseEstop() {
@@ -356,6 +357,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupEventListeners();
   initEstop();
   initLinkControls();
+  initDoguControls();
   loadSyncCalibration(applySavedJointCalibration);
   startStatePolling();
   startConsolePolling();
@@ -732,6 +734,7 @@ function getEffectiveModelMode() {
   if (modelLoadSystem.mode === 'auto') {
     if (activeTab === 'quard') return 'quard';
     if (activeTab === 'sensors') return 'sensors';
+    if (activeTab === 'dogu') return 'dogu';
     return 'arm';
   }
   return modelLoadSystem.mode;
@@ -746,6 +749,10 @@ function updateModelBadge(statusText, extraClass = '') {
 
 function refreshModelBadge() {
   const effectiveMode = getEffectiveModelMode();
+  if (effectiveMode === 'dogu') {
+    updateModelBadge(dogu.loaded ? 'Loaded: 🐕 Dogu (preview)' : '⏳ Loading Dogu...', dogu.loaded ? '' : 'badge-loading');
+    return;
+  }
   if (effectiveMode === 'dual') {
     if (!modelLoadSystem.loaded.arm || !modelLoadSystem.loaded.quard) {
       updateModelBadge('⏳ Loading Both...', 'badge-loading');
@@ -785,6 +792,10 @@ function setModelMode(mode, updateCamera = true) {
 
 function ensureRequiredModelsLoaded(callback) {
   const effectiveMode = getEffectiveModelMode();
+  if (effectiveMode === 'dogu') {
+    loadDoguModel(callback);
+    return;
+  }
 
   if (effectiveMode === 'dual') {
     let pending = 0;
@@ -831,6 +842,18 @@ function ensureRequiredModelsLoaded(callback) {
 
 function updateModelVisibilityAndCamera(updateCamera = true) {
   const effectiveMode = getEffectiveModelMode();
+  if (dogu.container) dogu.container.visible = effectiveMode === 'dogu';
+  if (effectiveMode === 'dogu') {
+    if (robotMeshes.base) robotMeshes.base.visible = false;
+    if (quardMeshes.container) quardMeshes.container.visible = false;
+    if (robotMeshes.sensorGroup) robotMeshes.sensorGroup.visible = false;
+    if (updateCamera && camera && controls) {
+      camera.position.set(260, 190, 260);
+      controls.target.set(0, 70, 0);
+      controls.update();
+    }
+    return;
+  }
 
   if (effectiveMode === 'dual') {
     // Both visible side-by-side: Arm at +110mm, Quard at -110mm
@@ -944,6 +967,8 @@ let fpsLastTime = performance.now();
 function animate() {
   requestAnimationFrame(animate);
   controls.update();
+  tickDogu();
+  if (dogu.container && getEffectiveModelMode() !== 'dogu') dogu.container.visible = false;
 
   fpsFrames++;
   const nowMs = performance.now();
@@ -993,6 +1018,11 @@ function animate() {
       robotMeshes.sensorGroup.rotation.x = pRad;
       robotMeshes.sensorGroup.rotation.z = -rRad;
     }
+  } else if (effectiveMode === 'dogu') {
+    if (robotMeshes.base) robotMeshes.base.visible = false;
+    if (robotMeshes.sensorGroup) robotMeshes.sensorGroup.visible = false;
+    if (quardMeshes.container) quardMeshes.container.visible = false;
+    if (dogu.container) dogu.container.visible = true;
   } else if (effectiveMode === 'quard') {
     // Mode: Quard active - articulate 8 PCA9685 hip and knee channels
     if (robotMeshes.base) robotMeshes.base.visible = false;
@@ -1398,7 +1428,10 @@ function setupEventListeners() {
   // Camera Resets
   document.getElementById('btn-reset-cam').addEventListener('click', () => {
     const effectiveMode = getEffectiveModelMode();
-    if (effectiveMode === 'dual') {
+    if (effectiveMode === 'dogu') {
+      camera.position.set(260, 190, 260);
+      controls.target.set(0, 70, 0);
+    } else if (effectiveMode === 'dual') {
       camera.position.set(0, 220, 360);
       controls.target.set(0, 50, 0);
     } else if (effectiveMode === 'quard') {
@@ -1416,7 +1449,10 @@ function setupEventListeners() {
 
   document.getElementById('btn-top-cam').addEventListener('click', () => {
     const effectiveMode = getEffectiveModelMode();
-    if (effectiveMode === 'dual') {
+    if (effectiveMode === 'dogu') {
+      camera.position.set(0, 420, 0.1);
+      controls.target.set(0, 70, 0);
+    } else if (effectiveMode === 'dual') {
       camera.position.set(0, 480, 0.1);
       controls.target.set(0, 50, 0);
     } else if (effectiveMode === 'quard') {
@@ -1434,7 +1470,10 @@ function setupEventListeners() {
 
   document.getElementById('btn-side-cam').addEventListener('click', () => {
     const effectiveMode = getEffectiveModelMode();
-    if (effectiveMode === 'dual') {
+    if (effectiveMode === 'dogu') {
+      camera.position.set(0, 70, 380);
+      controls.target.set(0, 70, 0);
+    } else if (effectiveMode === 'dual') {
       camera.position.set(400, 120, 0);
       controls.target.set(0, 50, 0);
     } else if (effectiveMode === 'quard') {
@@ -1448,6 +1487,206 @@ function setupEventListeners() {
       controls.target.set(0, 80, 0);
     }
     controls.update();
+  });
+}
+
+// ── Dogu (12-joint quadruped): model preview with simple animations ──────
+// Kinematics, meshes and keyframes come from urdf/dogu/ (built by
+// scripts/dogu/), served as /models/dogu/*.json and /meshes/dogu_*.stl.
+// Dogu has no firmware yet, so these angles only move the 3D model.
+const dogu = {
+  container: null, pitch: null, root: null, joints: {}, feet: {},
+  model: null, anims: null, angles: [], mode: null, speed: 1.0,
+  loaded: false, loading: false, callbacks: [], lastTick: performance.now()
+};
+
+function doguLog(text, kind = 'info') {
+  if (consoles.dogu) consoles.dogu.log(text, kind);
+}
+
+function loadDoguModel(onComplete) {
+  if (dogu.loaded) { if (onComplete) onComplete(); return; }
+  if (onComplete) dogu.callbacks.push(onComplete);
+  if (dogu.loading) return;
+  dogu.loading = true;
+  refreshModelBadge();
+  Promise.all([fetch('/models/dogu/model.json').then(r => r.json()),
+               fetch('/models/dogu/animations.json').then(r => r.json())])
+    .then(([model, anims]) => buildDogu(model, anims))
+    .catch(err => {
+      dogu.loading = false;
+      doguLog(`Can't load the Dogu model: ${err.message || err} (run scripts/dogu/build_dogu.py)`, 'error');
+      updateModelBadge('Dogu model missing', 'badge-loading');
+    });
+}
+
+function buildDogu(model, anims) {
+  dogu.model = model;
+  dogu.anims = anims;
+  dogu.angles = anims.poses.stand.slice();
+  dogu.container = new THREE.Group();      // ground contact (height)
+  dogu.pitch = new THREE.Group();          // ground contact (pitch, for sit/crouch)
+  dogu.root = new THREE.Group();
+  dogu.root.rotation.x = -Math.PI / 2;     // ROS z-up -> three.js y-up
+  dogu.root.scale.setScalar(1000);         // metres -> scene millimetres
+  dogu.container.add(dogu.pitch);
+  dogu.pitch.add(dogu.root);
+  dogu.container.visible = false;
+  scene.add(dogu.container);
+
+  const linkGroup = { base_link: dogu.root };
+  // joints are listed leg by leg, parents first (hip, femur, tibia)
+  model.joints.forEach(j => {
+    const anchor = new THREE.Group();
+    anchor.position.set(j.xyz[0], j.xyz[1], j.xyz[2]);
+    anchor.rotation.order = 'ZYX';         // URDF rpy
+    anchor.rotation.set(j.rpy[0], j.rpy[1], j.rpy[2]);
+    const turn = new THREE.Group();        // turns about the joint's z axis
+    anchor.add(turn);
+    linkGroup[j.parent].add(anchor);
+    linkGroup[j.child] = turn;
+    dogu.joints[j.name] = turn;
+  });
+
+  const colors = { base: 0x3d8bd8, hip: 0x4d525c, femur: 0xed9e33, tibia: 0xd9dbe0 };
+  const loader = new THREE.STLLoader();
+  const withMesh = model.links.filter(l => l.mesh);
+  let pending = withMesh.length;
+  const done = () => {
+    if (--pending > 0) return;
+    dogu.loaded = true;
+    dogu.loading = false;
+    applyDoguAngles();
+    refreshModelBadge();
+    updateModelVisibilityAndCamera(false);
+    doguLog(`Dogu model loaded: ${model.joints.length} joints, ${Object.keys(anims.poses).length} poses, ` +
+            `${Object.keys(anims.clips).length} moves`, 'ok');
+    const cbs = dogu.callbacks.splice(0);
+    cbs.forEach(cb => cb());
+  };
+  withMesh.forEach(l => {
+    const kind = Object.keys(colors).find(k => l.name.includes(k)) || 'base';
+    loader.load('/meshes/' + l.mesh, (geom) => {
+      geom.computeVertexNormals();
+      const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ color: colors[kind], roughness: 0.45, metalness: 0.15 }));
+      mesh.castShadow = true;
+      linkGroup[l.name].add(mesh);
+      done();
+    }, undefined, () => { doguLog(`Mesh ${l.mesh} failed to load`, 'warn'); done(); });
+    if (l.foot) {
+      const foot = new THREE.Object3D();
+      foot.position.set(l.foot[0], l.foot[1], l.foot[2]);
+      linkGroup[l.name].add(foot);
+      dogu.feet[l.name.slice(0, 2)] = foot;
+    }
+  });
+}
+
+function applyDoguAngles() {
+  if (!dogu.root) return;
+  dogu.anims.joints.forEach((name, i) => {
+    const turn = dogu.joints[name];
+    if (turn) turn.rotation.z = dogu.angles[i];
+  });
+  // Keep the feet on the floor: pitch so the lowest front and back feet are
+  // level, then drop the body until the lowest foot touches y = 0.
+  dogu.pitch.rotation.z = 0;
+  dogu.container.position.y = 0;
+  dogu.container.updateMatrixWorld(true);
+  const p = {};
+  const v = new THREE.Vector3();
+  ['fl', 'fr', 'bl', 'br'].forEach(k => { if (dogu.feet[k]) p[k] = dogu.feet[k].getWorldPosition(v.clone()); });
+  if (!p.fl || !p.bl) return;
+  const front = p.fl.y < p.fr.y ? p.fl : p.fr;
+  const back = p.bl.y < p.br.y ? p.bl : p.br;
+  dogu.pitch.rotation.z = Math.atan2(back.y - front.y, front.x - back.x);
+  dogu.container.updateMatrixWorld(true);
+  let minY = Infinity;
+  Object.values(dogu.feet).forEach(f => { minY = Math.min(minY, f.getWorldPosition(v).y); });
+  dogu.container.position.y = -minY;
+}
+
+const doguEase = (t) => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); };
+
+function doguClipAngles(clip, phase) {
+  const frames = clip.frames;
+  const x = ((phase % 1) + 1) % 1 * frames.length;
+  const i = Math.floor(x) % frames.length;
+  const j = (i + 1) % frames.length;
+  const f = x - Math.floor(x);
+  return frames[i].map((a, k) => a + (frames[j][k] - a) * f);
+}
+
+function tickDogu() {
+  const now = performance.now();
+  const dt = Math.min(0.1, (now - dogu.lastTick) / 1000);
+  dogu.lastTick = now;
+  if (!dogu.loaded || !dogu.mode) return;
+  const m = dogu.mode;
+  if (m.kind === 'pose') {
+    const k = doguEase((now - m.t0) / 600);
+    dogu.angles = m.from.map((a, i) => a + (m.to[i] - a) * k);
+    if (k >= 1) { dogu.mode = null; setDoguStatus(null, 'Holding pose'); }
+  } else {
+    const clip = dogu.anims.clips[m.name];
+    m.phase += dt * dogu.speed / clip.duration;
+    const target = doguClipAngles(clip, m.phase);
+    const k = doguEase((now - m.t0) / 400);          // blend in from the previous pose
+    dogu.angles = m.from.map((a, i) => a + (target[i] - a) * k);
+  }
+  applyDoguAngles();
+  updateDoguReadouts();
+}
+
+function setDoguStatus(kind, text) {
+  setPill(document.getElementById('pill-dogu-status'), kind, text);
+}
+
+function doguPlay(kind, name) {
+  if (estopEngaged) { doguLog(`Blocked by E-STOP: ${name}`, 'warn'); return; }
+  if (!dogu.loaded) { loadDoguModel(() => doguPlay(kind, name)); return; }
+  if (kind === 'pose') {
+    dogu.mode = { kind, from: dogu.angles.slice(), to: dogu.anims.poses[name].slice(), t0: performance.now() };
+    setDoguStatus('info', name.charAt(0).toUpperCase() + name.slice(1));
+    doguLog(`Pose: ${name}`);
+  } else {
+    dogu.mode = { kind, name, phase: 0, from: dogu.angles.slice(), t0: performance.now() };
+    setDoguStatus('online', `Playing ${name.replace('_', ' ')}`);
+    doguLog(`Playing ${name} at ${dogu.speed.toFixed(2)}×`);
+  }
+  document.querySelectorAll('.btn-dogu').forEach(b => b.classList.toggle('active', b.dataset.name === name));
+}
+
+function doguStop() {
+  if (dogu.mode) doguLog('Stopped');
+  dogu.mode = null;
+  setDoguStatus(null, 'Stopped');
+  document.querySelectorAll('.btn-dogu').forEach(b => b.classList.remove('active'));
+}
+
+function updateDoguReadouts() {
+  if (!dogu.anims) return;
+  dogu.anims.joints.forEach((name, i) => {
+    const el = document.getElementById(`dogu-angle-${name}`);
+    const deg = Math.round(dogu.angles[i] * 1800 / Math.PI) / 10 || 0;   // || 0 drops -0
+    if (el) el.textContent = `${deg.toFixed(1)}°`;
+  });
+}
+
+function initDoguControls() {
+  consoles.dogu = new ConsolePanel(document.getElementById('console-dogu'), { name: 'dogu' });
+  document.querySelectorAll('.btn-dogu').forEach(b => {
+    b.addEventListener('click', () => doguPlay(b.dataset.kind, b.dataset.name));
+  });
+  document.getElementById('btn-dogu-stop').addEventListener('click', doguStop);
+  const speed = document.getElementById('slider-dogu-speed');
+  speed.addEventListener('input', () => {
+    dogu.speed = Number(speed.value) / 100;
+    document.getElementById('lbl-dogu-speed').textContent = `${dogu.speed.toFixed(2)}×`;
+  });
+  document.getElementById('btn-load-dogu-view').addEventListener('click', () => {
+    document.getElementById('tab-btn-dogu').click();
+    setModelMode('dogu');
   });
 }
 
@@ -2109,21 +2348,23 @@ function setupTabs() {
   const btnArm = document.getElementById('tab-btn-arm');
   const btnQuard = document.getElementById('tab-btn-quard');
   const btnSensors = document.getElementById('tab-btn-sensors');
+  const btnDogu = document.getElementById('tab-btn-dogu');
 
   const panelArm = document.getElementById('panel-arm-control');
   const panelQuard = document.getElementById('panel-quard-control');
   const panelSensors = document.getElementById('panel-sensors-control');
+  const panelDogu = document.getElementById('panel-dogu-control');
 
   function setActive(tabName, btn, panel) {
     activeTab = tabName;
     storageSet('dashboard-tab', tabName);
-    [btnArm, btnQuard, btnSensors].forEach(b => {
+    [btnArm, btnQuard, btnSensors, btnDogu].forEach(b => {
       if (!b) return;
       b.classList.remove('active');
       b.setAttribute('aria-selected', 'false');
       b.tabIndex = -1;
     });
-    [panelArm, panelQuard, panelSensors].forEach(p => p && p.classList.remove('active'));
+    [panelArm, panelQuard, panelSensors, panelDogu].forEach(p => p && p.classList.remove('active'));
 
     if (btn) {
       btn.classList.add('active');
@@ -2134,7 +2375,7 @@ function setupTabs() {
   }
 
   // Arrow keys move between tabs (WAI-ARIA tabs pattern)
-  const tabs = [btnArm, btnQuard, btnSensors].filter(Boolean);
+  const tabs = [btnArm, btnQuard, btnSensors, btnDogu].filter(Boolean);
   tabs.forEach((b, i) => {
     b.tabIndex = b.classList.contains('active') ? 0 : -1;
     b.addEventListener('keydown', (e) => {
@@ -2167,6 +2408,14 @@ function setupTabs() {
   if (btnSensors) {
     btnSensors.addEventListener('click', () => {
       setActive('sensors', btnSensors, panelSensors);
+      if (modelLoadSystem.mode === 'auto') {
+        setModelMode('auto');
+      }
+    });
+  }
+  if (btnDogu) {
+    btnDogu.addEventListener('click', () => {
+      setActive('dogu', btnDogu, panelDogu);
       if (modelLoadSystem.mode === 'auto') {
         setModelMode('auto');
       }

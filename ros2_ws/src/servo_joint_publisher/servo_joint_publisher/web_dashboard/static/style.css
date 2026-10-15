@@ -1472,6 +1472,29 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px 
 .console-input-row { display: flex; gap: 4px; }
 .console-input-row .form-input { flex: 1; min-width: 0; font-family: var(--font-mono); }
 
+/* ── Dogu preview ────────────────────────────────────────────────────────── */
+.speed-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.speed-row input[type="range"] { flex: 1; }
+.btn-dogu.active { background-color: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+.dogu-joints { width: 100%; border-collapse: collapse; font-size: 12px; }
+.dogu-joints th { text-align: left; color: var(--text-muted); font-weight: 600; padding: 4px 6px; }
+.dogu-joints td {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  padding: 4px 6px;
+  color: var(--text-primary);
+}
+.dogu-joints tbody tr + tr { border-top: 1px solid var(--border-color); }
+
 /* ── Toasts ──────────────────────────────────────────────────────────────── */
 .toast-stack {
   position: fixed;

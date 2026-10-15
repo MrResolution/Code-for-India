@@ -1,0 +1,369 @@
+{
+  "name": "dogu",
+  "units": "m",
+  "scale_from_blend": 0.1,
+  "source": "cad/dogu/Dogu.blend",
+  "links": [
+    {
+      "name": "base_link",
+      "blend_name": "Body_link",
+      "mesh": "dogu_base.stl",
+      "foot": null,
+      "triangles": 9000
+    },
+    {
+      "name": "bl_femur_link",
+      "blend_name": "Femurback-left_link",
+      "mesh": "dogu_bl_femur.stl",
+      "foot": null,
+      "triangles": 2500
+    },
+    {
+      "name": "bl_hip_link",
+      "blend_name": "Hipback-left_link",
+      "mesh": "dogu_bl_hip.stl",
+      "foot": null,
+      "triangles": 1296
+    },
+    {
+      "name": "bl_tibia_link",
+      "blend_name": "TibiaLback-left_link",
+      "mesh": "dogu_bl_tibia.stl",
+      "foot": [
+        0.00178,
+        0.07517,
+        -0.02292
+      ],
+      "triangles": 2500
+    },
+    {
+      "name": "br_femur_link",
+      "blend_name": "Femurback-right_link",
+      "mesh": "dogu_br_femur.stl",
+      "foot": null,
+      "triangles": 2500
+    },
+    {
+      "name": "br_hip_link",
+      "blend_name": "Hipback-right_link",
+      "mesh": "dogu_br_hip.stl",
+      "foot": null,
+      "triangles": 1296
+    },
+    {
+      "name": "br_tibia_link",
+      "blend_name": "TibiaLback-right_link",
+      "mesh": "dogu_br_tibia.stl",
+      "foot": [
+        8e-05,
+        -0.07394,
+        -0.02644
+      ],
+      "triangles": 2500
+    },
+    {
+      "name": "fl_femur_link",
+      "blend_name": "Femurfront-left_link",
+      "mesh": "dogu_fl_femur.stl",
+      "foot": null,
+      "triangles": 2500
+    },
+    {
+      "name": "fl_hip_link",
+      "blend_name": "Hipfront-left_link",
+      "mesh": "dogu_fl_hip.stl",
+      "foot": null,
+      "triangles": 1296
+    },
+    {
+      "name": "fl_tibia_link",
+      "blend_name": "TibiaLfront-left_link",
+      "mesh": "dogu_fl_tibia.stl",
+      "foot": [
+        -0.0003,
+        0.07352,
+        -0.02621
+      ],
+      "triangles": 2500
+    },
+    {
+      "name": "fr_femur_link",
+      "blend_name": "Femurfront-right_link",
+      "mesh": "dogu_fr_femur.stl",
+      "foot": null,
+      "triangles": 2500
+    },
+    {
+      "name": "fr_hip_link",
+      "blend_name": "Hipfront-right_link",
+      "mesh": "dogu_fr_hip.stl",
+      "foot": null,
+      "triangles": 1296
+    },
+    {
+      "name": "fr_tibia_link",
+      "blend_name": "TibiaLfront-right_link",
+      "mesh": "dogu_fr_tibia.stl",
+      "foot": [
+        -0.00123,
+        -0.07344,
+        -0.02517
+      ],
+      "triangles": 2500
+    }
+  ],
+  "joints": [
+    {
+      "name": "bl_femur_joint",
+      "blend_child": "Femurback-left_link",
+      "parent": "bl_hip_link",
+      "child": "bl_femur_link",
+      "xyz": [
+        0.02001,
+        -0.063604,
+        -0.009756
+      ],
+      "rpy": [
+        1.590241,
+        1.570796,
+        0.0
+      ],
+      "axis": [
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "name": "bl_hip_joint",
+      "blend_child": "Hipback-left_link",
+      "parent": "base_link",
+      "child": "bl_hip_link",
+      "xyz": [
+        -0.101689,
+        0.009211,
+        -0.003398
+      ],
+      "rpy": [
+        -3.141593,
+        1.570796,
+        0.0
+      ],
+      "axis": [
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "name": "bl_tibia_joint",
+      "blend_child": "TibiaLback-left_link",
+      "parent": "bl_femur_link",
+      "child": "bl_tibia_link",
+      "xyz": [
+        0.056915,
+        -0.003142,
+        -0.007694
+      ],
+      "rpy": [
+        -0.038735,
+        0.01647,
+        0.011221
+      ],
+      "axis": [
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "name": "br_femur_joint",
+      "blend_child": "Femurback-right_link",
+      "parent": "br_hip_link",
+      "child": "br_femur_link",
+      "xyz": [
+        -0.019846,
+        -0.064343,
+        -0.004818
+      ],
+      "rpy": [
+        1.584773,
+        1.570796,
+        0.0
+      ],
+      "axis": [
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "name": "br_hip_joint",
+      "blend_child": "Hipback-right_link",
+      "parent": "base_link",
+      "child": "br_hip_link",
+      "xyz": [
+        -0.101689,
+        -0.00891,
+        -0.003466
+      ],
+      "rpy": [
+        -0.0,
+        -1.570796,
+        0.0
+      ],
+      "axis": [
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "name": "br_tibia_joint",
+      "blend_child": "TibiaLback-right_link",
+      "parent": "br_femur_link",
+      "child": "br_tibia_link",
+      "xyz": [
+        0.057104,
+        0.000281,
+        0.003004
+      ],
+      "rpy": [
+        -0.022908,
+        0.023857,
+        -0.000547
+      ],
+      "axis": [
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "name": "fl_femur_joint",
+      "blend_child": "Femurfront-left_link",
+      "parent": "fl_hip_link",
+      "child": "fl_femur_link",
+      "xyz": [
+        -0.020056,
+        -0.063601,
+        0.009831
+      ],
+      "rpy": [
+        1.570796,
+        -1.570796,
+        0.0
+      ],
+      "axis": [
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "name": "fl_hip_joint",
+      "blend_child": "Hipfront-left_link",
+      "parent": "base_link",
+      "child": "fl_hip_link",
+      "xyz": [
+        0.087024,
+        0.009211,
+        -0.003398
+      ],
+      "rpy": [
+        -3.141593,
+        -1.570796,
+        0.0
+      ],
+      "axis": [
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "name": "fl_tibia_joint",
+      "blend_child": "TibiaLfront-left_link",
+      "parent": "fl_femur_link",
+      "child": "fl_tibia_link",
+      "xyz": [
+        0.056967,
+        0.000379,
+        0.001526
+      ],
+      "rpy": [
+        0.024479,
+        0.007835,
+        0.000192
+      ],
+      "axis": [
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "name": "fr_femur_joint",
+      "blend_child": "Femurfront-right_link",
+      "parent": "fr_hip_link",
+      "child": "fr_femur_link",
+      "xyz": [
+        0.019846,
+        -0.064343,
+        0.004818
+      ],
+      "rpy": [
+        1.570796,
+        -1.570796,
+        0.0
+      ],
+      "axis": [
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "name": "fr_hip_joint",
+      "blend_child": "Hipfront-right_link",
+      "parent": "base_link",
+      "child": "fr_hip_link",
+      "xyz": [
+        0.087024,
+        -0.00891,
+        -0.003466
+      ],
+      "rpy": [
+        -0.0,
+        1.570796,
+        0.0
+      ],
+      "axis": [
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "name": "fr_tibia_joint",
+      "blend_child": "TibiaLfront-right_link",
+      "parent": "fr_femur_link",
+      "child": "fr_tibia_link",
+      "xyz": [
+        0.056805,
+        -2.6e-05,
+        0.001632
+      ],
+      "rpy": [
+        -0.010472,
+        0.0,
+        0.012517
+      ],
+      "axis": [
+        0.0,
+        0.0,
+        1.0
+      ]
+    }
+  ]
+}

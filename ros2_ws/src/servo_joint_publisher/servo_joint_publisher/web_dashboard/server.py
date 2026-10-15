@@ -73,6 +73,8 @@ MESH_DIR = os.path.join(PROJECT_DIR, "urdf", "arm", "meshes", "stl")
 QUARD_URDF_PATH = os.path.join(PROJECT_DIR, "urdf", "quard_bot", "urdf", "quard_bot.urdf")
 QUARD_MESH_DIR = os.path.join(PROJECT_DIR, "urdf", "quard_bot", "meshes")
 UNNAMED_MESH_DIR = os.path.join(PROJECT_DIR, "urdf", "unnamed", "meshes", "stl")
+DOGU_DIR = os.path.join(PROJECT_DIR, "urdf", "dogu")          # built by scripts/dogu/
+DOGU_MESH_DIR = os.path.join(DOGU_DIR, "meshes")
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 # Arm joints driven by the dashboard. Slider degrees (0..180) map linearly onto
@@ -797,7 +799,7 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
                 mesh_filename.replace(' ', '+')
             ]
             found_filepath = None
-            search_dirs = [MESH_DIR, QUARD_MESH_DIR, UNNAMED_MESH_DIR]
+            search_dirs = [MESH_DIR, QUARD_MESH_DIR, UNNAMED_MESH_DIR, DOGU_MESH_DIR]
             for sdir in search_dirs:
                 if not os.path.exists(sdir):
                     continue
@@ -812,6 +814,12 @@ class DashboardHTTPHandler(SimpleHTTPRequestHandler):
                 self.send_file(found_filepath, "model/stl")
             else:
                 self.send_error(404, f"Mesh {mesh_filename} not found")
+        elif path in ("/models/dogu/model.json", "/models/dogu/animations.json"):
+            fpath = os.path.join(DOGU_DIR, os.path.basename(path))
+            if os.path.exists(fpath):
+                self.send_file(fpath, "application/json")
+            else:
+                self.send_error(404, "Dogu model not built: run scripts/dogu/build_dogu.py")
         elif path in ["/urdf/quard_bot.urdf", "/urdf/quard.urdf"]:
             if os.path.exists(QUARD_URDF_PATH):
                 self.send_file(QUARD_URDF_PATH, "application/xml")

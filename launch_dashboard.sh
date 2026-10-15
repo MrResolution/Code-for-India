@@ -14,6 +14,9 @@ for arg in "$@"; do
     --dual|dual|-d)
       ROBOT_MODE="dual"
       ;;
+    --dogu|dogu|-g)
+      ROBOT_MODE="dogu"
+      ;;
     --web|web|-w)
       USE_WEB=true
       ;;
